@@ -157,6 +157,8 @@ export function SaveForm({ onSaved }: { onSaved?: () => void }) {
     }
   }
 
+  const savable = /^https?:\/\//i.test(url);
+
   return (
     <div className="flex flex-col gap-2.5 p-3">
       {existing && (
@@ -244,7 +246,7 @@ export function SaveForm({ onSaved }: { onSaved?: () => void }) {
         placeholder="Add a note (optional)"
       />
 
-      <button className="btn-primary" onClick={save} disabled={busy}>
+      <button className="btn-primary" onClick={save} disabled={busy || !savable}>
         {done ? (
           <>
             <Icon name="check" size={16} /> Saved
@@ -257,6 +259,9 @@ export function SaveForm({ onSaved }: { onSaved?: () => void }) {
           </>
         )}
       </button>
+      {!savable && url !== '' && (
+        <p className="text-center text-xs text-ink-faint">This page can’t be saved (not a web URL).</p>
+      )}
     </div>
   );
 }

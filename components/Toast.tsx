@@ -22,11 +22,16 @@ let counter = 0;
 export function ToastProvider({ children }: { children: ReactNode }) {
   const [toasts, setToasts] = useState<Toast[]>([]);
 
-  const toast = useCallback((msg: string, kind: ToastKind = 'info') => {
-    const id = ++counter;
-    setToasts((t) => [...t, { id, msg, kind }]);
-    setTimeout(() => setToasts((t) => t.filter((x) => x.id !== id)), 3200);
-  }, []);
+  const dismiss = useCallback((id: number) => setToasts((t) => t.filter((x) => x.id !== id)), []);
+
+  const toast = useCallback(
+    (msg: string, kind: ToastKind = 'info') => {
+      const id = ++counter;
+      setToasts((t) => [...t, { id, msg, kind }]);
+      setTimeout(() => dismiss(id), 3200);
+    },
+    [dismiss],
+  );
 
   return (
     <ToastCtx.Provider value={{ toast }}>
@@ -35,7 +40,8 @@ export function ToastProvider({ children }: { children: ReactNode }) {
         {toasts.map((t) => (
           <div
             key={t.id}
-            className={`pointer-events-auto animate-slide-up rounded-xl px-4 py-2.5 text-sm font-medium shadow-float ${
+            onClick={() => dismiss(t.id)}
+            className={`pointer-events-auto cursor-pointer animate-slide-up rounded-xl px-4 py-2.5 text-sm font-medium shadow-float ${
               t.kind === 'error'
                 ? 'bg-red-600 text-white'
                 : t.kind === 'success'
