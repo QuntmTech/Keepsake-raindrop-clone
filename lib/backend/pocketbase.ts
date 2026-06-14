@@ -20,15 +20,31 @@ import {
 // PocketBase-backed implementation. Kept behind the same Backend interface so
 // the UI doesn't change when you switch to it. See pocketbase/schema.md.
 
-const PB_URL = import.meta.env.WXT_PB_URL ?? 'http://127.0.0.1:8090';
+// The server URL is configurable at runtime (Settings → Storage) so users can
+// paste their PocketHost/self-hosted URL without rebuilding the extension.
+const pbUrlStore = storage.defineItem<string>('sync:pb_url', {
+  fallback: import.meta.env.WXT_PB_URL ?? '',
+});
 const authMirror = storage.defineItem<string | null>('local:pb_auth', { fallback: null });
+
+export async function getPbUrl(): Promise<string> {
+  return (await pbUrlStore.getValue()) || '';
+}
+export async function setPbUrl(url: string): Promise<void> {
+  // Normalize: trim and strip a trailing slash.
+  await pbUrlStore.setValue(url.trim().replace(/\/+$/, ''));
+}
 
 export class PocketBaseBackend implements Backend {
   readonly kind = 'pocketbase' as const;
-  private pb = new PocketBase(PB_URL);
+  private pb = new PocketBase('http://127.0.0.1:8090');
+  private url = '';
   private wired = false;
 
   async init(): Promise<void> {
+    this.url = (await pbUrlStore.getValue()) || 'http://127.0.0.1:8090';
+    this.pb = new PocketBase(this.url);
+
     const saved = await authMirror.getValue();
     if (saved) {
       try {
@@ -46,6 +62,21 @@ export class PocketBaseBackend implements Backend {
             ? JSON.stringify({ token: this.pb.authStore.token, record: this.pb.authStore.record })
             : null,
         );
+      });
+      // Sync auth across contexts (log in via popup -> content script sees it).
+      authMirror.watch((saved) => {
+        if (!saved) {
+          this.pb.authStore.clear();
+          return;
+        }
+        try {
+          const parsed = JSON.parse(saved);
+          if (parsed.token !== this.pb.authStore.token) {
+            this.pb.authStore.save(parsed.token, parsed.record);
+          }
+        } catch {
+          /* ignore */
+        }
       });
     }
   }
@@ -89,7 +120,7 @@ export class PocketBaseBackend implements Backend {
   }
 
   fileUrl(record: { id: string; collectionId: string }, filename: string): string {
-    return `${PB_URL}/api/files/${record.collectionId}/${record.id}/${filename}`;
+    return `${this.url}/api/files/${record.collectionId}/${record.id}/${filename}`;
   }
 
   private normalize = (rec: any): Bookmark => ({

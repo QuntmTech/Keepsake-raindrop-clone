@@ -9,6 +9,7 @@ import { ACCENTS } from '@/lib/theme';
 import { type Accent, type AiSettings, type SortMode, type ThemeMode, type UiSurface, type ViewMode } from '@/lib/types';
 import { getAiSettings, setAiSettings, testApiKey } from '@/lib/ai';
 import { getBackendMode, setBackendMode, type BackendMode } from '@/lib/backend';
+import { getPbUrl, setPbUrl } from '@/lib/backend/pocketbase';
 import { clearLocalData } from '@/lib/backend/local';
 import { parseNetscapeHtml, parseKeepsakeJson, importItems, exportJson } from '@/lib/importer';
 import { searchBookmarks } from '@/lib/bookmarks';
@@ -25,6 +26,8 @@ export function SettingsPanel({ compact = false }: { compact?: boolean }) {
   const [ai, setAi] = useState<AiSettings | null>(null);
   const [keyDraft, setKeyDraft] = useState('');
   const [backend, setBackend] = useState<BackendMode>('local');
+  const [pbUrl, setPbUrlDraft] = useState('');
+  const [pbBusy, setPbBusy] = useState(false);
   const [testing, setTesting] = useState(false);
   const [importing, setImporting] = useState<string | null>(null);
   const fileRef = useRef<HTMLInputElement>(null);
@@ -35,6 +38,7 @@ export function SettingsPanel({ compact = false }: { compact?: boolean }) {
       setKeyDraft(s.apiKey);
     });
     getBackendMode().then(setBackend);
+    getPbUrl().then(setPbUrlDraft);
   }, []);
 
   const patchAi = async (p: Partial<AiSettings>) => setAi(await setAiSettings(p));
@@ -57,11 +61,38 @@ export function SettingsPanel({ compact = false }: { compact?: boolean }) {
     }
   }
 
-  async function changeBackend(mode: BackendMode) {
-    await setBackendMode(mode);
-    setBackend(mode);
-    toast(`Switched to ${mode === 'local' ? 'local storage' : 'PocketBase'} — reloading…`, 'info');
+  // Local can be switched instantly. PocketBase needs a URL first, so selecting
+  // it only reveals the form; "Connect" persists the URL + mode and reloads.
+  async function pickLocal() {
+    setBackend('local');
+    await setBackendMode('local');
+    toast('Switched to on-device storage — reloading…', 'info');
     setTimeout(() => location.reload(), 700);
+  }
+
+  async function connectPocketBase() {
+    const url = pbUrl.trim().replace(/\/+$/, '');
+    if (!/^https?:\/\//i.test(url)) {
+      toast('Enter a full URL starting with https://', 'error');
+      return;
+    }
+    setPbBusy(true);
+    try {
+      // Quick reachability check against PocketBase's health endpoint.
+      const res = await fetch(`${url}/api/health`).catch(() => null);
+      if (!res || !res.ok) {
+        toast('Could not reach that PocketBase URL — check it', 'error');
+        setPbBusy(false);
+        return;
+      }
+      await setPbUrl(url);
+      await setBackendMode('pocketbase');
+      toast('Connected to PocketBase — reloading…', 'success');
+      setTimeout(() => location.reload(), 700);
+    } catch {
+      toast('Could not connect', 'error');
+      setPbBusy(false);
+    }
   }
 
   async function onFile(e: React.ChangeEvent<HTMLInputElement>) {
@@ -140,11 +171,31 @@ export function SettingsPanel({ compact = false }: { compact?: boolean }) {
         )}
       </Section>
 
-      <Section title="Storage" compact={compact} hint="Where your bookmarks live. Local works instantly with no server; switch to PocketBase once your database is set up.">
+      <Section title="Storage" compact={compact} hint="Where your bookmarks live. Local works instantly with no server; PocketBase syncs across devices and survives reinstalls.">
         <div className="flex flex-col gap-2">
-          <Radio checked={backend === 'local'} onChange={() => changeBackend('local')} label="On this device (local storage)" sub="Fully functional, no setup. Data stays in your browser profile." />
-          <Radio checked={backend === 'pocketbase'} onChange={() => changeBackend('pocketbase')} label="PocketBase server" sub="Syncs across devices. Requires WXT_PB_URL + collections (see README)." />
+          <Radio checked={backend === 'local'} onChange={pickLocal} label="On this device (local storage)" sub="Fully functional, no setup. Data stays in your browser profile." />
+          <Radio checked={backend === 'pocketbase'} onChange={() => setBackend('pocketbase')} label="PocketBase server (cloud sync)" sub="Real accounts that sync across devices and survive reinstalls." />
         </div>
+
+        {backend === 'pocketbase' && (
+          <div className="mt-3 flex flex-col gap-2 rounded-lg border border-line bg-surface-sunken p-3">
+            <label className="text-xs font-medium text-ink-soft">Your PocketBase server URL</label>
+            <input
+              className="input font-mono text-xs"
+              placeholder="https://your-app.pockethost.io"
+              value={pbUrl}
+              onChange={(e) => setPbUrlDraft(e.target.value)}
+            />
+            <button className="btn-primary" onClick={connectPocketBase} disabled={pbBusy}>
+              {pbBusy ? 'Connecting…' : 'Connect & switch'}
+            </button>
+            <p className="text-xs text-ink-faint">
+              No server yet? Create a free one at <b>pockethost.io</b>, then import the schema file
+              from the setup guide. After connecting, create your account here again (cloud accounts
+              are separate from local ones).
+            </p>
+          </div>
+        )}
       </Section>
 
       <Section title="When I click the toolbar icon" compact={compact}>
