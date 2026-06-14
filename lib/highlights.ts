@@ -1,45 +1,39 @@
-import { pb, currentUserId } from './pocketbase';
-import { type Highlight, type HighlightColor } from './types';
+import { getBackend } from './backend';
+import { type Highlight, type HighlightColor, type TextQuoteAnchor } from './types';
+import { type CreateHighlightInput } from './backend/types';
 
-export interface CreateHighlightInput {
-  url: string;
-  text: string;
-  color?: HighlightColor;
-  note?: string;
-  bookmark?: string;
-  anchor?: string; // serialized range; Claude Code: see content.ts for the anchoring TODO
-}
+// Facade over the active backend for highlight CRUD.
+
+export type { CreateHighlightInput };
 
 export async function createHighlight(input: CreateHighlightInput): Promise<Highlight> {
-  const user = currentUserId();
-  if (!user) throw new Error('Not logged in');
-  const rec = await pb.collection('highlights').create({
-    url: input.url,
-    text: input.text,
-    color: input.color ?? 'yellow',
-    note: input.note ?? '',
-    bookmark: input.bookmark,
-    anchor: input.anchor ?? '',
-    user,
-  });
-  return rec as unknown as Highlight;
+  return (await getBackend()).createHighlight(input);
 }
 
 export async function highlightsForUrl(url: string): Promise<Highlight[]> {
-  const user = currentUserId();
-  if (!user) throw new Error('Not logged in');
-  const u = url.replace(/"/g, '\\"');
-  const list = await pb.collection('highlights').getFullList({
-    filter: `user = "${user}" && url = "${u}"`,
-    sort: 'created',
-  });
-  return list as unknown as Highlight[];
+  return (await getBackend()).highlightsForUrl(url);
+}
+
+export async function allHighlights(limit = 200): Promise<Highlight[]> {
+  return (await getBackend()).allHighlights(limit);
 }
 
 export async function deleteHighlight(id: string): Promise<void> {
-  await pb.collection('highlights').delete(id);
+  return (await getBackend()).deleteHighlight(id);
 }
 
-export async function updateHighlightNote(id: string, note: string): Promise<void> {
-  await pb.collection('highlights').update(id, { note });
+export async function updateHighlight(
+  id: string,
+  patch: { note?: string; color?: HighlightColor },
+): Promise<void> {
+  return (await getBackend()).updateHighlight(id, patch);
+}
+
+export function parseAnchor(raw?: string): TextQuoteAnchor | null {
+  if (!raw) return null;
+  try {
+    return JSON.parse(raw) as TextQuoteAnchor;
+  } catch {
+    return null;
+  }
 }

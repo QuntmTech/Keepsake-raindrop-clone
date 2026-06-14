@@ -4,9 +4,13 @@ import { type Settings, DEFAULT_SETTINGS } from '@/lib/types';
 
 export function useSettings() {
   const [settings, setLocal] = useState<Settings>(DEFAULT_SETTINGS);
+  const [ready, setReady] = useState(false);
 
   useEffect(() => {
-    getSettings().then(setLocal);
+    getSettings().then((s) => {
+      setLocal(s);
+      setReady(true);
+    });
     return watchSettings(setLocal);
   }, []);
 
@@ -15,5 +19,5 @@ export function useSettings() {
     setLocal(next);
   }
 
-  return { settings, update };
+  return { settings, ready, update };
 }

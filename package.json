@@ -1,8 +1,8 @@
 {
-  "name": "raindrop-clone",
-  "description": "A raindrop.io-style bookmark manager Chrome extension (MV3) backed by PocketBase.",
+  "name": "keepsake",
+  "description": "Keepsake — an AI-powered MV3 bookmark manager. Local-first, with an optional PocketBase backend.",
   "private": true,
-  "version": "0.1.0",
+  "version": "0.2.0",
   "type": "module",
   "scripts": {
     "dev": "wxt",
