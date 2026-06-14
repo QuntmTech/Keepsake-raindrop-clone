@@ -20,6 +20,7 @@ import {
   updateBookmark,
   getAllTags,
   vaultStats,
+  watchVault,
 } from '@/lib/bookmarks';
 import { type Bookmark, type SortMode, type ViewMode, type VaultStats } from '@/lib/types';
 
@@ -98,6 +99,15 @@ export default function App() {
 
   // Escape closes the AI slide-over.
   useEscape(() => setAiOpen(false), aiOpen);
+
+  // Live-refresh when the vault changes anywhere (Quick Bar, shortcut, another tab).
+  useEffect(() => {
+    return watchVault(() => {
+      runSearch();
+      refreshMeta();
+      collectionsApi.refresh();
+    });
+  }, [runSearch, refreshMeta, collectionsApi]);
 
   async function remove(id: string) {
     await deleteBookmark(id);

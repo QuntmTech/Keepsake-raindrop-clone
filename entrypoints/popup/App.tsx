@@ -17,7 +17,9 @@ import {
   updateBookmark,
   getAllTags,
   vaultStats,
+  watchVault,
 } from '@/lib/bookmarks';
+import { EditDialog } from '@/components/EditDialog';
 import { type Bookmark, type VaultStats } from '@/lib/types';
 
 type RightView = 'list' | 'save' | 'settings';
@@ -57,6 +59,7 @@ function Vault() {
   const [stats, setStats] = useState<VaultStats | null>(null);
   const [tags, setTags] = useState<{ tag: string; count: number }[]>([]);
   const [right, setRight] = useState<RightView>('list');
+  const [editing, setEditing] = useState<Bookmark | null>(null);
 
   const run = useCallback(async () => {
     if (filter.kind === 'highlights') return;
@@ -91,6 +94,14 @@ function Vault() {
   useEffect(() => {
     refreshMeta();
   }, [refreshMeta]);
+  // Live refresh when the vault changes (Quick Bar, shortcut, another tab).
+  useEffect(() => {
+    return watchVault(() => {
+      run();
+      refreshMeta();
+      c.refresh();
+    });
+  }, [run, refreshMeta, c]);
 
   async function remove(id: string) {
     await deleteBookmark(id);
@@ -204,12 +215,26 @@ function Vault() {
                     <h2 className="text-sm font-semibold">{heading}</h2>
                     <span className="text-xs text-ink-faint">{items.length}</span>
                   </div>
-                  <BookmarkGrid items={items} loading={loading} view="list" onDelete={remove} onToggleFavorite={fav} />
+                  <BookmarkGrid items={items} loading={loading} view="list" onDelete={remove} onToggleFavorite={fav} onEdit={setEditing} />
                 </div>
               ))}
           </div>
         </div>
       </div>
+
+      {editing && (
+        <EditDialog
+          bookmark={editing}
+          collections={c.collections}
+          allTags={tags.map((t) => t.tag)}
+          onClose={() => setEditing(null)}
+          onSaved={(b) => {
+            setItems((p) => p.map((x) => (x.id === b.id ? b : x)));
+            refreshMeta();
+            c.refresh();
+          }}
+        />
+      )}
     </Frame>
   );
 }

@@ -138,6 +138,18 @@ export class LocalBackend implements Backend {
     return this.user !== null;
   }
 
+  // Notify open UIs whenever the vault changes (in any context).
+  watch(cb: () => void): () => void {
+    const u1 = bookmarksStore.watch(() => cb());
+    const u2 = collectionsStore.watch(() => cb());
+    const u3 = highlightsStore.watch(() => cb());
+    return () => {
+      u1();
+      u2();
+      u3();
+    };
+  }
+
   private uid(): string {
     if (!this.user) throw new Error('Not logged in');
     return this.user.id;

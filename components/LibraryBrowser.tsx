@@ -1,7 +1,15 @@
 import { useEffect, useState } from 'react';
-import { searchBookmarks, deleteBookmark, toggleFavorite } from '@/lib/bookmarks';
-import { type Bookmark } from '@/lib/types';
+import {
+  searchBookmarks,
+  deleteBookmark,
+  toggleFavorite,
+  listCollections,
+  getAllTags,
+  watchVault,
+} from '@/lib/bookmarks';
+import { type Bookmark, type Collection } from '@/lib/types';
 import { BookmarkGrid } from './BookmarkGrid';
+import { EditDialog } from './EditDialog';
 import { Icon } from './Icon';
 import { useToast } from './Toast';
 
@@ -12,6 +20,14 @@ export function LibraryBrowser({ autoFocus = false }: { autoFocus?: boolean }) {
   const [query, setQuery] = useState('');
   const [items, setItems] = useState<Bookmark[]>([]);
   const [loading, setLoading] = useState(true);
+  const [collections, setCollections] = useState<Collection[]>([]);
+  const [tags, setTags] = useState<string[]>([]);
+  const [editing, setEditing] = useState<Bookmark | null>(null);
+
+  const loadMeta = () => {
+    listCollections().then(setCollections).catch(() => {});
+    getAllTags().then((t) => setTags(t.map((x) => x.tag))).catch(() => {});
+  };
 
   useEffect(() => {
     const id = setTimeout(() => {
@@ -22,6 +38,19 @@ export function LibraryBrowser({ autoFocus = false }: { autoFocus?: boolean }) {
         .finally(() => setLoading(false));
     }, 220);
     return () => clearTimeout(id);
+  }, [query]);
+
+  useEffect(() => {
+    loadMeta();
+  }, []);
+
+  // Live refresh when the vault changes anywhere.
+  useEffect(() => {
+    return watchVault(() => {
+      searchBookmarks(query, { perPage: 60 }).then(setItems).catch(() => {});
+      loadMeta();
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [query]);
 
   async function remove(id: string) {
@@ -49,8 +78,18 @@ export function LibraryBrowser({ autoFocus = false }: { autoFocus?: boolean }) {
         </div>
       </div>
       <div className="flex-1 overflow-y-auto p-3 pt-0">
-        <BookmarkGrid items={items} loading={loading} view="list" onDelete={remove} onToggleFavorite={fav} />
+        <BookmarkGrid items={items} loading={loading} view="list" onDelete={remove} onToggleFavorite={fav} onEdit={setEditing} />
       </div>
+
+      {editing && (
+        <EditDialog
+          bookmark={editing}
+          collections={collections}
+          allTags={tags}
+          onClose={() => setEditing(null)}
+          onSaved={(b) => setItems((p) => p.map((x) => (x.id === b.id ? b : x)))}
+        />
+      )}
     </div>
   );
 }

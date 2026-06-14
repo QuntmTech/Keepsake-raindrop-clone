@@ -1,9 +1,10 @@
 import { useState } from 'react';
 import { type Bookmark, type Collection } from '@/lib/types';
-import { updateBookmark } from '@/lib/bookmarks';
+import { updateBookmark, safeDomain, faviconFor } from '@/lib/bookmarks';
 import { useEscape } from '@/hooks/useEscape';
 import { TagInput } from './TagInput';
 import { Icon } from './Icon';
+import { Favicon } from './Favicon';
 import { useToast } from './Toast';
 
 interface Props {
@@ -17,6 +18,9 @@ interface Props {
 export function EditDialog({ bookmark, collections, allTags, onClose, onSaved }: Props) {
   const { toast } = useToast();
   const [title, setTitle] = useState(bookmark.title);
+  const [url, setUrl] = useState(bookmark.url);
+  const [cover, setCover] = useState(bookmark.cover ?? '');
+  const [favicon, setFavicon] = useState(bookmark.favicon ?? '');
   const [summary, setSummary] = useState(bookmark.summary ?? '');
   const [note, setNote] = useState(bookmark.note ?? '');
   const [tags, setTags] = useState<string[]>(bookmark.tags ?? []);
@@ -26,10 +30,21 @@ export function EditDialog({ bookmark, collections, allTags, onClose, onSaved }:
   useEscape(onClose);
 
   async function save() {
+    if (!url.trim()) {
+      toast('URL can’t be empty', 'error');
+      return;
+    }
     setBusy(true);
     try {
+      const cleanUrl = url.trim();
+      const domain = safeDomain(cleanUrl);
       const updated = await updateBookmark(bookmark.id, {
         title,
+        url: cleanUrl,
+        domain,
+        cover: cover.trim() || undefined,
+        // If favicon was cleared, fall back to the domain's favicon.
+        favicon: favicon.trim() || faviconFor(domain),
         summary: summary || undefined,
         note: note || undefined,
         tags,
@@ -62,18 +77,49 @@ export function EditDialog({ bookmark, collections, allTags, onClose, onSaved }:
           </button>
         </div>
 
-        <div className="flex max-h-[70vh] flex-col gap-3 overflow-y-auto p-4">
+        <div className="flex max-h-[72vh] flex-col gap-3 overflow-y-auto p-4">
+          {/* Cover preview + image URL */}
+          <div className="flex gap-3">
+            {cover ? (
+              <img
+                src={cover}
+                alt=""
+                className="h-16 w-24 shrink-0 rounded-lg border border-line object-cover"
+                onError={(e) => (e.currentTarget.style.visibility = 'hidden')}
+                onLoad={(e) => (e.currentTarget.style.visibility = 'visible')}
+              />
+            ) : (
+              <div className="grid h-16 w-24 shrink-0 place-items-center rounded-lg border border-dashed border-line text-ink-faint">
+                <Icon name="image" size={20} />
+              </div>
+            )}
+            <div className="flex flex-1 flex-col gap-1">
+              <label className="text-xs font-medium text-ink-soft">Cover image URL</label>
+              <input className="input py-1.5 text-xs" value={cover} onChange={(e) => setCover(e.target.value)} placeholder="https://…/image.jpg" />
+              {cover && (
+                <button className="self-start text-[11px] text-ink-faint hover:text-red-500" onClick={() => setCover('')}>
+                  Remove image
+                </button>
+              )}
+            </div>
+          </div>
+
           <label className="text-xs font-medium text-ink-soft">Title</label>
           <input className="input" value={title} onChange={(e) => setTitle(e.target.value)} />
 
+          <label className="text-xs font-medium text-ink-soft">URL</label>
+          <input className="input text-xs" value={url} onChange={(e) => setUrl(e.target.value)} placeholder="https://example.com" />
+
+          <label className="text-xs font-medium text-ink-soft">Icon (favicon) URL</label>
+          <div className="flex items-center gap-2">
+            <span className="grid h-8 w-8 shrink-0 place-items-center rounded-md border border-line">
+              <Favicon src={favicon || faviconFor(safeDomain(url))} size={16} />
+            </span>
+            <input className="input py-1.5 text-xs" value={favicon} onChange={(e) => setFavicon(e.target.value)} placeholder="Leave blank to auto-detect" />
+          </div>
+
           <label className="text-xs font-medium text-ink-soft">Summary</label>
-          <textarea
-            className="input resize-none"
-            rows={2}
-            value={summary}
-            onChange={(e) => setSummary(e.target.value)}
-            placeholder="A short TL;DR"
-          />
+          <textarea className="input resize-none" rows={2} value={summary} onChange={(e) => setSummary(e.target.value)} placeholder="A short TL;DR" />
 
           <label className="text-xs font-medium text-ink-soft">Tags</label>
           <TagInput tags={tags} onChange={setTags} suggestions={allTags} />
@@ -81,10 +127,10 @@ export function EditDialog({ bookmark, collections, allTags, onClose, onSaved }:
           <label className="text-xs font-medium text-ink-soft">Collection</label>
           <select className="input" value={collection} onChange={(e) => setCollection(e.target.value)}>
             <option value="">No collection</option>
-            {collections.map((c) => (
-              <option key={c.id} value={c.id}>
-                {c.icon ? `${c.icon} ` : ''}
-                {c.name}
+            {collections.map((col) => (
+              <option key={col.id} value={col.id}>
+                {col.icon ? `${col.icon} ` : ''}
+                {col.name}
               </option>
             ))}
           </select>
@@ -99,9 +145,7 @@ export function EditDialog({ bookmark, collections, allTags, onClose, onSaved }:
         </div>
 
         <div className="flex justify-end gap-2 border-t border-line p-3">
-          <button className="btn-ghost" onClick={onClose}>
-            Cancel
-          </button>
+          <button className="btn-ghost" onClick={onClose}>Cancel</button>
           <button className="btn-primary" onClick={save} disabled={busy}>
             {busy ? 'Saving…' : 'Save changes'}
           </button>
