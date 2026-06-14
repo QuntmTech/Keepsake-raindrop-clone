@@ -7,6 +7,7 @@ export type LibraryFilter =
   | { kind: 'all' }
   | { kind: 'favorites' }
   | { kind: 'untagged' }
+  | { kind: 'highlights' }
   | { kind: 'collection'; id: string }
   | { kind: 'tag'; tag: string };
 
@@ -15,6 +16,7 @@ interface Props {
   counts: Record<string, number>;
   total: number;
   favorites: number;
+  highlights: number;
   tags: { tag: string; count: number }[];
   selected: LibraryFilter;
   onSelect: (f: LibraryFilter) => void;
@@ -33,6 +35,7 @@ export function CollectionSidebar({
   counts,
   total,
   favorites,
+  highlights,
   tags,
   selected,
   onSelect,
@@ -68,6 +71,13 @@ export function CollectionSidebar({
         count={favorites}
         active={selected.kind === 'favorites'}
         onClick={() => onSelect({ kind: 'favorites' })}
+      />
+      <SmartItem
+        icon="highlight"
+        label="Highlights"
+        count={highlights}
+        active={selected.kind === 'highlights'}
+        onClick={() => onSelect({ kind: 'highlights' })}
       />
       <SmartItem
         icon="inbox"

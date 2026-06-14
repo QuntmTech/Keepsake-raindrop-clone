@@ -10,6 +10,7 @@ import { CommandPalette } from '@/components/CommandPalette';
 import { AIAssistant } from '@/components/AIAssistant';
 import { AddDialog } from '@/components/AddDialog';
 import { EditDialog } from '@/components/EditDialog';
+import { HighlightsView } from '@/components/HighlightsView';
 import { Icon, type IconName } from '@/components/Icon';
 import { useToast } from '@/components/Toast';
 import {
@@ -43,7 +44,7 @@ export default function App() {
   const sort = settings.sort;
 
   const runSearch = useCallback(async () => {
-    if (!authed) return;
+    if (!authed || filter.kind === 'highlights') return;
     setLoading(true);
     try {
       const opts: Parameters<typeof searchBookmarks>[1] = { sort, perPage: 200 };
@@ -117,10 +118,13 @@ export default function App() {
 
   const allTagNames = useMemo(() => tags.map((t) => t.tag), [tags]);
 
+  const isHighlights = filter.kind === 'highlights';
+
   const heading = useMemo(() => {
     if (filter.kind === 'all') return 'All bookmarks';
     if (filter.kind === 'favorites') return 'Favorites';
     if (filter.kind === 'untagged') return 'Untagged';
+    if (filter.kind === 'highlights') return 'Highlights';
     if (filter.kind === 'tag') return `#${filter.tag}`;
     return collectionsApi.collections.find((c) => c.id === filter.id)?.name ?? 'Collection';
   }, [filter, collectionsApi.collections]);
@@ -150,6 +154,7 @@ export default function App() {
         counts={collectionsApi.counts}
         total={stats?.total ?? 0}
         favorites={stats?.favorites ?? 0}
+        highlights={stats?.highlights ?? 0}
         tags={tags}
         selected={filter}
         onSelect={setFilter}
@@ -190,56 +195,64 @@ export default function App() {
         {/* Toolbar */}
         <div className="flex items-center gap-3 border-b border-line bg-surface px-5 py-2.5">
           <h1 className="text-sm font-semibold text-ink">{heading}</h1>
-          <span className="text-xs text-ink-faint">{items.length} items</span>
+          {!isHighlights && <span className="text-xs text-ink-faint">{items.length} items</span>}
 
-          <input
-            className="ml-auto w-48 rounded-lg border border-line bg-surface-raised px-2.5 py-1.5 text-sm outline-none focus:border-brand/50"
-            placeholder="Filter results…"
-            value={query}
-            onChange={(e) => setQuery(e.target.value)}
-          />
+          {!isHighlights && (
+            <>
+              <input
+                className="ml-auto w-48 rounded-lg border border-line bg-surface-raised px-2.5 py-1.5 text-sm outline-none focus:border-brand/50"
+                placeholder="Filter results…"
+                value={query}
+                onChange={(e) => setQuery(e.target.value)}
+              />
 
-          <select
-            className="rounded-lg border border-line bg-surface-raised px-2 py-1.5 text-sm outline-none"
-            value={sort}
-            onChange={(e) => update({ sort: e.target.value as SortMode })}
-          >
-            <option value="newest">Newest</option>
-            <option value="oldest">Oldest</option>
-            <option value="title">Title A–Z</option>
-            <option value="domain">Domain</option>
-            <option value="lastVisited">Recently opened</option>
-          </select>
-
-          <div className="flex rounded-lg border border-line bg-surface-raised p-0.5">
-            {(['grid', 'list', 'masonry'] as ViewMode[]).map((v) => (
-              <button
-                key={v}
-                className={`rounded-md p-1.5 ${view === v ? 'bg-brand/10 text-brand' : 'text-ink-faint hover:text-ink'}`}
-                onClick={() => update({ view: v })}
-                title={v}
+              <select
+                className="rounded-lg border border-line bg-surface-raised px-2 py-1.5 text-sm outline-none"
+                value={sort}
+                onChange={(e) => update({ sort: e.target.value as SortMode })}
               >
-                <Icon name={v === 'grid' ? 'grid' : v === 'list' ? 'list' : 'masonry'} size={16} />
-              </button>
-            ))}
-          </div>
+                <option value="newest">Newest</option>
+                <option value="oldest">Oldest</option>
+                <option value="title">Title A–Z</option>
+                <option value="domain">Domain</option>
+                <option value="lastVisited">Recently opened</option>
+              </select>
+
+              <div className="flex rounded-lg border border-line bg-surface-raised p-0.5">
+                {(['grid', 'list', 'masonry'] as ViewMode[]).map((v) => (
+                  <button
+                    key={v}
+                    className={`rounded-md p-1.5 ${view === v ? 'bg-brand/10 text-brand' : 'text-ink-faint hover:text-ink'}`}
+                    onClick={() => update({ view: v })}
+                    title={v}
+                  >
+                    <Icon name={v === 'grid' ? 'grid' : v === 'list' ? 'list' : 'masonry'} size={16} />
+                  </button>
+                ))}
+              </div>
+            </>
+          )}
         </div>
 
         {/* Body */}
         <main className="flex-1 overflow-y-auto p-5">
-          <BookmarkGrid
-            items={items}
-            loading={loading}
-            view={view}
-            onDelete={remove}
-            onToggleFavorite={fav}
-            onEdit={setEditing}
-            emptyHint={
-              filter.kind === 'all'
-                ? 'Click “Add”, use the toolbar icon, or right-click any page → “Save page to Keepsake”.'
-                : 'Nothing matches this filter yet.'
-            }
-          />
+          {isHighlights ? (
+            <HighlightsView onCountChange={refreshMeta} />
+          ) : (
+            <BookmarkGrid
+              items={items}
+              loading={loading}
+              view={view}
+              onDelete={remove}
+              onToggleFavorite={fav}
+              onEdit={setEditing}
+              emptyHint={
+                filter.kind === 'all'
+                  ? 'Click “Add”, use the toolbar icon, or right-click any page → “Save page to Keepsake”.'
+                  : 'Nothing matches this filter yet.'
+              }
+            />
+          )}
         </main>
       </div>
 
