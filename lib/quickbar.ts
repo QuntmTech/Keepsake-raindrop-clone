@@ -1,6 +1,6 @@
 import { getSettings, setSettings } from './settings';
 import { getBackend } from './backend';
-import { listCollections } from './bookmarks';
+import { listCollections, findByUrl } from './bookmarks';
 import { send } from './messaging';
 import { ACCENTS } from './theme';
 import { type Collection } from './types';
@@ -56,8 +56,10 @@ export async function mountQuickBar(): Promise<QuickBarApi | null> {
       transition: background .12s, transform .12s; }
     .btn:hover { background: rgba(255,255,255,.12); }
     .btn:active { transform: scale(.92); }
-    .btn.save { color: #fff; }
+    .btn.save { color: #fff; position: relative; }
     .btn.ok { color: #34d399; }
+    .badge { position: absolute; top: 5px; right: 5px; width: 8px; height: 8px;
+      border-radius: 50%; background: #34d399; box-shadow: 0 0 0 2px rgba(24,26,32,.92); }
     .pop { position: fixed; z-index: 2147483001; width: 230px; max-height: 60vh; overflow:auto;
       background: #1b1d24; color: #eef; border-radius: 12px; box-shadow: 0 10px 30px rgba(0,0,0,.4);
       padding: 8px; font-family: ui-sans-serif, system-ui, sans-serif; }
@@ -132,13 +134,21 @@ export async function mountQuickBar(): Promise<QuickBarApi | null> {
   };
   document.addEventListener('click', onDocClick);
 
-  const flashSaved = (btn: HTMLButtonElement, original: string) => {
-    btn.classList.add('ok');
-    btn.innerHTML = icon('check');
-    setTimeout(() => {
-      btn.classList.remove('ok');
-      btn.innerHTML = original;
-    }, 1400);
+  // ---- saved-state awareness ----
+  const SAVE_ICON = icon('bookmark', true);
+  let saved = false;
+  const paintSave = (inner: string) => {
+    saveBtn.innerHTML = inner;
+    if (saved) {
+      const b = document.createElement('span');
+      b.className = 'badge';
+      saveBtn.appendChild(b);
+    }
+  };
+  const setSaved = (v: boolean) => {
+    saved = v;
+    saveBtn.title = v ? 'Already saved — click to save again' : 'Save this page';
+    paintSave(SAVE_ICON);
   };
 
   async function loggedIn(): Promise<boolean> {
@@ -154,14 +164,18 @@ export async function mountQuickBar(): Promise<QuickBarApi | null> {
       showSignIn();
       return;
     }
-    const original = icon('bookmark', true);
     saveBtn.innerHTML = `<span style="display:inline-block;width:16px;height:16px;border:2px solid rgba(255,255,255,.4);border-top-color:#fff;border-radius:50%;animation:spin .6s linear infinite"></span>`;
     try {
       await send({ type: 'SAVE_CURRENT_PAGE', collection });
     } catch {
       /* background queues on failure */
     }
-    flashSaved(saveBtn, original);
+    saveBtn.classList.add('ok');
+    saveBtn.innerHTML = icon('check');
+    setTimeout(() => {
+      saveBtn.classList.remove('ok');
+      setSaved(true);
+    }, 1400);
   }
 
   function showSignIn() {
@@ -222,6 +236,15 @@ export async function mountQuickBar(): Promise<QuickBarApi | null> {
   const kf = document.createElement('style');
   kf.textContent = `@keyframes spin { to { transform: rotate(360deg); } }`;
   shadow.appendChild(kf);
+
+  // Reflect whether this page is already in the vault.
+  if (await loggedIn()) {
+    try {
+      if (await findByUrl(location.href)) setSaved(true);
+    } catch {
+      /* ignore */
+    }
+  }
 
   const api: QuickBarApi = {
     openFolders,
