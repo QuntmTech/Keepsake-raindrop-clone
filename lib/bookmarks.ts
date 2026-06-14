@@ -1,136 +1,76 @@
-import { pb, currentUserId, fileUrl } from './pocketbase';
-import { type Bookmark, type Collection } from './types';
+import { getBackend } from './backend';
+import { type Bookmark } from './types';
+import { type SaveBookmarkInput, type SearchOpts } from './backend/types';
 
-// ---- Bookmarks --------------------------------------------------------------
+// Facade over the active backend. Components import from here regardless of
+// whether data lives in chrome.storage (local) or PocketBase.
 
-export interface SaveBookmarkInput {
-  url: string;
-  title: string;
-  description?: string;
-  tags?: string[];
-  collection?: string;
-  screenshotBlob?: Blob; // auto-preview image captured by the background worker
-}
+export type { SaveBookmarkInput, SearchOpts };
+
+// Re-export pure helpers so existing imports (`@/lib/bookmarks`) keep working.
+export { safeDomain, inferType, faviconFor } from './util';
 
 export async function saveBookmark(input: SaveBookmarkInput): Promise<Bookmark> {
-  const user = currentUserId();
-  if (!user) throw new Error('Not logged in');
-
-  const domain = safeDomain(input.url);
-
-  // PocketBase accepts multipart FormData when a file is attached.
-  const form = new FormData();
-  form.set('url', input.url);
-  form.set('title', input.title);
-  form.set('description', input.description ?? '');
-  form.set('tags', JSON.stringify(input.tags ?? []));
-  if (input.collection) form.set('collection', input.collection);
-  form.set('domain', domain);
-  form.set('user', user);
-  if (input.screenshotBlob) {
-    form.set('screenshot', input.screenshotBlob, `${Date.now()}.jpg`);
-  }
-
-  const rec = await pb.collection('bookmarks').create(form);
-  return normalizeBookmark(rec);
+  return (await getBackend()).saveBookmark(input);
 }
 
 export async function updateBookmark(id: string, patch: Partial<Bookmark>): Promise<Bookmark> {
-  const body: Record<string, unknown> = { ...patch };
-  if (patch.tags) body.tags = JSON.stringify(patch.tags);
-  const rec = await pb.collection('bookmarks').update(id, body);
-  return normalizeBookmark(rec);
+  return (await getBackend()).updateBookmark(id, patch);
 }
 
 export async function deleteBookmark(id: string): Promise<void> {
-  await pb.collection('bookmarks').delete(id);
+  return (await getBackend()).deleteBookmark(id);
 }
 
-// Full-text search. PocketBase's `~` operator does a LIKE match.
-// Searches title, url, description, and tags. Optionally scope to a collection.
-export async function searchBookmarks(
-  query: string,
-  opts: { collection?: string; tag?: string; page?: number; perPage?: number } = {},
-): Promise<Bookmark[]> {
-  const user = currentUserId();
-  if (!user) throw new Error('Not logged in');
-
-  const filters: string[] = [`user = "${user}"`];
-  if (query.trim()) {
-    const q = query.replace(/"/g, '\\"');
-    filters.push(
-      `(title ~ "${q}" || url ~ "${q}" || description ~ "${q}" || tags ~ "${q}")`,
-    );
-  }
-  if (opts.collection) filters.push(`collection = "${opts.collection}"`);
-  if (opts.tag) filters.push(`tags ~ "${opts.tag}"`);
-
-  const list = await pb.collection('bookmarks').getList(opts.page ?? 1, opts.perPage ?? 50, {
-    filter: filters.join(' && '),
-    sort: '-created',
-  });
-  return list.items.map(normalizeBookmark);
+export async function toggleFavorite(id: string, favorite: boolean): Promise<Bookmark> {
+  return (await getBackend()).updateBookmark(id, { favorite });
 }
 
-export async function recentBookmarks(limit = 20): Promise<Bookmark[]> {
+export async function markVisited(id: string): Promise<void> {
+  return (await getBackend()).markVisited(id);
+}
+
+export async function searchBookmarks(query: string, opts: SearchOpts = {}): Promise<Bookmark[]> {
+  return (await getBackend()).searchBookmarks(query, opts);
+}
+
+export async function recentBookmarks(limit = 12): Promise<Bookmark[]> {
   return searchBookmarks('', { perPage: limit });
 }
 
-// ---- Collections ------------------------------------------------------------
-
-export async function listCollections(): Promise<Collection[]> {
-  const user = currentUserId();
-  if (!user) throw new Error('Not logged in');
-  const list = await pb.collection('collections').getFullList({
-    filter: `user = "${user}"`,
-    sort: 'name',
-  });
-  return list as unknown as Collection[];
+export async function findByUrl(url: string): Promise<Bookmark | null> {
+  return (await getBackend()).findByUrl(url);
 }
 
-export async function createCollection(name: string, color?: string): Promise<Collection> {
-  const user = currentUserId();
-  if (!user) throw new Error('Not logged in');
-  const rec = await pb.collection('collections').create({ name, color, user });
-  return rec as unknown as Collection;
+export async function getAllTags(): Promise<{ tag: string; count: number }[]> {
+  return (await getBackend()).getAllTags();
 }
 
-// ---- helpers ----------------------------------------------------------------
-
-function normalizeBookmark(rec: any): Bookmark {
-  return {
-    id: rec.id,
-    url: rec.url,
-    title: rec.title,
-    description: rec.description,
-    tags: parseTags(rec.tags),
-    collection: rec.collection || undefined,
-    cover: rec.cover || undefined,
-    screenshot: rec.screenshot ? fileUrl(rec, rec.screenshot) : undefined,
-    domain: rec.domain,
-    user: rec.user,
-    created: rec.created,
-    updated: rec.updated,
-  };
+export async function vaultStats() {
+  return (await getBackend()).vaultStats();
 }
 
-function parseTags(raw: unknown): string[] {
-  if (Array.isArray(raw)) return raw;
-  if (typeof raw === 'string') {
-    try {
-      const parsed = JSON.parse(raw);
-      return Array.isArray(parsed) ? parsed : [];
-    } catch {
-      return [];
-    }
-  }
-  return [];
+export async function listCollections() {
+  return (await getBackend()).listCollections();
 }
 
-function safeDomain(url: string): string {
-  try {
-    return new URL(url).hostname.replace(/^www\./, '');
-  } catch {
-    return '';
-  }
+export async function createCollection(data: {
+  name: string;
+  color?: string;
+  icon?: string;
+  parent?: string;
+}) {
+  return (await getBackend()).createCollection(data);
+}
+
+export async function updateCollection(id: string, patch: Parameters<Awaited<ReturnType<typeof getBackend>>['updateCollection']>[1]) {
+  return (await getBackend()).updateCollection(id, patch);
+}
+
+export async function deleteCollection(id: string): Promise<void> {
+  return (await getBackend()).deleteCollection(id);
+}
+
+export async function countByCollection(): Promise<Record<string, number>> {
+  return (await getBackend()).countByCollection();
 }

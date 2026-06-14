@@ -4,23 +4,36 @@ export interface Collection {
   id: string;
   name: string;
   color?: string;
-  icon?: string;
-  parent?: string; // collection id, for nesting
-  user: string;    // owner relation
+  icon?: string;       // emoji or icon key
+  parent?: string;     // collection id, for nesting
+  sort?: number;       // manual ordering within a parent
+  user: string;        // owner relation
   created: string;
   updated: string;
 }
+
+// Coarse content type, inferred on save. Drives card layout + filtering.
+export type BookmarkType = 'article' | 'video' | 'image' | 'pdf' | 'repo' | 'doc' | 'link';
 
 export interface Bookmark {
   id: string;
   url: string;
   title: string;
   description?: string;
+  summary?: string;          // AI-generated TL;DR
+  note?: string;             // user's own note
   tags: string[];
+  aiTags?: string[];         // tags suggested by AI (kept distinct so user edits win)
   collection?: string;       // collection id
-  cover?: string;            // file name in PB, or remote URL
-  screenshot?: string;       // file name in PB (auto preview)
+  cover?: string;            // remote cover image URL (og:image) or PB file
+  favicon?: string;          // site favicon URL
+  screenshot?: string;       // file URL in PB (auto preview)
   domain?: string;
+  type: BookmarkType;
+  favorite?: boolean;
+  readingTime?: number;      // minutes
+  broken?: boolean;          // link-checker flagged it as dead
+  lastVisited?: string;      // ISO date of last open from within Keepsake
   user: string;              // owner relation
   created: string;
   updated: string;
@@ -33,7 +46,7 @@ export interface Highlight {
   text: string;              // the highlighted text
   note?: string;             // user annotation
   color: HighlightColor;
-  anchor?: string;           // JSON-serialized range anchor (Claude Code: harden this)
+  anchor?: string;           // JSON-serialized TextQuoteAnchor for robust re-anchoring
   user: string;
   created: string;
   updated: string;
@@ -41,8 +54,47 @@ export interface Highlight {
 
 export type HighlightColor = 'yellow' | 'green' | 'blue' | 'pink' | 'orange';
 
+// Robust highlight anchor — quote + surrounding context survives DOM changes
+// far better than a raw first-match search. Serialized into Highlight.anchor.
+export interface TextQuoteAnchor {
+  exact: string;
+  prefix?: string;
+  suffix?: string;
+}
+
 // Which UI opens when the toolbar icon is clicked. Configurable in Options.
 export type UiSurface = 'popup' | 'sidepanel' | 'dashboard';
+
+// Library layout modes.
+export type ViewMode = 'grid' | 'list' | 'masonry';
+export type SortMode = 'newest' | 'oldest' | 'title' | 'domain' | 'lastVisited';
+
+export type ThemeMode = 'system' | 'light' | 'dark';
+
+// Named accent palettes for the UI. Hex values live in lib/theme.ts.
+export type Accent = 'ocean' | 'violet' | 'emerald' | 'sunset' | 'rose' | 'slate';
+
+// AI provider config. The key lives in chrome.storage.local (never synced,
+// never leaves the device except in calls to the model API).
+export interface AiSettings {
+  enabled: boolean;
+  apiKey: string;
+  autoTag: boolean;          // suggest tags on save
+  autoSummarize: boolean;    // generate a TL;DR on save
+  autoCollection: boolean;   // suggest a collection on save
+  fastModel: string;         // tagging/summarizing (cheap + quick)
+  smartModel: string;        // "ask your library" Q&A
+}
+
+export const DEFAULT_AI_SETTINGS: AiSettings = {
+  enabled: false,
+  apiKey: '',
+  autoTag: true,
+  autoSummarize: true,
+  autoCollection: false,
+  fastModel: 'claude-haiku-4-5',
+  smartModel: 'claude-opus-4-8',
+};
 
 export interface Settings {
   // Primary surface fired by clicking the extension icon.
@@ -50,7 +102,11 @@ export interface Settings {
   // Feature toggles — let the user turn pieces on/off.
   enableHighlights: boolean;
   enableAutoScreenshot: boolean;
-  theme: 'system' | 'light' | 'dark';
+  enableMetadata: boolean;   // fetch og:image / favicon / reading time on save
+  theme: ThemeMode;
+  accent: Accent;
+  view: ViewMode;
+  sort: SortMode;
   defaultCollection?: string; // collection id new saves drop into
 }
 
@@ -58,5 +114,18 @@ export const DEFAULT_SETTINGS: Settings = {
   primarySurface: 'popup',
   enableHighlights: true,
   enableAutoScreenshot: true,
+  enableMetadata: true,
   theme: 'system',
+  accent: 'ocean',
+  view: 'grid',
+  sort: 'newest',
 };
+
+// Aggregate stats for the dashboard header.
+export interface VaultStats {
+  total: number;
+  collections: number;
+  tags: number;
+  highlights: number;
+  favorites: number;
+}

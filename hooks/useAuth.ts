@@ -1,27 +1,38 @@
 import { useEffect, useState } from 'react';
-import { loadAuth, isLoggedIn, login as pbLogin, logout as pbLogout } from '@/lib/pocketbase';
+import { loadAuth, isLoggedIn, currentUser, login as doLogin, signup as doSignup, logout as doLogout } from '@/lib/auth';
 
-// Tiny auth hook shared by every UI surface.
+// Tiny auth hook shared by every UI surface. Backend-agnostic.
 export function useAuth() {
   const [ready, setReady] = useState(false);
   const [authed, setAuthed] = useState(false);
+  const [email, setEmail] = useState<string | null>(null);
 
   useEffect(() => {
-    loadAuth().then(() => {
-      setAuthed(isLoggedIn());
+    (async () => {
+      await loadAuth();
+      setAuthed(await isLoggedIn());
+      setEmail((await currentUser())?.email ?? null);
       setReady(true);
-    });
+    })();
   }, []);
 
-  async function login(email: string, password: string) {
-    await pbLogin(email, password);
+  async function login(em: string, password: string) {
+    const u = await doLogin(em, password);
     setAuthed(true);
+    setEmail(u.email);
+  }
+
+  async function signup(em: string, password: string, name?: string) {
+    const u = await doSignup(em, password, name);
+    setAuthed(true);
+    setEmail(u.email);
   }
 
   async function logout() {
-    await pbLogout();
+    await doLogout();
     setAuthed(false);
+    setEmail(null);
   }
 
-  return { ready, authed, login, logout };
+  return { ready, authed, email, login, signup, logout };
 }

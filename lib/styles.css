@@ -2,4 +2,110 @@
 @tailwind components;
 @tailwind utilities;
 
-html, body { margin: 0; }
+/* ---- Design tokens -------------------------------------------------------
+   Colors are RGB triplets so Tailwind's <alpha-value> works.
+   `accent` defaults to "ocean" and is overridden at runtime by lib/theme.ts
+   via the data-accent attribute. Light is the default; .dark flips surfaces. */
+@layer base {
+  :root {
+    --accent: 37 99 235;        /* ocean */
+    --accent-dark: 29 78 216;
+    --accent-soft: 219 234 254;
+
+    --surface: 255 255 255;
+    --surface-raised: 255 255 255;
+    --surface-sunken: 245 246 248;
+    --ink: 17 24 39;
+    --ink-soft: 75 85 99;
+    --ink-faint: 156 163 175;
+    --line: 229 231 235;
+
+    color-scheme: light;
+  }
+
+  .dark {
+    --surface: 17 18 23;
+    --surface-raised: 27 29 36;
+    --surface-sunken: 12 13 17;
+    --ink: 237 239 243;
+    --ink-soft: 168 173 184;
+    --ink-faint: 110 116 128;
+    --line: 42 45 54;
+    --accent-soft: 30 41 71;
+
+    color-scheme: dark;
+  }
+
+  /* Accent palettes (applied via data-accent on <html>). */
+  [data-accent='ocean']   { --accent: 37 99 235;  --accent-dark: 29 78 216; }
+  [data-accent='violet']  { --accent: 124 58 237; --accent-dark: 109 40 217; }
+  [data-accent='emerald'] { --accent: 16 185 129; --accent-dark: 5 150 105; }
+  [data-accent='sunset']  { --accent: 234 88 12;  --accent-dark: 194 65 12; }
+  [data-accent='rose']    { --accent: 225 29 72;  --accent-dark: 190 18 60; }
+  [data-accent='slate']   { --accent: 71 85 105;  --accent-dark: 51 65 85; }
+
+  html, body { margin: 0; }
+  body {
+    background: rgb(var(--surface-sunken));
+    color: rgb(var(--ink));
+    font-family: ui-sans-serif, system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
+    -webkit-font-smoothing: antialiased;
+  }
+
+  /* Quiet, theme-aware scrollbars. */
+  * { scrollbar-width: thin; scrollbar-color: rgb(var(--line)) transparent; }
+  *::-webkit-scrollbar { width: 10px; height: 10px; }
+  *::-webkit-scrollbar-thumb {
+    background: rgb(var(--line));
+    border: 3px solid transparent;
+    border-radius: 999px;
+    background-clip: content-box;
+  }
+  *::-webkit-scrollbar-thumb:hover { background: rgb(var(--ink-faint)); background-clip: content-box; }
+}
+
+/* ---- Reusable component classes ----------------------------------------- */
+@layer components {
+  .btn {
+    @apply inline-flex items-center justify-center gap-1.5 rounded-lg px-3 py-2 text-sm font-medium
+           transition-all duration-150 disabled:cursor-not-allowed disabled:opacity-50 select-none;
+  }
+  .btn-primary {
+    @apply btn bg-brand text-white shadow-sm hover:bg-brand-dark active:scale-[0.98];
+  }
+  .btn-ghost {
+    @apply btn text-ink-soft hover:bg-surface-sunken hover:text-ink;
+  }
+  .btn-outline {
+    @apply btn border border-line bg-surface-raised text-ink hover:border-brand/40 hover:text-brand;
+  }
+  .input {
+    @apply w-full rounded-lg border border-line bg-surface-raised px-3 py-2 text-sm text-ink
+           placeholder:text-ink-faint outline-none transition
+           focus:border-brand/50 focus:ring-2 focus:ring-brand/20;
+  }
+  .card {
+    @apply rounded-2xl border border-line bg-surface-raised shadow-card;
+  }
+  .chip {
+    @apply inline-flex items-center gap-1 rounded-full bg-brand/10 px-2 py-0.5 text-[11px]
+           font-medium text-brand;
+  }
+  .skeleton {
+    @apply relative overflow-hidden bg-surface-sunken;
+  }
+  .skeleton::after {
+    content: '';
+    @apply absolute inset-0 -translate-x-full;
+    background: linear-gradient(90deg, transparent, rgb(var(--ink) / 0.06), transparent);
+    animation: shimmer 1.4s infinite;
+  }
+}
+
+/* Line clamp helpers (no plugin dependency). */
+.line-clamp-1, .line-clamp-2, .line-clamp-3 {
+  display: -webkit-box; -webkit-box-orient: vertical; overflow: hidden;
+}
+.line-clamp-1 { -webkit-line-clamp: 1; }
+.line-clamp-2 { -webkit-line-clamp: 2; }
+.line-clamp-3 { -webkit-line-clamp: 3; }

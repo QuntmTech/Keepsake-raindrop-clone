@@ -1,9 +1,9 @@
 # PocketBase schema
 
-Create these three collections in your PocketBase admin UI (Settings → Collections),
+Only needed when you switch Settings → Storage to **PocketBase**. The default local backend
+needs no server. Create these three collections in your PocketBase admin (Settings → Collections),
 **plus** the built-in `users` auth collection (already exists).
 
-> Tip: you can paste these as a starting point, but PocketBase's UI is the source of truth.
 > Set API rules so users only see their own rows (see "API rules" at the bottom).
 
 ---
@@ -13,8 +13,9 @@ Create these three collections in your PocketBase admin UI (Settings → Collect
 |---|---|---|
 | name | Text | required |
 | color | Text | optional (hex) |
-| icon | Text | optional |
+| icon | Text | optional (emoji) |
 | parent | Relation → collections | optional, single, for nesting |
+| sort | Number | optional, manual ordering |
 | user | Relation → users | required, single |
 
 ## 2. `bookmarks` (type: Base)
@@ -23,11 +24,19 @@ Create these three collections in your PocketBase admin UI (Settings → Collect
 | url | URL | required |
 | title | Text | required |
 | description | Text | optional |
+| summary | Text | optional (AI TL;DR) |
+| note | Text | optional (user note) |
 | tags | JSON | array of strings, e.g. `["dev","ai"]` |
+| aiTags | JSON | array of strings (AI-suggested) |
 | collection | Relation → collections | optional, single |
 | domain | Text | optional |
-| cover | File | optional, single image |
+| type | Select | article, video, image, pdf, repo, doc, link |
+| favorite | Bool | optional |
+| readingTime | Number | optional (minutes) |
+| cover | Text | optional (remote og:image URL) |
+| favicon | Text | optional (URL) |
 | screenshot | File | optional, single image (auto preview) |
+| lastVisited | Date | optional |
 | user | Relation → users | required, single |
 
 ## 3. `highlights` (type: Base)
@@ -37,7 +46,7 @@ Create these three collections in your PocketBase admin UI (Settings → Collect
 | text | Text | required (the highlighted text) |
 | note | Text | optional annotation |
 | color | Select | yellow, green, blue, pink, orange |
-| anchor | Text | optional serialized range (for robust re-anchoring later) |
+| anchor | Text | optional serialized TextQuoteAnchor (quote + prefix/suffix) |
 | bookmark | Relation → bookmarks | optional, single |
 | user | Relation → users | required, single |
 
@@ -51,7 +60,7 @@ For `bookmarks`, `collections`, and `highlights`, set **all five** rules to:
 @request.auth.id != "" && user = @request.auth.id
 ```
 
-This means: must be logged in, and can only touch your own rows. The `create` rule
-additionally relies on the client sending `user = <own id>` (the lib does this).
+Must be logged in, and can only touch your own rows. For the `users` collection, leave the
+default auth rules (allow login / signup as you prefer).
 
-For the `users` collection, leave default auth rules (allow login / signup as you prefer).
+> The client sends `user = <own id>` on create; the rule above is the real guard.

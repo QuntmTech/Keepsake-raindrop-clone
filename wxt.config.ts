@@ -6,36 +6,43 @@ export default defineConfig({
   modules: ['@wxt-dev/module-react'],
 
   manifest: {
-    name: 'Raindrop Clone',
-    description: 'Save, tag, search, highlight, and preview pages — your own bookmark vault.',
-    version: '0.1.0',
+    name: 'Keepsake — bookmarks on steroids',
+    description:
+      'Save, tag, search, highlight, and preview pages — an AI-powered bookmark vault that goes far beyond raindrop.io.',
+    version: '0.2.0',
 
-    // Permissions: keep this list tight. Each one is a Web Store review flag.
     permissions: [
-      'storage',        // settings + cached auth
-      'activeTab',      // read the current tab's URL/title on demand
-      'tabs',           // needed to capture screenshots + open dashboard tab
-      'contextMenus',   // right-click "Save to vault"
-      'sidePanel',      // the side-panel UI surface
-      'scripting',      // inject highlight logic when needed
+      'storage', // settings + local data + cached auth
+      'unlimitedStorage', // local-first vault + preview screenshots without the 10MB cap
+      'activeTab', // read the current tab's URL/title on demand
+      'tabs', // capture screenshots + open dashboard tab
+      'contextMenus', // right-click "Save to Keepsake"
+      'sidePanel', // the side-panel UI surface
+      'scripting', // inject metadata extractor + highlight logic
     ],
 
-    // <all_urls> is required for the content script (highlights on any page) and
-    // for captureVisibleTab screenshots. Reviewers will ask why — answer: highlights + preview.
-    host_permissions: ['<all_urls>'],
+    // <all_urls>: content script (highlights) + captureVisibleTab + metadata extraction.
+    // api.anthropic.com: optional AI features (auto-tag, summarize, ask-your-library).
+    host_permissions: ['<all_urls>', 'https://api.anthropic.com/*'],
 
-    // Side panel default page (Chrome 114+).
     side_panel: {
       default_path: 'sidepanel.html',
     },
 
-    // NOTE: we intentionally DO NOT set action.default_popup here.
-    // The background worker sets/clears the popup at runtime based on the user's
-    // chosen UI surface (popup vs side panel vs dashboard). See entrypoints/background.ts.
     action: {
-      default_title: 'Raindrop Clone',
+      default_title: 'Keepsake',
+    },
+
+    // Keyboard shortcuts. Chrome lets users remap these at chrome://extensions/shortcuts.
+    commands: {
+      'save-page': {
+        suggested_key: { default: 'Ctrl+Shift+S' },
+        description: 'Save the current page to Keepsake',
+      },
+      'open-dashboard': {
+        suggested_key: { default: 'Ctrl+Shift+E' },
+        description: 'Open the Keepsake dashboard',
+      },
     },
   },
-
-  // Build output goes to .output/chrome-mv3 — load THAT folder as unpacked.
 });

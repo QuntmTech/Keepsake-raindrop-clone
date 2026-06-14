@@ -1,48 +1,86 @@
 import { useState } from 'react';
+import { Icon } from './Icon';
 
-export function LoginForm({ onLogin }: { onLogin: (email: string, password: string) => Promise<void> }) {
+interface Props {
+  onLogin: (email: string, password: string) => Promise<void>;
+  onSignup?: (email: string, password: string, name?: string) => Promise<void>;
+  compact?: boolean;
+}
+
+export function LoginForm({ onLogin, onSignup, compact }: Props) {
+  const [mode, setMode] = useState<'login' | 'signup'>('login');
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [error, setError] = useState('');
   const [busy, setBusy] = useState(false);
 
   async function submit() {
+    if (!email || !password) {
+      setError('Email and password are required');
+      return;
+    }
     setBusy(true);
     setError('');
     try {
-      await onLogin(email, password);
+      if (mode === 'signup' && onSignup) await onSignup(email, password);
+      else await onLogin(email, password);
     } catch (e: any) {
-      setError(e?.message ?? 'Login failed');
+      setError(e?.message ?? 'Something went wrong');
     } finally {
       setBusy(false);
     }
   }
 
   return (
-    <div className="flex flex-col gap-3 p-4">
-      <h2 className="text-base font-semibold">Sign in</h2>
+    <div className={`flex flex-col gap-3 ${compact ? 'p-4' : 'p-6'}`}>
+      <div className="mb-1 flex items-center gap-2">
+        <span className="grid h-8 w-8 place-items-center rounded-lg bg-brand text-white">
+          <Icon name="bookmark" size={18} fill />
+        </span>
+        <div>
+          <h2 className="text-base font-semibold text-ink">
+            {mode === 'login' ? 'Welcome back' : 'Create your vault'}
+          </h2>
+          <p className="text-xs text-ink-faint">Keepsake — your bookmarks, supercharged</p>
+        </div>
+      </div>
+
       <input
-        className="rounded border border-gray-300 px-3 py-2 text-sm dark:bg-gray-800 dark:border-gray-700"
-        placeholder="email"
+        className="input"
+        placeholder="Email"
+        type="email"
+        autoComplete="email"
         value={email}
         onChange={(e) => setEmail(e.target.value)}
       />
       <input
-        className="rounded border border-gray-300 px-3 py-2 text-sm dark:bg-gray-800 dark:border-gray-700"
-        placeholder="password"
+        className="input"
+        placeholder="Password"
         type="password"
+        autoComplete={mode === 'login' ? 'current-password' : 'new-password'}
         value={password}
         onChange={(e) => setPassword(e.target.value)}
         onKeyDown={(e) => e.key === 'Enter' && submit()}
       />
       {error && <p className="text-xs text-red-500">{error}</p>}
-      <button
-        className="rounded bg-brand px-3 py-2 text-sm font-medium text-white hover:bg-brand-dark disabled:opacity-50"
-        onClick={submit}
-        disabled={busy}
-      >
-        {busy ? 'Signing in…' : 'Sign in'}
+
+      <button className="btn-primary" onClick={submit} disabled={busy}>
+        {busy ? 'Please wait…' : mode === 'login' ? 'Sign in' : 'Create account'}
       </button>
+
+      {onSignup && (
+        <button
+          className="text-xs text-ink-faint transition hover:text-brand"
+          onClick={() => {
+            setMode((m) => (m === 'login' ? 'signup' : 'login'));
+            setError('');
+          }}
+        >
+          {mode === 'login'
+            ? "Don't have an account? Sign up"
+            : 'Already have an account? Sign in'}
+        </button>
+      )}
     </div>
   );
 }
