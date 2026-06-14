@@ -51,8 +51,12 @@ Anthropic API (via the official direct-browser-access header). It is never synce
 ---
 
 ## Features
-- **Capture** — popup quick-save, right-click menu, `Ctrl+Shift+S` shortcut; auto screenshot,
-  og:image cover, favicon, reading-time, and content-type detection.
+- **Quick Bar** — a draggable widget pinned to the edge of every page: save in one click, drop
+  straight into a folder, or jump to the dashboard — no popup needed. Isolated in a Shadow DOM so
+  it never clashes with the page's styles. Toggle in Settings → Capture.
+- **Capture** — Quick Bar, popup quick-save, right-click menu, and keyboard shortcuts
+  (`Ctrl+Shift+S` save, `Ctrl+Shift+K` save-with-folder-picker, `Ctrl+Shift+E` dashboard);
+  auto screenshot, og:image cover, favicon, reading-time, and content-type detection.
 - **AI** — auto-suggested tags, one-line summaries, and a chat assistant grounded in your vault.
 - **Organize** — nestable collections with colors, tag autocomplete, favorites, smart filters
   (All / Favorites / Untagged / by collection / by tag).

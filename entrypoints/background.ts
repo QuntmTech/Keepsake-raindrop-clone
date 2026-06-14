@@ -45,6 +45,10 @@ export default defineBackground(() => {
     const [tab] = await browser.tabs.query({ active: true, currentWindow: true });
     if (command === 'save-page' && tab) await saveTab(tab);
     else if (command === 'open-dashboard') await openDashboard();
+    else if (command === 'quick-save' && tab?.id) {
+      // Ask the in-page Quick Bar to pop its folder picker.
+      browser.tabs.sendMessage(tab.id, { type: 'OPEN_QUICKBAR' }).catch(() => {});
+    }
   });
 
   // Right-click context menu.

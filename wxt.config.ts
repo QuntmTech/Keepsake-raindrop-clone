@@ -43,6 +43,10 @@ export default defineConfig({
         suggested_key: { default: 'Ctrl+Shift+E' },
         description: 'Open the Keepsake dashboard',
       },
+      'quick-save': {
+        suggested_key: { default: 'Ctrl+Shift+K' },
+        description: 'Quick-save with a folder picker (pops out on the page)',
+      },
     },
   },
 });

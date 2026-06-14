@@ -103,6 +103,8 @@ export interface Settings {
   enableHighlights: boolean;
   enableAutoScreenshot: boolean;
   enableMetadata: boolean;   // fetch og:image / favicon / reading time on save
+  enableQuickBar: boolean;   // draggable in-page quick-save widget
+  quickBarY: number;         // 0..1 vertical position of the quick bar on the edge
   theme: ThemeMode;
   accent: Accent;
   view: ViewMode;
@@ -115,6 +117,8 @@ export const DEFAULT_SETTINGS: Settings = {
   enableHighlights: true,
   enableAutoScreenshot: true,
   enableMetadata: true,
+  enableQuickBar: true,
+  quickBarY: 0.5,
   theme: 'system',
   accent: 'ocean',
   view: 'grid',

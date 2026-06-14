@@ -1,11 +1,13 @@
 import { getBackend } from '@/lib/backend';
-import { getSettings } from '@/lib/settings';
+import { getSettings, watchSettings } from '@/lib/settings';
 import { createHighlight, highlightsForUrl, parseAnchor } from '@/lib/highlights';
+import { mountQuickBar, type QuickBarApi } from '@/lib/quickbar';
+import { type Message } from '@/lib/messaging';
 import { type HighlightColor, type TextQuoteAnchor } from '@/lib/types';
 
-// Content scripts run INSIDE the web page. This one powers highlights/annotations
-// with robust quote-based anchoring (quote + surrounding context) so highlights
-// survive DOM changes and span multiple nodes.
+// Content scripts run INSIDE the web page. This one powers (1) the draggable
+// Quick Bar for one-click saving and (2) highlights/annotations with robust
+// quote-based anchoring that survives DOM changes and multi-node selections.
 
 export default defineContentScript({
   matches: ['<all_urls>'],
@@ -14,6 +16,25 @@ export default defineContentScript({
   async main() {
     await getBackend();
     const settings = await getSettings();
+
+    // Quick Bar — independent of highlights.
+    let quickBar: QuickBarApi | null = null;
+    if (settings.enableQuickBar) {
+      quickBar = await mountQuickBar();
+    }
+    // Keyboard shortcut (handled in background) asks us to pop the folder picker.
+    browser.runtime.onMessage.addListener((msg: Message) => {
+      if (msg.type === 'OPEN_QUICKBAR') quickBar?.openFolders();
+    });
+    // Toggle the Quick Bar live when the setting changes (no reload needed).
+    watchSettings(async (s) => {
+      if (s.enableQuickBar && !quickBar) quickBar = await mountQuickBar();
+      else if (!s.enableQuickBar && quickBar) {
+        quickBar.destroy();
+        quickBar = null;
+      }
+    });
+
     if (!settings.enableHighlights) return;
 
     injectStyles();

@@ -193,7 +193,8 @@ export default function App() {
         </Section>
 
         {/* Features */}
-        <Section title="Capture">
+        <Section title="Capture" hint="The Quick Bar is a draggable widget on the edge of every page — save in one click or drop straight into a folder, no popup needed. Shortcut: Ctrl+Shift+K pops the folder picker.">
+          <Toggle label="Show the in-page Quick Bar" checked={settings.enableQuickBar} onChange={(v) => update({ enableQuickBar: v })} />
           <Toggle label="Highlights & annotations on pages" checked={settings.enableHighlights} onChange={(v) => update({ enableHighlights: v })} />
           <Toggle label="Auto-capture a preview screenshot" checked={settings.enableAutoScreenshot} onChange={(v) => update({ enableAutoScreenshot: v })} />
           <Toggle label="Fetch page metadata (cover, reading time)" checked={settings.enableMetadata} onChange={(v) => update({ enableMetadata: v })} />

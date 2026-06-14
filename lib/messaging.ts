@@ -11,6 +11,7 @@ export type Message =
   | { type: 'EXTRACT_META'; tabId?: number } // background -> PageMeta for a tab
   | { type: 'OPEN_DASHBOARD' }
   | { type: 'OPEN_SURFACE'; surface: 'popup' | 'sidepanel' | 'dashboard' }
+  | { type: 'OPEN_QUICKBAR' } // background -> content: pop the quick-save folder picker
   | { type: 'CREATE_HIGHLIGHT'; url: string; text: string; color: HighlightColor; anchor?: string }
   | { type: 'FLUSH_QUEUE' }
   | { type: 'PING' };
