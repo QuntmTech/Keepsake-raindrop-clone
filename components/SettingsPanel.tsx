@@ -1,0 +1,317 @@
+import { useEffect, useRef, useState } from 'react';
+import { useAuth } from '@/hooks/useAuth';
+import { useSettings } from '@/hooks/useSettings';
+import { useCollections } from '@/hooks/useCollections';
+import { LoginForm } from './LoginForm';
+import { Icon } from './Icon';
+import { useToast } from './Toast';
+import { ACCENTS } from '@/lib/theme';
+import { type Accent, type AiSettings, type SortMode, type ThemeMode, type UiSurface, type ViewMode } from '@/lib/types';
+import { getAiSettings, setAiSettings, testApiKey } from '@/lib/ai';
+import { getBackendMode, setBackendMode, type BackendMode } from '@/lib/backend';
+import { clearLocalData } from '@/lib/backend/local';
+import { parseNetscapeHtml, parseKeepsakeJson, importItems, exportJson } from '@/lib/importer';
+import { searchBookmarks } from '@/lib/bookmarks';
+
+// All of Keepsake's settings in one component, used by the full-page options
+// screen AND inside the popup / side panel (compact mode) — so you never have
+// to leave the dropdown to change something.
+export function SettingsPanel({ compact = false }: { compact?: boolean }) {
+  const { ready, authed, email, login, signup, logout } = useAuth();
+  const { settings, update } = useSettings();
+  const collectionsApi = useCollections(authed);
+  const { toast } = useToast();
+
+  const [ai, setAi] = useState<AiSettings | null>(null);
+  const [keyDraft, setKeyDraft] = useState('');
+  const [backend, setBackend] = useState<BackendMode>('local');
+  const [testing, setTesting] = useState(false);
+  const [importing, setImporting] = useState<string | null>(null);
+  const fileRef = useRef<HTMLInputElement>(null);
+
+  useEffect(() => {
+    getAiSettings().then((s) => {
+      setAi(s);
+      setKeyDraft(s.apiKey);
+    });
+    getBackendMode().then(setBackend);
+  }, []);
+
+  const patchAi = async (p: Partial<AiSettings>) => setAi(await setAiSettings(p));
+
+  const commitKey = () => {
+    if (ai && keyDraft !== ai.apiKey) patchAi({ apiKey: keyDraft.trim() });
+  };
+
+  async function runTest() {
+    if (!keyDraft.trim() || !ai) return;
+    commitKey();
+    setTesting(true);
+    try {
+      const ok = await testApiKey(keyDraft.trim(), ai.fastModel);
+      toast(ok ? 'API key works!' : 'Key rejected — check it', ok ? 'success' : 'error');
+    } catch {
+      toast('Could not reach the API', 'error');
+    } finally {
+      setTesting(false);
+    }
+  }
+
+  async function changeBackend(mode: BackendMode) {
+    await setBackendMode(mode);
+    setBackend(mode);
+    toast(`Switched to ${mode === 'local' ? 'local storage' : 'PocketBase'} — reloading…`, 'info');
+    setTimeout(() => location.reload(), 700);
+  }
+
+  async function onFile(e: React.ChangeEvent<HTMLInputElement>) {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    const text = await file.text();
+    const items = file.name.endsWith('.json') ? parseKeepsakeJson(text) : parseNetscapeHtml(text);
+    if (items.length === 0) {
+      toast('No bookmarks found in that file', 'error');
+      if (fileRef.current) fileRef.current.value = '';
+      return;
+    }
+    setImporting(`0 / ${items.length}`);
+    const res = await importItems(items, settings.defaultCollection, (p) =>
+      setImporting(`${p.done} / ${p.total}`),
+    );
+    setImporting(null);
+    toast(`Imported ${res.done - res.failed} bookmarks`, 'success');
+    collectionsApi.refresh();
+    if (fileRef.current) fileRef.current.value = '';
+  }
+
+  async function doExport() {
+    const all = await searchBookmarks('', { perPage: 9999 });
+    if (all.length === 0) {
+      toast('Nothing to export yet', 'info');
+      return;
+    }
+    const blob = exportJson(all);
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `keepsake-export-${new Date().toISOString().slice(0, 10)}.json`;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    URL.revokeObjectURL(url);
+    toast(`Exported ${all.length} bookmarks`, 'success');
+  }
+
+  async function wipeLocal() {
+    if (!confirm('Delete ALL locally-saved bookmarks, folders, and highlights? Your account stays. This cannot be undone.')) return;
+    await clearLocalData();
+    toast('Local data cleared', 'success');
+    setTimeout(() => location.reload(), 600);
+  }
+
+  if (!ready) return <div className="p-8 text-center text-sm text-ink-faint">Loading…</div>;
+
+  return (
+    <div className={compact ? 'p-3' : 'mx-auto max-w-2xl px-6 py-10'}>
+      {!compact && (
+        <h1 className="mb-6 flex items-center gap-2 text-xl font-semibold text-ink">
+          <span className="grid h-9 w-9 place-items-center rounded-lg bg-brand text-white">
+            <Icon name="settings" size={18} />
+          </span>
+          Keepsake Settings
+        </h1>
+      )}
+
+      <Section title="Account" compact={compact}>
+        {authed ? (
+          <div className="flex items-center justify-between gap-2">
+            <div className="flex min-w-0 items-center gap-2 text-sm text-ink-soft">
+              <span className="grid h-9 w-9 shrink-0 place-items-center rounded-full bg-brand/10 font-semibold uppercase text-brand">
+                {email?.[0] ?? '?'}
+              </span>
+              <span className="truncate">{email}</span>
+            </div>
+            <button className="btn-outline shrink-0" onClick={logout}>
+              <Icon name="logout" size={15} /> Sign out
+            </button>
+          </div>
+        ) : (
+          <LoginForm onLogin={login} onSignup={signup} compact />
+        )}
+      </Section>
+
+      <Section title="Storage" compact={compact} hint="Where your bookmarks live. Local works instantly with no server; switch to PocketBase once your database is set up.">
+        <div className="flex flex-col gap-2">
+          <Radio checked={backend === 'local'} onChange={() => changeBackend('local')} label="On this device (local storage)" sub="Fully functional, no setup. Data stays in your browser profile." />
+          <Radio checked={backend === 'pocketbase'} onChange={() => changeBackend('pocketbase')} label="PocketBase server" sub="Syncs across devices. Requires WXT_PB_URL + collections (see README)." />
+        </div>
+      </Section>
+
+      <Section title="When I click the toolbar icon" compact={compact}>
+        <div className="flex flex-col gap-2">
+          {(['popup', 'sidepanel', 'dashboard'] as UiSurface[]).map((s) => (
+            <Radio
+              key={s}
+              checked={settings.primarySurface === s}
+              onChange={() => update({ primarySurface: s })}
+              label={s === 'popup' ? 'Open the quick-save popup' : s === 'sidepanel' ? 'Open the side panel' : 'Open the full dashboard'}
+            />
+          ))}
+        </div>
+      </Section>
+
+      <Section title="AI" compact={compact} hint="Bring your own Anthropic API key. It is stored locally on this device and only sent to the model API.">
+        {ai && (
+          <div className="flex flex-col gap-3">
+            <Toggle label="Enable AI features" checked={ai.enabled} onChange={(v) => patchAi({ enabled: v })} />
+            {ai.enabled && (
+              <>
+                <div className="flex items-center gap-2">
+                  <input
+                    className="input font-mono text-xs"
+                    type="password"
+                    placeholder="sk-ant-…"
+                    value={keyDraft}
+                    onChange={(e) => setKeyDraft(e.target.value)}
+                    onBlur={commitKey}
+                  />
+                  <button className="btn-outline whitespace-nowrap" onClick={runTest} disabled={testing || !keyDraft.trim()}>
+                    {testing ? 'Testing…' : 'Test key'}
+                  </button>
+                </div>
+                <p className="text-xs text-ink-faint">
+                  Get a key at console.anthropic.com. Tags &amp; summaries use{' '}
+                  <code className="rounded bg-surface-sunken px-1">{ai.fastModel}</code>; Ask-your-library uses{' '}
+                  <code className="rounded bg-surface-sunken px-1">{ai.smartModel}</code>.
+                </p>
+                <Toggle label="Auto-suggest tags on save" checked={ai.autoTag} onChange={(v) => patchAi({ autoTag: v })} />
+                <Toggle label="Auto-summarize pages on save" checked={ai.autoSummarize} onChange={(v) => patchAi({ autoSummarize: v })} />
+                <Toggle label="Suggest a folder on save" checked={ai.autoCollection} onChange={(v) => patchAi({ autoCollection: v })} />
+              </>
+            )}
+          </div>
+        )}
+      </Section>
+
+      <Section title="Capture" compact={compact} hint="The Quick Bar is a draggable widget on the edge of every page. Shortcut: Ctrl+Shift+K pops the folder picker.">
+        <Toggle label="Show the in-page Quick Bar" checked={settings.enableQuickBar} onChange={(v) => update({ enableQuickBar: v })} />
+        <Toggle label="Highlights & annotations on pages" checked={settings.enableHighlights} onChange={(v) => update({ enableHighlights: v })} />
+        <Toggle label="Auto-capture a preview screenshot" checked={settings.enableAutoScreenshot} onChange={(v) => update({ enableAutoScreenshot: v })} />
+        <Toggle label="Fetch page metadata (cover, reading time)" checked={settings.enableMetadata} onChange={(v) => update({ enableMetadata: v })} />
+        <label className="mt-2 block text-xs font-medium text-ink-soft">Default folder for new saves</label>
+        <select className="input mt-1" value={settings.defaultCollection ?? ''} onChange={(e) => update({ defaultCollection: e.target.value || undefined })}>
+          <option value="">None</option>
+          {collectionsApi.collections.map((c) => (
+            <option key={c.id} value={c.id}>{c.name}</option>
+          ))}
+        </select>
+      </Section>
+
+      <Section title="Appearance" compact={compact}>
+        <label className="block text-xs font-medium text-ink-soft">Theme</label>
+        <div className="mt-1 flex gap-2">
+          {(['system', 'light', 'dark'] as ThemeMode[]).map((t) => (
+            <button key={t} className={`btn-outline flex-1 capitalize ${settings.theme === t ? 'border-brand/50 text-brand' : ''}`} onClick={() => update({ theme: t })}>
+              {t === 'light' && <Icon name="sun" size={15} />}
+              {t === 'dark' && <Icon name="moon" size={15} />}
+              {t}
+            </button>
+          ))}
+        </div>
+
+        <label className="mt-3 block text-xs font-medium text-ink-soft">Accent</label>
+        <div className="mt-1 flex flex-wrap gap-2">
+          {ACCENTS.map((a) => (
+            <button
+              key={a.key}
+              className={`h-8 w-8 rounded-full transition ${settings.accent === a.key ? 'ring-2 ring-offset-2 ring-offset-surface-raised' : ''}`}
+              style={{ background: a.swatch, ['--tw-ring-color' as any]: a.swatch }}
+              onClick={() => update({ accent: a.key as Accent })}
+              title={a.label}
+            />
+          ))}
+        </div>
+
+        <div className="mt-3 flex gap-3">
+          <div className="flex-1">
+            <label className="block text-xs font-medium text-ink-soft">Default layout</label>
+            <select className="input mt-1" value={settings.view} onChange={(e) => update({ view: e.target.value as ViewMode })}>
+              <option value="grid">Grid</option>
+              <option value="list">List</option>
+              <option value="masonry">Masonry</option>
+            </select>
+          </div>
+          <div className="flex-1">
+            <label className="block text-xs font-medium text-ink-soft">Default sort</label>
+            <select className="input mt-1" value={settings.sort} onChange={(e) => update({ sort: e.target.value as SortMode })}>
+              <option value="newest">Newest</option>
+              <option value="oldest">Oldest</option>
+              <option value="title">Title A–Z</option>
+              <option value="domain">Domain</option>
+              <option value="lastVisited">Recently opened</option>
+            </select>
+          </div>
+        </div>
+      </Section>
+
+      <Section title="Import & export" compact={compact} hint="Import a browser/raindrop.io bookmarks HTML file or a Keepsake JSON export.">
+        <div className="flex flex-wrap items-center gap-2">
+          <input ref={fileRef} type="file" accept=".html,.json" className="hidden" onChange={onFile} />
+          <button className="btn-outline" onClick={() => fileRef.current?.click()} disabled={!authed || !!importing}>
+            <Icon name="import" size={15} /> {importing ? `Importing ${importing}` : 'Import file'}
+          </button>
+          <button className="btn-outline" onClick={doExport} disabled={!authed}>
+            <Icon name="external" size={15} /> Export JSON
+          </button>
+        </div>
+      </Section>
+
+      {backend === 'local' && authed && (
+        <Section title="Danger zone" compact={compact} hint="Local mode only. Permanently removes saved data on this device.">
+          <button className="btn-outline border-red-500/40 text-red-500 hover:bg-red-500/10" onClick={wipeLocal}>
+            <Icon name="trash" size={15} /> Clear all local data
+          </button>
+        </Section>
+      )}
+
+      {!compact && <p className="py-6 text-center text-xs text-ink-faint">Keepsake — bookmarks on steroids ✦</p>}
+    </div>
+  );
+}
+
+function Section({ title, hint, compact, children }: { title: string; hint?: string; compact?: boolean; children: React.ReactNode }) {
+  return (
+    <section className={`card ${compact ? 'mb-3 p-4' : 'mb-4 p-5'}`}>
+      <h2 className="text-sm font-semibold text-ink">{title}</h2>
+      {hint && <p className="mb-3 mt-0.5 text-xs text-ink-faint">{hint}</p>}
+      <div className={hint ? '' : 'mt-3'}>{children}</div>
+    </section>
+  );
+}
+
+function Toggle({ label, checked, onChange }: { label: string; checked: boolean; onChange: (v: boolean) => void }) {
+  return (
+    <label className="flex cursor-pointer items-center justify-between gap-3 py-1 text-sm text-ink-soft">
+      <span>{label}</span>
+      <button
+        type="button"
+        onClick={() => onChange(!checked)}
+        className={`relative h-5 w-9 shrink-0 rounded-full transition ${checked ? 'bg-brand' : 'bg-line'}`}
+      >
+        <span className={`absolute top-0.5 h-4 w-4 rounded-full bg-white transition-all ${checked ? 'left-[18px]' : 'left-0.5'}`} />
+      </button>
+    </label>
+  );
+}
+
+function Radio({ checked, onChange, label, sub }: { checked: boolean; onChange: () => void; label: string; sub?: string }) {
+  return (
+    <label className="flex cursor-pointer items-start gap-2 text-sm text-ink-soft">
+      <input type="radio" checked={checked} onChange={onChange} className="mt-0.5 accent-brand" />
+      <span>
+        {label}
+        {sub && <span className="block text-xs text-ink-faint">{sub}</span>}
+      </span>
+    </label>
+  );
+}

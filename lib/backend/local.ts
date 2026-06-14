@@ -42,6 +42,14 @@ const bookmarksStore = storage.defineItem<Bookmark[]>('local:bookmarks', { fallb
 const collectionsStore = storage.defineItem<Collection[]>('local:collections', { fallback: [] });
 const highlightsStore = storage.defineItem<Highlight[]>('local:highlights', { fallback: [] });
 
+// Wipe all locally-stored bookmarks, collections, and highlights (keeps the
+// account). Used by Settings → "Clear local data" in local mode.
+export async function clearLocalData(): Promise<void> {
+  await bookmarksStore.setValue([]);
+  await collectionsStore.setValue([]);
+  await highlightsStore.setValue([]);
+}
+
 async function sha256(text: string): Promise<string> {
   const data = new TextEncoder().encode(text);
   const digest = await crypto.subtle.digest('SHA-256', data);

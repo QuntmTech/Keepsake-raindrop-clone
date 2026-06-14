@@ -27,12 +27,22 @@ export function BookmarkCard({ bookmark, layout = 'grid', onDelete, onToggleFavo
     window.open(bookmark.url, '_blank', 'noreferrer');
   };
 
+  // Drag a card onto a collection in the sidebar to file it there.
+  const dragProps = {
+    draggable: true,
+    onDragStart: (e: React.DragEvent) => {
+      e.dataTransfer.setData('text/plain', bookmark.id);
+      e.dataTransfer.effectAllowed = 'move';
+    },
+  };
+
   const Cover = ({ className }: { className: string }) =>
     bookmark.cover || bookmark.screenshot ? (
       <img
         src={bookmark.cover || bookmark.screenshot}
         alt=""
         loading="lazy"
+        draggable={false}
         className={`${className} object-cover`}
         onError={(e) => ((e.currentTarget.style.display = 'none'))}
       />
@@ -90,6 +100,7 @@ export function BookmarkCard({ bookmark, layout = 'grid', onDelete, onToggleFavo
       <div
         className="group flex cursor-pointer items-center gap-3 rounded-xl border border-line bg-surface-raised px-3 py-2.5 transition hover:border-brand/30 hover:shadow-card"
         onClick={open}
+        {...dragProps}
       >
         <Cover className="h-11 w-11 shrink-0 rounded-lg" />
         <div className="min-w-0 flex-1">
@@ -117,6 +128,7 @@ export function BookmarkCard({ bookmark, layout = 'grid', onDelete, onToggleFavo
     <div
       className="group flex cursor-pointer flex-col overflow-hidden rounded-2xl border border-line bg-surface-raised shadow-card transition hover:-translate-y-0.5 hover:border-brand/30 hover:shadow-float"
       onClick={open}
+      {...dragProps}
     >
       <div className="relative">
         <Cover className={layout === 'masonry' ? 'h-auto max-h-64 w-full' : 'h-32 w-full'} />

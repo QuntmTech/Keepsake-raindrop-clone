@@ -17,6 +17,7 @@ import {
   searchBookmarks,
   deleteBookmark,
   toggleFavorite,
+  updateBookmark,
   getAllTags,
   vaultStats,
 } from '@/lib/bookmarks';
@@ -116,6 +117,22 @@ export default function App() {
     collectionsApi.refresh();
   }
 
+  // Drag a bookmark onto a collection (or "All bookmarks" to unsort it).
+  async function moveToCollection(bookmarkId: string, collectionId: string | undefined) {
+    const updated = await updateBookmark(bookmarkId, { collection: collectionId });
+    // If we're viewing a specific collection, the moved item may leave the view.
+    setItems((p) =>
+      filter.kind === 'collection' && filter.id !== collectionId
+        ? p.filter((b) => b.id !== bookmarkId)
+        : p.map((b) => (b.id === bookmarkId ? updated : b)),
+    );
+    collectionsApi.refresh();
+    const name = collectionId
+      ? collectionsApi.collections.find((c) => c.id === collectionId)?.name ?? 'collection'
+      : null;
+    toast(name ? `Moved to ${name}` : 'Removed from collection', 'success');
+  }
+
   const allTagNames = useMemo(() => tags.map((t) => t.tag), [tags]);
 
   const isHighlights = filter.kind === 'highlights';
@@ -141,6 +158,15 @@ export default function App() {
 
   const paletteCommands = [
     { id: 'new', label: 'New bookmark', icon: 'plus' as IconName, run: () => setAddOpen(true) },
+    {
+      id: 'newcol',
+      label: 'New collection',
+      icon: 'folder' as IconName,
+      run: () => {
+        const n = prompt('New collection name');
+        if (n?.trim()) collectionsApi.create({ name: n.trim() });
+      },
+    },
     { id: 'ask', label: 'Ask your library (AI)', icon: 'sparkles' as IconName, run: () => setAiOpen(true) },
     { id: 'all', label: 'Go to: All bookmarks', icon: 'grid' as IconName, run: () => setFilter({ kind: 'all' }) },
     { id: 'fav', label: 'Go to: Favorites', icon: 'star' as IconName, run: () => setFilter({ kind: 'favorites' }) },
@@ -161,6 +187,7 @@ export default function App() {
         onCreate={collectionsApi.create}
         onRename={collectionsApi.rename}
         onRemove={collectionsApi.remove}
+        onMove={moveToCollection}
       />
 
       <div className="flex min-w-0 flex-1 flex-col">
