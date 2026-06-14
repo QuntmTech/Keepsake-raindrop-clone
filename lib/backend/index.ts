@@ -5,9 +5,15 @@ import { PocketBaseBackend } from './pocketbase';
 
 export type BackendMode = 'local' | 'pocketbase';
 
+// In a published build, WXT_PB_URL is baked in → default everyone to the hosted
+// cloud backend (real accounts, synced storage, zero setup). In a plain dev
+// build with no URL, default to local so it still works offline.
+export const HOSTED = Boolean(import.meta.env.WXT_PB_URL);
+
 // Backend mode lives in sync storage so the choice roams with the user.
-// Defaults to 'local' so the extension is fully functional with zero setup.
-const modeStore = storage.defineItem<BackendMode>('sync:backend_mode', { fallback: 'local' });
+const modeStore = storage.defineItem<BackendMode>('sync:backend_mode', {
+  fallback: HOSTED ? 'pocketbase' : 'local',
+});
 
 export async function getBackendMode(): Promise<BackendMode> {
   return modeStore.getValue();

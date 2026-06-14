@@ -8,7 +8,7 @@ import { useToast } from './Toast';
 import { ACCENTS } from '@/lib/theme';
 import { type Accent, type AiSettings, type SortMode, type ThemeMode, type UiSurface, type ViewMode } from '@/lib/types';
 import { getAiSettings, setAiSettings, testApiKey } from '@/lib/ai';
-import { getBackendMode, setBackendMode, type BackendMode } from '@/lib/backend';
+import { getBackendMode, setBackendMode, HOSTED, type BackendMode } from '@/lib/backend';
 import { getPbUrl, setPbUrl } from '@/lib/backend/pocketbase';
 import { clearLocalData } from '@/lib/backend/local';
 import { parseNetscapeHtml, parseKeepsakeJson, importItems, exportJson } from '@/lib/importer';
@@ -171,6 +171,16 @@ export function SettingsPanel({ compact = false }: { compact?: boolean }) {
         )}
       </Section>
 
+      {HOSTED ? (
+        <Section title="Sync" compact={compact}>
+          <div className="flex items-center gap-2 text-sm text-ink-soft">
+            <span className="grid h-5 w-5 place-items-center rounded-full bg-emerald-500/15 text-emerald-500">
+              <Icon name="check" size={13} />
+            </span>
+            Your bookmarks sync securely to your account.
+          </div>
+        </Section>
+      ) : (
       <Section title="Storage" compact={compact} hint="Where your bookmarks live. Local works instantly with no server; PocketBase syncs across devices and survives reinstalls.">
         <div className="flex flex-col gap-2">
           <Radio checked={backend === 'local'} onChange={pickLocal} label="On this device (local storage)" sub="Fully functional, no setup. Data stays in your browser profile." />
@@ -197,6 +207,7 @@ export function SettingsPanel({ compact = false }: { compact?: boolean }) {
           </div>
         )}
       </Section>
+      )}
 
       <Section title="When I click the toolbar icon" compact={compact}>
         <div className="flex flex-col gap-2">

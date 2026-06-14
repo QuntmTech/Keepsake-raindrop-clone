@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { Icon } from './Icon';
-import { getBackendMode, setBackendMode, type BackendMode } from '@/lib/backend';
+import { getBackendMode, setBackendMode, HOSTED, type BackendMode } from '@/lib/backend';
 
 interface Props {
   onLogin: (email: string, password: string) => Promise<void>;
@@ -89,7 +89,7 @@ export function LoginForm({ onLogin, onSignup, compact }: Props) {
         </button>
       )}
 
-      {backend === 'pocketbase' && (
+      {!HOSTED && backend === 'pocketbase' && (
         <div className="mt-2 rounded-lg border border-line bg-surface-sunken p-2.5 text-xs text-ink-soft">
           You're connected to a <b>PocketBase server</b>. If you can't sign in (no server set up),
           switch back to on-device storage:
