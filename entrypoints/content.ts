@@ -29,7 +29,10 @@ export default defineContentScript({
       if (toolbar && !toolbar.contains(e.target as Node)) closeToolbar();
     });
 
-    document.addEventListener('mouseup', () => {
+    document.addEventListener('mouseup', (e) => {
+      // Ignore clicks on the toolbar itself — otherwise picking a color would
+      // rebuild the toolbar mid-click and swallow the color button's handler.
+      if (toolbar && toolbar.contains(e.target as Node)) return;
       // Defer so the selection is finalized.
       setTimeout(() => {
         const selection = window.getSelection();

@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useAuth } from '@/hooks/useAuth';
 import { useSettings } from '@/hooks/useSettings';
 import { useCollections } from '@/hooks/useCollections';
+import { useEscape } from '@/hooks/useEscape';
 import { LoginForm } from '@/components/LoginForm';
 import { BookmarkGrid } from '@/components/BookmarkGrid';
 import { CollectionSidebar, type LibraryFilter } from '@/components/CollectionSidebar';
@@ -28,6 +29,7 @@ export default function App() {
 
   const [filter, setFilter] = useState<LibraryFilter>({ kind: 'all' });
   const [query, setQuery] = useState('');
+  const [debouncedQuery, setDebouncedQuery] = useState('');
   const [items, setItems] = useState<Bookmark[]>([]);
   const [loading, setLoading] = useState(true);
   const [tags, setTags] = useState<{ tag: string; count: number }[]>([]);
@@ -49,13 +51,13 @@ export default function App() {
       else if (filter.kind === 'favorites') opts.favorite = true;
       else if (filter.kind === 'untagged') opts.untagged = true;
       else if (filter.kind === 'tag') opts.tag = filter.tag;
-      setItems(await searchBookmarks(query, opts));
+      setItems(await searchBookmarks(debouncedQuery, opts));
     } catch {
       setItems([]);
     } finally {
       setLoading(false);
     }
-  }, [authed, filter, query, sort]);
+  }, [authed, filter, debouncedQuery, sort]);
 
   const refreshMeta = useCallback(async () => {
     if (!authed) return;
@@ -66,6 +68,12 @@ export default function App() {
       /* ignore */
     }
   }, [authed]);
+
+  // Debounce the filter input so we don't search on every keystroke.
+  useEffect(() => {
+    const id = setTimeout(() => setDebouncedQuery(query), 200);
+    return () => clearTimeout(id);
+  }, [query]);
 
   useEffect(() => {
     runSearch();
@@ -86,11 +94,15 @@ export default function App() {
     return () => window.removeEventListener('keydown', onKey);
   }, []);
 
+  // Escape closes the AI slide-over.
+  useEscape(() => setAiOpen(false), aiOpen);
+
   async function remove(id: string) {
     await deleteBookmark(id);
     setItems((p) => p.filter((b) => b.id !== id));
     toast('Deleted', 'info');
     refreshMeta();
+    collectionsApi.refresh();
   }
   async function fav(b: Bookmark) {
     const updated = await toggleFavorite(b.id, !b.favorite);

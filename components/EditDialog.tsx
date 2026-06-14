@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import { type Bookmark, type Collection } from '@/lib/types';
 import { updateBookmark } from '@/lib/bookmarks';
+import { useEscape } from '@/hooks/useEscape';
 import { TagInput } from './TagInput';
 import { Icon } from './Icon';
 import { useToast } from './Toast';
@@ -22,6 +23,7 @@ export function EditDialog({ bookmark, collections, allTags, onClose, onSaved }:
   const [collection, setCollection] = useState(bookmark.collection ?? '');
   const [favorite, setFavorite] = useState(Boolean(bookmark.favorite));
   const [busy, setBusy] = useState(false);
+  useEscape(onClose);
 
   async function save() {
     setBusy(true);

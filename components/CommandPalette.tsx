@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import { searchBookmarks, markVisited } from '@/lib/bookmarks';
 import { type Bookmark } from '@/lib/types';
 import { Icon, type IconName } from './Icon';
+import { Favicon } from './Favicon';
 
 interface Command {
   id: string;
@@ -51,6 +52,11 @@ export function CommandPalette({ open, onClose, commands = [] }: Props) {
     ],
     [filteredCommands, results],
   );
+
+  // Keep the highlighted row in range as results change.
+  useEffect(() => {
+    setActive((a) => Math.min(a, Math.max(0, rows.length - 1)));
+  }, [rows.length]);
 
   if (!open) return null;
 
@@ -122,11 +128,7 @@ export function CommandPalette({ open, onClose, commands = [] }: Props) {
                 </>
               ) : (
                 <>
-                  {row.bm.favicon ? (
-                    <img src={row.bm.favicon} alt="" className="h-4 w-4 rounded-sm" />
-                  ) : (
-                    <Icon name="bookmark" size={16} />
-                  )}
+                  <Favicon src={row.bm.favicon} size={16} />
                   <span className="truncate text-ink">{row.bm.title}</span>
                   <span className="ml-auto truncate text-xs text-ink-faint">{row.bm.domain}</span>
                 </>

@@ -19,23 +19,34 @@ export default function App() {
   const { toast } = useToast();
 
   const [ai, setAi] = useState<AiSettings | null>(null);
+  const [keyDraft, setKeyDraft] = useState('');
   const [backend, setBackend] = useState<BackendMode>('local');
   const [testing, setTesting] = useState(false);
   const [importing, setImporting] = useState<string | null>(null);
   const fileRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
-    getAiSettings().then(setAi);
+    getAiSettings().then((s) => {
+      setAi(s);
+      setKeyDraft(s.apiKey);
+    });
     getBackendMode().then(setBackend);
   }, []);
 
   const patchAi = async (p: Partial<AiSettings>) => setAi(await setAiSettings(p));
 
+  // Persist the key only when the user finishes editing (avoids a storage
+  // write + watcher fire on every keystroke).
+  const commitKey = () => {
+    if (ai && keyDraft !== ai.apiKey) patchAi({ apiKey: keyDraft.trim() });
+  };
+
   async function runTest() {
-    if (!ai?.apiKey) return;
+    if (!keyDraft.trim() || !ai) return;
+    commitKey();
     setTesting(true);
     try {
-      const ok = await testApiKey(ai.apiKey, ai.fastModel);
+      const ok = await testApiKey(keyDraft.trim(), ai.fastModel);
       toast(ok ? 'API key works!' : 'Key rejected — check it', ok ? 'success' : 'error');
     } catch {
       toast('Could not reach the API', 'error');
@@ -47,7 +58,9 @@ export default function App() {
   async function changeBackend(mode: BackendMode) {
     await setBackendMode(mode);
     setBackend(mode);
-    toast(`Switched to ${mode === 'local' ? 'local storage' : 'PocketBase'} — reload surfaces`, 'info');
+    toast(`Switched to ${mode === 'local' ? 'local storage' : 'PocketBase'} — reloading…`, 'info');
+    // Reload so every hook re-initializes against the new backend cleanly.
+    setTimeout(() => location.reload(), 700);
   }
 
   async function onFile(e: React.ChangeEvent<HTMLInputElement>) {
@@ -158,10 +171,11 @@ export default function App() {
                       className="input font-mono text-xs"
                       type="password"
                       placeholder="sk-ant-…"
-                      value={ai.apiKey}
-                      onChange={(e) => patchAi({ apiKey: e.target.value })}
+                      value={keyDraft}
+                      onChange={(e) => setKeyDraft(e.target.value)}
+                      onBlur={commitKey}
                     />
-                    <button className="btn-outline whitespace-nowrap" onClick={runTest} disabled={testing || !ai.apiKey}>
+                    <button className="btn-outline whitespace-nowrap" onClick={runTest} disabled={testing || !keyDraft.trim()}>
                       {testing ? 'Testing…' : 'Test key'}
                     </button>
                   </div>

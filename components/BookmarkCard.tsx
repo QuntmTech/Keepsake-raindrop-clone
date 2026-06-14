@@ -1,6 +1,7 @@
 import { type Bookmark, type BookmarkType, type ViewMode } from '@/lib/types';
 import { markVisited } from '@/lib/bookmarks';
 import { Icon, type IconName } from './Icon';
+import { Favicon } from './Favicon';
 
 const TYPE_ICON: Record<BookmarkType, IconName> = {
   article: 'doc',
@@ -93,9 +94,7 @@ export function BookmarkCard({ bookmark, layout = 'grid', onDelete, onToggleFavo
         <Cover className="h-11 w-11 shrink-0 rounded-lg" />
         <div className="min-w-0 flex-1">
           <div className="flex items-center gap-1.5">
-            {bookmark.favicon && (
-              <img src={bookmark.favicon} alt="" className="h-3.5 w-3.5 rounded-sm" />
-            )}
+            <Favicon src={bookmark.favicon} size={14} />
             <span className="truncate text-sm font-medium text-ink">{bookmark.title}</span>
           </div>
           <div className="mt-0.5 flex items-center gap-2 text-xs text-ink-faint">
@@ -130,9 +129,7 @@ export function BookmarkCard({ bookmark, layout = 'grid', onDelete, onToggleFavo
       </div>
       <div className="flex flex-1 flex-col gap-1 p-3">
         <div className="flex items-center gap-1.5">
-          {bookmark.favicon && (
-            <img src={bookmark.favicon} alt="" className="h-3.5 w-3.5 rounded-sm" />
-          )}
+          <Favicon src={bookmark.favicon} size={14} />
           <span className="truncate text-xs text-ink-faint">{bookmark.domain}</span>
         </div>
         <span className="line-clamp-2 text-sm font-medium text-ink">{bookmark.title}</span>

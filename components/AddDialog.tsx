@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import { type Collection } from '@/lib/types';
 import { saveBookmark, safeDomain, inferType, faviconFor } from '@/lib/bookmarks';
+import { useEscape } from '@/hooks/useEscape';
 import { TagInput } from './TagInput';
 import { Icon } from './Icon';
 import { useToast } from './Toast';
@@ -21,6 +22,7 @@ export function AddDialog({ collections, allTags, defaultCollection, onClose, on
   const [tags, setTags] = useState<string[]>([]);
   const [collection, setCollection] = useState(defaultCollection ?? '');
   const [busy, setBusy] = useState(false);
+  useEscape(onClose);
 
   async function add() {
     let clean = url.trim();
@@ -70,7 +72,7 @@ export function AddDialog({ collections, allTags, defaultCollection, onClose, on
             value={url}
             autoFocus
             onChange={(e) => setUrl(e.target.value)}
-            onKeyDown={(e) => e.key === 'Enter' && title === '' && add()}
+            onKeyDown={(e) => e.key === 'Enter' && add()}
           />
           <input
             className="input"

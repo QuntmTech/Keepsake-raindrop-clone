@@ -52,6 +52,7 @@ export function LoginForm({ onLogin, onSignup, compact }: Props) {
         autoComplete="email"
         value={email}
         onChange={(e) => setEmail(e.target.value)}
+        onKeyDown={(e) => e.key === 'Enter' && submit()}
       />
       <input
         className="input"

@@ -45,9 +45,11 @@ export function SaveForm({ onSaved }: { onSaved?: () => void }) {
       setTitle(tabTitle);
       setUrl(tabUrl);
 
+      let tagNames: string[] = [];
       try {
         setCollections(await listCollections());
-        setAllTags((await getAllTags()).map((t) => t.tag));
+        tagNames = (await getAllTags()).map((t) => t.tag);
+        setAllTags(tagNames);
       } catch {
         /* not logged in */
       }
@@ -88,7 +90,7 @@ export function SaveForm({ onSaved }: { onSaved?: () => void }) {
         const jobs: Promise<void>[] = [];
         if (ai.autoTag) {
           jobs.push(
-            suggestTags(ctx, (await getAllTags()).map((t) => t.tag))
+            suggestTags(ctx, tagNames)
               .then(setAiTags)
               .catch(() => {}),
           );

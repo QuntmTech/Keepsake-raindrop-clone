@@ -3,6 +3,7 @@ import { searchBookmarks, markVisited } from '@/lib/bookmarks';
 import { aiAvailable, askLibrary, type LibraryAnswer } from '@/lib/ai';
 import { type Bookmark } from '@/lib/types';
 import { Icon } from './Icon';
+import { Favicon } from './Favicon';
 
 interface Turn {
   q: string;
@@ -28,8 +29,8 @@ export function AIAssistant({ onClose }: { onClose?: () => void }) {
     scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight, behavior: 'smooth' });
   }, [turns, busy]);
 
-  async function ask() {
-    const question = q.trim();
+  async function ask(preset?: string) {
+    const question = (preset ?? q).trim();
     if (!question || busy) return;
     setQ('');
     setTurns((t) => [...t, { q: question }]);
@@ -89,9 +90,7 @@ export function AIAssistant({ onClose }: { onClose?: () => void }) {
               <button
                 key={s}
                 className="block w-full rounded-lg border border-line bg-surface-raised px-3 py-2 text-left text-sm text-ink-soft transition hover:border-brand/40 hover:text-brand"
-                onClick={() => {
-                  setQ(s);
-                }}
+                onClick={() => ask(s)}
               >
                 {s}
               </button>
@@ -124,7 +123,7 @@ export function AIAssistant({ onClose }: { onClose?: () => void }) {
                           window.open(b.url, '_blank', 'noreferrer');
                         }}
                       >
-                        {b.favicon && <img src={b.favicon} alt="" className="h-4 w-4 rounded-sm" />}
+                        <Favicon src={b.favicon} size={16} />
                         <span className="truncate text-xs text-ink-soft">{b.title}</span>
                         <Icon name="external" size={12} className="ml-auto text-ink-faint" />
                       </button>
@@ -153,7 +152,7 @@ export function AIAssistant({ onClose }: { onClose?: () => void }) {
               onChange={(e) => setQ(e.target.value)}
               onKeyDown={(e) => e.key === 'Enter' && ask()}
             />
-            <button className="btn-primary px-3" onClick={ask} disabled={busy || !q.trim()}>
+            <button className="btn-primary px-3" onClick={() => ask()} disabled={busy || !q.trim()}>
               <Icon name="sparkles" size={16} />
             </button>
           </div>

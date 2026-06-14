@@ -3,6 +3,7 @@ import { useAuth } from '@/hooks/useAuth';
 import { LoginForm } from '@/components/LoginForm';
 import { SaveForm } from '@/components/SaveForm';
 import { Icon } from '@/components/Icon';
+import { Favicon } from '@/components/Favicon';
 import { send } from '@/lib/messaging';
 import { recentBookmarks } from '@/lib/bookmarks';
 import { type Bookmark } from '@/lib/types';
@@ -14,7 +15,11 @@ export default function App() {
 
   const loadRecent = () => recentBookmarks(3).then(setRecent).catch(() => {});
   useEffect(() => {
-    if (authed) loadRecent();
+    if (authed) {
+      loadRecent();
+      // Opportunistically retry any saves that were queued while offline.
+      send({ type: 'FLUSH_QUEUE' }).catch(() => {});
+    }
   }, [authed]);
 
   if (!ready) return <Shell><Loading /></Shell>;
@@ -38,11 +43,7 @@ export default function App() {
                 rel="noreferrer"
                 className="flex items-center gap-2 rounded-lg px-1.5 py-1 hover:bg-surface-sunken"
               >
-                {b.favicon ? (
-                  <img src={b.favicon} alt="" className="h-4 w-4 rounded-sm" />
-                ) : (
-                  <Icon name="bookmark" size={14} className="text-ink-faint" />
-                )}
+                <Favicon src={b.favicon} size={16} />
                 <span className="truncate text-xs text-ink-soft">{b.title}</span>
               </a>
             ))}
