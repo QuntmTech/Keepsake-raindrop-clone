@@ -11,6 +11,10 @@ export default defineConfig({
       'Save, tag, search, highlight, and preview pages — an AI-powered bookmark vault that goes far beyond raindrop.io.',
     version: '0.2.0',
 
+    // Pins a stable extension ID across reloads / loading from a new folder, so
+    // your locally-stored bookmarks survive updates instead of being wiped.
+    key: 'MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAiSj7RxnE0Qci0KQwiKiKKFhF4azzvI7v4csqTBHOWfd2leb091Rg7RDmPvJYyrP+crea+9kF65FJX269IM6ri6t2WGCQNfEOGDRiK+yH6USePTViESCcm7jrhjlVMUl3uKu4+TJEpD/D1HL8NDtmQ9m4NUmqdCG+YDpo2DRx6GqjMgIZwVTbNAwm4Lz+h0vsJNa5EiLFIeMuHDkNN4m6//LmApl11EBOlWP7LoX5nyeTB+pnOt/zH2g3kdpSfLWv83UjIYVe5K5xPKpgMmDWULFDbn+ZvvVfQK0/fDoHe3opO1Jx1dyqKUqZtFhObS+aMFvztJUlrJyQJdFrCcmVtQIDAQAB',
+
     permissions: [
       'storage', // settings + local data + cached auth
       'unlimitedStorage', // local-first vault + preview screenshots without the 10MB cap

@@ -51,6 +51,11 @@ export async function mountQuickBar(): Promise<QuickBarApi | null> {
     .rail:hover { opacity: 1; }
     .grip { color: rgba(255,255,255,.4); cursor: grab; padding: 2px 0; touch-action: none; }
     .grip:active { cursor: grabbing; }
+    .hide { width: 38px; height: 22px; display: grid; place-items: center; color: rgba(255,255,255,.35);
+      background: transparent; border: none; border-radius: 8px; cursor: pointer; opacity: 0;
+      transition: opacity .15s, color .12s; }
+    .rail:hover .hide { opacity: 1; }
+    .hide:hover { color: #fff; background: rgba(255,255,255,.12); }
     .btn { width: 38px; height: 38px; display: grid; place-items: center; color: #fff;
       background: transparent; border: none; border-radius: 10px; cursor: pointer;
       transition: background .12s, transform .12s; }
@@ -78,6 +83,7 @@ export async function mountQuickBar(): Promise<QuickBarApi | null> {
   const rail = document.createElement('div');
   rail.className = 'rail';
   rail.innerHTML = `
+    <button class="hide" title="Hide the Quick Bar (turn it back on in the Keepsake popup → Settings)">${icon('close')}</button>
     <div class="grip" title="Drag to move">${icon('grip')}</div>
     <button class="btn save" title="Save this page">${icon('bookmark', true)}</button>
     <button class="btn folder" title="Save to folder">${icon('folder')}</button>
@@ -120,9 +126,14 @@ export async function mountQuickBar(): Promise<QuickBarApi | null> {
   });
 
   // ---- actions ----
+  const hideBtn = rail.querySelector('.hide') as HTMLButtonElement;
   const saveBtn = rail.querySelector('.btn.save') as HTMLButtonElement;
   const folderBtn = rail.querySelector('.btn.folder') as HTMLButtonElement;
   const dashBtn = rail.querySelector('.btn.dash') as HTMLButtonElement;
+
+  // Hide the bar everywhere; re-enable from the popup → Settings (content.ts
+  // watches this setting and unmounts/remounts live).
+  hideBtn.onclick = () => setSettings({ enableQuickBar: false });
 
   let pop: HTMLDivElement | null = null;
   const closePop = () => {

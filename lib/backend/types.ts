@@ -68,6 +68,8 @@ export interface Backend {
 
   // bookmarks
   saveBookmark(input: SaveBookmarkInput): Promise<Bookmark>;
+  // Optional fast path for bulk imports (single write where possible). Returns count saved.
+  bulkSave?(inputs: SaveBookmarkInput[]): Promise<number>;
   updateBookmark(id: string, patch: Partial<Bookmark>): Promise<Bookmark>;
   deleteBookmark(id: string): Promise<void>;
   searchBookmarks(query: string, opts?: SearchOpts): Promise<Bookmark[]>;
