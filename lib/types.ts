@@ -55,6 +55,10 @@ export interface Highlight {
 
 export type HighlightColor = 'yellow' | 'green' | 'blue' | 'pink' | 'orange';
 
+// Account tier. `owner` is you (unlimited, forever); `pro` is a paid customer;
+// `free` is the default limited tier. Stored on the user record (`plan`).
+export type Plan = 'free' | 'pro' | 'owner';
+
 // Robust highlight anchor — quote + surrounding context survives DOM changes
 // far better than a raw first-match search. Serialized into Highlight.anchor.
 export interface TextQuoteAnchor {

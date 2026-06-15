@@ -12,6 +12,7 @@ import { AddDialog } from '@/components/AddDialog';
 import { EditDialog } from '@/components/EditDialog';
 import { HighlightsView } from '@/components/HighlightsView';
 import { ReaderView } from '@/components/ReaderView';
+import { PlanBadge } from '@/components/PlanBadge';
 import { Icon, type IconName } from '@/components/Icon';
 import { useToast } from '@/components/Toast';
 import {
@@ -24,10 +25,10 @@ import {
   watchVault,
 } from '@/lib/bookmarks';
 import { aiAvailable, semanticFind } from '@/lib/ai';
-import { type Bookmark, type SortMode, type ViewMode, type VaultStats } from '@/lib/types';
+import { type Bookmark, type Plan, type SortMode, type ViewMode, type VaultStats } from '@/lib/types';
 
 export default function App() {
-  const { ready, authed, email, login, signup, logout } = useAuth();
+  const { ready, authed, email, plan, login, signup, logout } = useAuth();
   const { settings, update } = useSettings();
   const collectionsApi = useCollections(authed);
   const { toast } = useToast();
@@ -260,7 +261,7 @@ export default function App() {
             <Icon name="plus" size={16} /> Add
           </button>
 
-          <AccountMenu email={email} onLogout={logout} />
+          <AccountMenu email={email} plan={plan} onLogout={logout} />
         </header>
 
         {/* Toolbar */}
@@ -399,7 +400,7 @@ export default function App() {
   );
 }
 
-function AccountMenu({ email, onLogout }: { email: string | null; onLogout: () => void }) {
+function AccountMenu({ email, plan, onLogout }: { email: string | null; plan: Plan; onLogout: () => void }) {
   const [open, setOpen] = useState(false);
   return (
     <div className="relative">
@@ -414,7 +415,10 @@ function AccountMenu({ email, onLogout }: { email: string | null; onLogout: () =
         <>
           <div className="fixed inset-0 z-10" onClick={() => setOpen(false)} />
           <div className="absolute right-0 top-11 z-20 w-52 overflow-hidden rounded-xl border border-line bg-surface-raised shadow-float animate-pop-in">
-            <div className="border-b border-line px-3 py-2 text-xs text-ink-faint">{email}</div>
+            <div className="flex items-center justify-between gap-2 border-b border-line px-3 py-2 text-xs text-ink-faint">
+              <span className="truncate">{email}</span>
+              <PlanBadge plan={plan} />
+            </div>
             <button
               className="flex w-full items-center gap-2 px-3 py-2 text-sm text-ink-soft hover:bg-surface-sunken"
               onClick={() => browser.runtime.openOptionsPage()}

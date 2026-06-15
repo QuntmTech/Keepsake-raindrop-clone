@@ -83,8 +83,12 @@ export class PocketBaseBackend implements Backend {
   }
 
   private toUser(): AuthUser | null {
-    const r = this.pb.authStore.record as { id: string; email?: string; name?: string } | null;
-    return r ? { id: r.id, email: r.email ?? '', name: r.name } : null;
+    const r = this.pb.authStore.record as
+      | { id: string; email?: string; name?: string; plan?: string }
+      | null;
+    if (!r) return null;
+    const plan = r.plan === 'owner' || r.plan === 'pro' ? r.plan : 'free';
+    return { id: r.id, email: r.email ?? '', name: r.name, plan };
   }
 
   async login(email: string, password: string): Promise<AuthUser> {

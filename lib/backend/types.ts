@@ -4,6 +4,7 @@ import {
   type Collection,
   type Highlight,
   type HighlightColor,
+  type Plan,
   type SortMode,
   type TextQuoteAnchor,
   type VaultStats,
@@ -52,6 +53,7 @@ export interface AuthUser {
   id: string;
   email: string;
   name?: string;
+  plan: Plan;
 }
 
 // Every data backend (local chrome.storage, PocketBase, …) implements this.

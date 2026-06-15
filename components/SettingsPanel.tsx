@@ -3,6 +3,7 @@ import { useAuth } from '@/hooks/useAuth';
 import { useSettings } from '@/hooks/useSettings';
 import { useCollections } from '@/hooks/useCollections';
 import { LoginForm } from './LoginForm';
+import { PlanBadge } from './PlanBadge';
 import { Icon } from './Icon';
 import { useToast } from './Toast';
 import { ACCENTS } from '@/lib/theme';
@@ -18,7 +19,7 @@ import { searchBookmarks } from '@/lib/bookmarks';
 // screen AND inside the popup / side panel (compact mode) — so you never have
 // to leave the dropdown to change something.
 export function SettingsPanel({ compact = false }: { compact?: boolean }) {
-  const { ready, authed, email, login, signup, logout } = useAuth();
+  const { ready, authed, email, plan, login, signup, logout } = useAuth();
   const { settings, update } = useSettings();
   const collectionsApi = useCollections(authed);
   const { toast } = useToast();
@@ -161,6 +162,7 @@ export function SettingsPanel({ compact = false }: { compact?: boolean }) {
                 {email?.[0] ?? '?'}
               </span>
               <span className="truncate">{email}</span>
+              <PlanBadge plan={plan} />
             </div>
             <button className="btn-outline shrink-0" onClick={logout}>
               <Icon name="logout" size={15} /> Sign out

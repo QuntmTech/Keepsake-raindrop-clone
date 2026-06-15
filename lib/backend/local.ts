@@ -88,7 +88,7 @@ export class LocalBackend implements Backend {
     }
     const users = await usersStore.getValue();
     const u = users.find((x) => x.id === uid);
-    this.user = u ? { id: u.id, email: u.email, name: u.name } : null;
+    this.user = u ? { id: u.id, email: u.email, name: u.name, plan: 'owner' } : null;
   }
 
   // ---- auth ----
@@ -110,7 +110,7 @@ export class LocalBackend implements Backend {
     };
     await usersStore.setValue([...users, user]);
     await sessionStore.setValue(user.id);
-    this.user = { id: user.id, email: user.email, name: user.name };
+    this.user = { id: user.id, email: user.email, name: user.name, plan: 'owner' };
     return this.user;
   }
 
@@ -122,7 +122,7 @@ export class LocalBackend implements Backend {
     const hash = await sha256(u.salt + password);
     if (hash !== u.hash) throw new Error('Incorrect password');
     await sessionStore.setValue(u.id);
-    this.user = { id: u.id, email: u.email, name: u.name };
+    this.user = { id: u.id, email: u.email, name: u.name, plan: 'owner' };
     return this.user;
   }
 
