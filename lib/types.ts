@@ -21,6 +21,7 @@ export interface Bookmark {
   title: string;
   description?: string;
   summary?: string;          // AI-generated TL;DR
+  content?: string;          // cached page text (link-rot-proof reading copy)
   note?: string;             // user's own note
   tags: string[];
   aiTags?: string[];         // tags suggested by AI (kept distinct so user edits win)

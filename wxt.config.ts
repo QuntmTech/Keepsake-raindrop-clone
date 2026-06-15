@@ -29,12 +29,25 @@ export default defineConfig({
     // api.anthropic.com: optional AI features (auto-tag, summarize, ask-your-library).
     host_permissions: ['<all_urls>', 'https://api.anthropic.com/*'],
 
+    icons: {
+      16: 'icon/16.png',
+      32: 'icon/32.png',
+      48: 'icon/48.png',
+      128: 'icon/128.png',
+    },
+
     side_panel: {
       default_path: 'sidepanel.html',
     },
 
     action: {
       default_title: 'Keepsake',
+      default_icon: {
+        16: 'icon/16.png',
+        32: 'icon/32.png',
+        48: 'icon/48.png',
+        128: 'icon/128.png',
+      },
     },
 
     // Keyboard shortcuts. Chrome lets users remap these at chrome://extensions/shortcuts.

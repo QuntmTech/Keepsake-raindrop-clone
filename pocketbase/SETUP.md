@@ -88,7 +88,7 @@ Create 3 **Base** collections; add these fields (all **Plain text** unless noted
 5 API rules to `@request.auth.id != "" && user = @request.auth.id`:
 
 - **collections:** name, color, icon, parent, sort *(Number)*, user
-- **bookmarks:** url, title, description, summary, note, tags *(JSON)*, aiTags *(JSON)*,
+- **bookmarks:** url, title, description, summary, content, note, tags *(JSON)*, aiTags *(JSON)*,
   collection, cover, favicon, screenshot *(File, single image)*, domain, type,
   favorite *(Bool)*, readingTime *(Number)*, lastVisited *(Date)*, user
 - **highlights:** url, text, note, color, anchor, bookmark, user

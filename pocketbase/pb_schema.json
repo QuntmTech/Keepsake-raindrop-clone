@@ -33,6 +33,7 @@
       { "id": "bm_title", "name": "title", "type": "text", "required": true, "system": false, "hidden": false, "presentable": true, "min": 0, "max": 0, "pattern": "" },
       { "id": "bm_description", "name": "description", "type": "text", "required": false, "system": false, "hidden": false, "presentable": false, "min": 0, "max": 0, "pattern": "" },
       { "id": "bm_summary", "name": "summary", "type": "text", "required": false, "system": false, "hidden": false, "presentable": false, "min": 0, "max": 0, "pattern": "" },
+      { "id": "bm_content", "name": "content", "type": "text", "required": false, "system": false, "hidden": false, "presentable": false, "min": 0, "max": 0, "pattern": "" },
       { "id": "bm_note", "name": "note", "type": "text", "required": false, "system": false, "hidden": false, "presentable": false, "min": 0, "max": 0, "pattern": "" },
       { "id": "bm_tags", "name": "tags", "type": "json", "required": false, "system": false, "hidden": false, "presentable": false, "maxSize": 2000000 },
       { "id": "bm_aitags", "name": "aiTags", "type": "json", "required": false, "system": false, "hidden": false, "presentable": false, "maxSize": 2000000 },

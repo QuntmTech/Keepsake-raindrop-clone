@@ -19,9 +19,10 @@ interface Props {
   onDelete?: (id: string) => void;
   onToggleFavorite?: (b: Bookmark) => void;
   onEdit?: (b: Bookmark) => void;
+  onRead?: (b: Bookmark) => void;
 }
 
-export function BookmarkCard({ bookmark, layout = 'grid', onDelete, onToggleFavorite, onEdit }: Props) {
+export function BookmarkCard({ bookmark, layout = 'grid', onDelete, onToggleFavorite, onEdit, onRead }: Props) {
   const open = () => {
     markVisited(bookmark.id);
     window.open(bookmark.url, '_blank', 'noreferrer');
@@ -54,6 +55,18 @@ export function BookmarkCard({ bookmark, layout = 'grid', onDelete, onToggleFavo
 
   const Actions = () => (
     <div className="flex items-center gap-0.5">
+      {onRead && bookmark.content && (
+        <button
+          className="rounded-md p-1.5 text-ink-faint opacity-0 transition hover:bg-surface-sunken hover:text-ink group-hover:opacity-100"
+          onClick={(e) => {
+            e.stopPropagation();
+            onRead(bookmark);
+          }}
+          title="Read saved copy"
+        >
+          <Icon name="doc" size={15} />
+        </button>
+      )}
       {onToggleFavorite && (
         <button
           className={`rounded-md p-1.5 transition hover:bg-surface-sunken ${

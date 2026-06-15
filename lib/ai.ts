@@ -159,6 +159,31 @@ export async function suggestCollection(
   return collections.find((c) => c.id === id) ? id : null;
 }
 
+// Semantic search: rank the user's bookmarks by meaning for a query, returning
+// the matching bookmarks best-first. Uses the fast model over a compact catalog.
+export async function semanticFind(query: string, corpus: Bookmark[]): Promise<Bookmark[]> {
+  const s = await getAiSettings();
+  const pool = corpus.slice(0, 200);
+  const catalog = pool
+    .map((b, i) => {
+      const meta = [b.domain, ...(b.tags ?? [])].filter(Boolean).join(' · ');
+      const blurb = b.summary || b.description || '';
+      return `[${i}] ${b.title}${meta ? ` (${meta})` : ''}${blurb ? ` — ${blurb.slice(0, 140)}` : ''}`;
+    })
+    .join('\n');
+  const out = await callClaude({
+    model: s.fastModel,
+    maxTokens: 400,
+    system:
+      'You search a personal bookmark library by meaning. Given a query and a numbered catalog, ' +
+      'return ONLY a JSON array of the matching catalog indices, most relevant first (max 30). ' +
+      'Match intent/topic, not just exact words. Return [] if nothing fits.',
+    prompt: `Query: ${query}\n\nCatalog:\n${catalog}`,
+  });
+  const idx = extractJson<number[]>(out) ?? [];
+  return idx.map((i) => pool[i]).filter((b): b is Bookmark => Boolean(b));
+}
+
 export interface LibraryAnswer {
   answer: string;
   sources: Bookmark[];

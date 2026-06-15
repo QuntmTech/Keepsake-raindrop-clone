@@ -11,7 +11,7 @@ import {
 import { enqueueSave } from '@/lib/queue';
 import { send, dataUrlToBlob, type ScreenshotResult, type MetaResult } from '@/lib/messaging';
 import { getSettings } from '@/lib/settings';
-import { aiAvailable, getAiSettings, suggestTags, summarize, type PageContext } from '@/lib/ai';
+import { aiAvailable, getAiSettings, suggestTags, summarize, suggestCollection, type PageContext } from '@/lib/ai';
 import { type Collection } from '@/lib/types';
 import { type PageMeta } from '@/lib/metadata';
 import { TagInput } from './TagInput';
@@ -64,8 +64,10 @@ export function SaveForm({ onSaved }: { onSaved?: () => void }) {
       setUrl(tabUrl);
 
       let tagNames: string[] = [];
+      let cols: Collection[] = [];
       try {
-        setCollections(await listCollections());
+        cols = await listCollections();
+        setCollections(cols);
         tagNames = (await getAllTags()).map((t) => t.tag);
         setAllTags(tagNames);
       } catch {
@@ -120,6 +122,15 @@ export function SaveForm({ onSaved }: { onSaved?: () => void }) {
               .catch(() => {}),
           );
         }
+        if (ai.autoCollection && cols.length) {
+          jobs.push(
+            suggestCollection(ctx, cols.map((c) => ({ id: c.id, name: c.name })))
+              .then((id) => {
+                if (id) setCollection((cur) => cur || id);
+              })
+              .catch(() => {}),
+          );
+        }
         Promise.allSettled(jobs).finally(() => setAiBusy(false));
       }
     })();
@@ -145,6 +156,7 @@ export function SaveForm({ onSaved }: { onSaved?: () => void }) {
         title: title || url,
         note: note || undefined,
         summary: summary || undefined,
+        content: meta?.text,
         description: meta?.description,
         tags,
         aiTags,

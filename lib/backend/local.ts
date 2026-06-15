@@ -178,6 +178,7 @@ export class LocalBackend implements Backend {
       title: input.title || input.url,
       description: input.description,
       summary: input.summary,
+      content: input.content,
       note: input.note,
       tags: input.tags ?? [],
       aiTags: input.aiTags ?? [],

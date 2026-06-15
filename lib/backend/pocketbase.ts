@@ -130,6 +130,7 @@ export class PocketBaseBackend implements Backend {
     title: rec.title,
     description: rec.description || undefined,
     summary: rec.summary || undefined,
+    content: rec.content || undefined,
     note: rec.note || undefined,
     tags: parseTags(rec.tags),
     aiTags: parseTags(rec.aiTags),
@@ -156,6 +157,7 @@ export class PocketBaseBackend implements Backend {
     form.set('title', input.title || input.url);
     form.set('description', input.description ?? '');
     form.set('summary', input.summary ?? '');
+    form.set('content', input.content ?? '');
     form.set('note', input.note ?? '');
     form.set('tags', JSON.stringify(input.tags ?? []));
     form.set('aiTags', JSON.stringify(input.aiTags ?? []));

@@ -11,6 +11,7 @@ import { AIAssistant } from '@/components/AIAssistant';
 import { AddDialog } from '@/components/AddDialog';
 import { EditDialog } from '@/components/EditDialog';
 import { HighlightsView } from '@/components/HighlightsView';
+import { ReaderView } from '@/components/ReaderView';
 import { Icon, type IconName } from '@/components/Icon';
 import { useToast } from '@/components/Toast';
 import {
@@ -22,6 +23,7 @@ import {
   vaultStats,
   watchVault,
 } from '@/lib/bookmarks';
+import { aiAvailable, semanticFind } from '@/lib/ai';
 import { type Bookmark, type SortMode, type ViewMode, type VaultStats } from '@/lib/types';
 
 export default function App() {
@@ -41,6 +43,10 @@ export default function App() {
   const [aiOpen, setAiOpen] = useState(false);
   const [addOpen, setAddOpen] = useState(false);
   const [editing, setEditing] = useState<Bookmark | null>(null);
+  const [reading, setReading] = useState<Bookmark | null>(null);
+  const [aiOn, setAiOn] = useState(false);
+  const [aiResults, setAiResults] = useState<Bookmark[] | null>(null);
+  const [aiSearching, setAiSearching] = useState(false);
 
   const view = settings.view;
   const sort = settings.sort;
@@ -100,6 +106,31 @@ export default function App() {
   // Escape closes the AI slide-over.
   useEscape(() => setAiOpen(false), aiOpen);
 
+  useEffect(() => {
+    aiAvailable().then(setAiOn);
+  }, []);
+  // Leaving a filter exits AI-search results.
+  useEffect(() => {
+    setAiResults(null);
+  }, [filter]);
+
+  async function runAiSearch() {
+    const q = query.trim();
+    if (!q) {
+      toast('Type something to search for first', 'info');
+      return;
+    }
+    setAiSearching(true);
+    try {
+      const corpus = await searchBookmarks('', { perPage: 300 });
+      setAiResults(await semanticFind(q, corpus));
+    } catch {
+      toast('AI search failed', 'error');
+    } finally {
+      setAiSearching(false);
+    }
+  }
+
   // Live-refresh when the vault changes anywhere (Quick Bar, shortcut, another tab).
   useEffect(() => {
     return watchVault(() => {
@@ -112,6 +143,7 @@ export default function App() {
   async function remove(id: string) {
     await deleteBookmark(id);
     setItems((p) => p.filter((b) => b.id !== id));
+    setAiResults((p) => (p ? p.filter((b) => b.id !== id) : p));
     toast('Deleted', 'info');
     refreshMeta();
     collectionsApi.refresh();
@@ -119,10 +151,12 @@ export default function App() {
   async function fav(b: Bookmark) {
     const updated = await toggleFavorite(b.id, !b.favorite);
     setItems((p) => p.map((x) => (x.id === b.id ? updated : x)));
+    setAiResults((p) => (p ? p.map((x) => (x.id === b.id ? updated : x)) : p));
     refreshMeta();
   }
   function onEdited(b: Bookmark) {
     setItems((p) => p.map((x) => (x.id === b.id ? b : x)));
+    setAiResults((p) => (p ? p.map((x) => (x.id === b.id ? b : x)) : p));
     refreshMeta();
     collectionsApi.refresh();
   }
@@ -241,7 +275,18 @@ export default function App() {
                 placeholder="Filter results…"
                 value={query}
                 onChange={(e) => setQuery(e.target.value)}
+                onKeyDown={(e) => e.key === 'Enter' && aiOn && runAiSearch()}
               />
+              {aiOn && (
+                <button
+                  className="btn-outline px-2.5 py-1.5"
+                  onClick={runAiSearch}
+                  disabled={aiSearching}
+                  title="AI search — find by meaning, not just keywords"
+                >
+                  <Icon name="sparkles" size={15} />
+                </button>
+              )}
 
               <select
                 className="rounded-lg border border-line bg-surface-raised px-2 py-1.5 text-sm outline-none"
@@ -275,6 +320,26 @@ export default function App() {
         <main className="flex-1 overflow-y-auto p-5">
           {isHighlights ? (
             <HighlightsView onCountChange={refreshMeta} />
+          ) : aiResults !== null ? (
+            <>
+              <div className="mb-3 flex items-center gap-2 rounded-lg bg-brand/10 px-3 py-2 text-sm text-brand">
+                <Icon name="sparkles" size={15} />
+                AI results for “{query}” · {aiResults.length}
+                <button className="ml-auto text-xs underline hover:no-underline" onClick={() => setAiResults(null)}>
+                  Clear
+                </button>
+              </div>
+              <BookmarkGrid
+                items={aiResults}
+                loading={aiSearching}
+                view={view}
+                onDelete={remove}
+                onToggleFavorite={fav}
+                onEdit={setEditing}
+                onRead={setReading}
+                emptyHint="No AI matches — try rephrasing your search."
+              />
+            </>
           ) : (
             <BookmarkGrid
               items={items}
@@ -283,6 +348,7 @@ export default function App() {
               onDelete={remove}
               onToggleFavorite={fav}
               onEdit={setEditing}
+              onRead={setReading}
               emptyHint={
                 filter.kind === 'all'
                   ? 'Click “Add”, use the toolbar icon, or right-click any page → “Save page to Keepsake”.'
@@ -327,6 +393,8 @@ export default function App() {
           onSaved={onEdited}
         />
       )}
+
+      {reading && <ReaderView bookmark={reading} onClose={() => setReading(null)} />}
     </div>
   );
 }

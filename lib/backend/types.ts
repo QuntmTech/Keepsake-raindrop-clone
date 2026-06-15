@@ -14,6 +14,7 @@ export interface SaveBookmarkInput {
   title: string;
   description?: string;
   summary?: string;
+  content?: string;
   note?: string;
   tags?: string[];
   aiTags?: string[];
