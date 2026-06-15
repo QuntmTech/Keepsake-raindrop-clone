@@ -45,6 +45,11 @@ export class PocketBaseBackend implements Backend {
   async init(): Promise<void> {
     this.url = (await pbUrlStore.getValue()) || 'http://127.0.0.1:8090';
     this.pb = new PocketBase(this.url);
+    // CRITICAL: the SDK auto-cancels duplicate in-flight requests by default,
+    // which makes concurrent list/search calls (collections + bookmarks +
+    // counts on open) reject as "autocancelled" and show up empty until a later
+    // request lands. Turn it off so every request completes.
+    this.pb.autoCancellation(false);
 
     const saved = await authMirror.getValue();
     if (saved) {
