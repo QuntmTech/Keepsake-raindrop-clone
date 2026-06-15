@@ -57,5 +57,21 @@ export function useCollections(authed: boolean) {
     [refresh],
   );
 
-  return { collections, counts, loading, refresh, create, rename, remove };
+  // Persist a new top-to-bottom order by writing each collection's `sort` index.
+  const reorder = useCallback(
+    async (ids: string[]) => {
+      setCollections((prev) => {
+        const map = new Map(prev.map((c) => [c.id, c]));
+        return ids.map((id) => map.get(id)).filter((c): c is Collection => Boolean(c));
+      });
+      try {
+        await Promise.all(ids.map((id, i) => updateCollection(id, { sort: i })));
+      } finally {
+        await refresh();
+      }
+    },
+    [refresh],
+  );
+
+  return { collections, counts, loading, refresh, create, rename, remove, reorder };
 }

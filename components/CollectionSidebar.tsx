@@ -25,8 +25,12 @@ interface Props {
   onRemove: (id: string) => Promise<void>;
   // Drag-and-drop: move a bookmark into a collection (undefined = remove from any).
   onMove?: (bookmarkId: string, collectionId: string | undefined) => void;
+  // Persist a new top-to-bottom collection order.
+  onReorder?: (orderedIds: string[]) => void;
   compact?: boolean;
 }
+
+const COL_MIME = 'application/x-keepsake-collection';
 
 export function CollectionSidebar({
   collections,
@@ -41,6 +45,7 @@ export function CollectionSidebar({
   onRename,
   onRemove,
   onMove,
+  onReorder,
   compact,
 }: Props) {
   const [adding, setAdding] = useState(false);
@@ -48,6 +53,7 @@ export function CollectionSidebar({
   const [newColor, setNewColor] = useState(ACCENTS[1].swatch);
   const [editing, setEditing] = useState<string | null>(null);
   const [editName, setEditName] = useState('');
+  const [editColor, setEditColor] = useState(ACCENTS[1].swatch);
   const [dropKey, setDropKey] = useState<string | null>(null);
 
   async function create() {
@@ -57,7 +63,17 @@ export function CollectionSidebar({
     setAdding(false);
   }
 
-  // Build drag-drop handlers for a target (collection id, or undefined = unsort).
+  function startEdit(c: Collection) {
+    setEditing(c.id);
+    setEditName(c.name);
+    setEditColor(c.color || ACCENTS[1].swatch);
+  }
+  async function saveEdit(c: Collection) {
+    await onRename(c.id, { name: editName.trim() || c.name, color: editColor });
+    setEditing(null);
+  }
+
+  // Bookmark drop target (e.g. "All bookmarks" = unsort).
   const dropFor = (key: string, collectionId: string | undefined) =>
     onMove
       ? {
@@ -72,6 +88,48 @@ export function CollectionSidebar({
             const id = e.dataTransfer.getData('text/plain');
             setDropKey(null);
             if (id) onMove(id, collectionId);
+          },
+        }
+      : {};
+
+  // Reorder collections: drop the dragged one before the target.
+  function reorderTo(draggedId: string, targetId: string) {
+    if (!onReorder || draggedId === targetId) return;
+    const ids = collections.map((c) => c.id).filter((id) => id !== draggedId);
+    const ti = ids.indexOf(targetId);
+    if (ti < 0) return;
+    ids.splice(ti, 0, draggedId);
+    onReorder(ids);
+  }
+
+  // A collection row is BOTH a reorder drag source and a drop target (for
+  // reordering other collections AND for bookmarks dropped onto it).
+  const rowDnd = (c: Collection) =>
+    onMove || onReorder
+      ? {
+          draggable: Boolean(onReorder),
+          onDragStart: (e: React.DragEvent) => {
+            if (onReorder) {
+              e.dataTransfer.setData(COL_MIME, c.id);
+              e.dataTransfer.effectAllowed = 'move';
+            }
+          },
+          onDragOver: (e: React.DragEvent) => {
+            e.preventDefault();
+            e.dataTransfer.dropEffect = 'move';
+            if (dropKey !== c.id) setDropKey(c.id);
+          },
+          onDragLeave: () => setDropKey((k) => (k === c.id ? null : k)),
+          onDrop: (e: React.DragEvent) => {
+            e.preventDefault();
+            setDropKey(null);
+            const colId = e.dataTransfer.getData(COL_MIME);
+            if (colId) {
+              reorderTo(colId, c.id);
+              return;
+            }
+            const bmId = e.dataTransfer.getData('text/plain');
+            if (bmId && onMove) onMove(bmId, c.id);
           },
         }
       : {};
@@ -132,50 +190,75 @@ export function CollectionSidebar({
       {collections.map((c) => {
         const active = selected.kind === 'collection' && selected.id === c.id;
         const isDrop = dropKey === c.id;
-        return (
-          <div
-            key={c.id}
-            className={`group/item flex items-center rounded-lg ${isDrop ? 'ring-2 ring-brand ring-inset bg-brand/5' : ''}`}
-            {...dropFor(c.id, c.id)}
-          >
-            {editing === c.id ? (
+        if (editing === c.id) {
+          return (
+            <div key={c.id} className="mb-1 flex flex-col gap-2 rounded-lg border border-line bg-surface-raised p-2">
               <input
-                className="input py-1 text-sm"
+                className="input py-1.5 text-sm"
                 value={editName}
                 autoFocus
                 onChange={(e) => setEditName(e.target.value)}
-                onBlur={() => setEditing(null)}
-                onKeyDown={async (e) => {
-                  if (e.key === 'Enter') {
-                    await onRename(c.id, { name: editName.trim() || c.name });
-                    setEditing(null);
-                  } else if (e.key === 'Escape') setEditing(null);
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter') saveEdit(c);
+                  else if (e.key === 'Escape') setEditing(null);
                 }}
               />
-            ) : (
-              <button
-                className={`flex flex-1 items-center gap-2 rounded-lg px-2 py-1.5 text-sm ${
-                  active ? 'bg-brand/10 font-medium text-brand' : 'text-ink-soft hover:bg-surface-sunken'
-                }`}
-                onClick={() => onSelect({ kind: 'collection', id: c.id })}
-              >
-                <span className="h-2.5 w-2.5 shrink-0 rounded-full" style={{ background: c.color || 'currentColor' }} />
-                <span className="truncate">{c.icon ? `${c.icon} ` : ''}{c.name}</span>
-                <span className="ml-auto text-xs text-ink-faint">{counts[c.id] ?? 0}</span>
-              </button>
-            )}
-            <div className="flex opacity-0 transition group-hover/item:opacity-100">
-              <button className="p-1 text-ink-faint hover:text-ink" onClick={() => { setEditing(c.id); setEditName(c.name); }} title="Rename">
-                <Icon name="edit" size={13} />
-              </button>
-              <button
-                className="p-1 text-ink-faint hover:text-red-500"
-                title="Delete"
-                onClick={() => { if (confirm(`Delete “${c.name}”? Bookmarks inside are kept.`)) onRemove(c.id); }}
-              >
-                <Icon name="trash" size={13} />
-              </button>
+              <div className="flex flex-wrap items-center gap-1.5">
+                {ACCENTS.map((a) => (
+                  <button
+                    key={a.key}
+                    className={`h-5 w-5 rounded-full ${editColor === a.swatch ? 'ring-2 ring-offset-1 ring-offset-surface-raised' : ''}`}
+                    style={{ background: a.swatch, ['--tw-ring-color' as any]: a.swatch }}
+                    onClick={() => setEditColor(a.swatch)}
+                    title={a.label}
+                  />
+                ))}
+              </div>
+              <div className="flex items-center gap-1.5">
+                <button
+                  className="flex items-center gap-1 rounded-md px-2 py-1 text-xs font-medium text-red-500 hover:bg-red-500/10"
+                  onClick={() => {
+                    if (confirm(`Delete “${c.name}”? Bookmarks inside are kept (just unfiled).`)) {
+                      setEditing(null);
+                      onRemove(c.id);
+                    }
+                  }}
+                >
+                  <Icon name="trash" size={13} /> Delete
+                </button>
+                <button className="btn-ghost ml-auto px-2 py-1 text-xs" onClick={() => setEditing(null)}>
+                  Cancel
+                </button>
+                <button className="btn-primary px-2.5 py-1 text-xs" onClick={() => saveEdit(c)}>
+                  Save
+                </button>
+              </div>
             </div>
+          );
+        }
+        return (
+          <div
+            key={c.id}
+            className={`group/item flex items-center rounded-lg ${isDrop ? 'ring-2 ring-brand ring-inset bg-brand/5' : ''} ${onReorder ? 'cursor-grab active:cursor-grabbing' : ''}`}
+            {...rowDnd(c)}
+          >
+            <button
+              className={`flex flex-1 items-center gap-2 rounded-lg px-2 py-1.5 text-sm ${
+                active ? 'bg-brand/10 font-medium text-brand' : 'text-ink-soft hover:bg-surface-sunken'
+              }`}
+              onClick={() => onSelect({ kind: 'collection', id: c.id })}
+            >
+              <span className="h-2.5 w-2.5 shrink-0 rounded-full" style={{ background: c.color || 'currentColor' }} />
+              <span className="truncate">{c.icon ? `${c.icon} ` : ''}{c.name}</span>
+              <span className="ml-auto text-xs text-ink-faint">{counts[c.id] ?? 0}</span>
+            </button>
+            <button
+              className="p-1 text-ink-faint opacity-0 transition hover:text-brand group-hover/item:opacity-100"
+              onClick={() => startEdit(c)}
+              title="Edit collection"
+            >
+              <Icon name="edit" size={13} />
+            </button>
           </div>
         );
       })}

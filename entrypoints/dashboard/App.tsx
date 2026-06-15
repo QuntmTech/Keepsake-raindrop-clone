@@ -233,6 +233,7 @@ export default function App() {
         onRename={collectionsApi.rename}
         onRemove={collectionsApi.remove}
         onMove={moveToCollection}
+        onReorder={collectionsApi.reorder}
       />
 
       <div className="flex min-w-0 flex-1 flex-col">

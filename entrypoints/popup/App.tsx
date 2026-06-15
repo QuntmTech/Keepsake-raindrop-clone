@@ -153,6 +153,7 @@ function Vault() {
           onRename={c.rename}
           onRemove={c.remove}
           onMove={move}
+          onReorder={c.reorder}
         />
 
         <div className="flex min-w-0 flex-1 flex-col">
