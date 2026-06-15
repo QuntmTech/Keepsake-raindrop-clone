@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react';
 import { loadAuth, isLoggedIn, currentUser, login as doLogin, signup as doSignup, logout as doLogout } from '@/lib/auth';
+import { clearSnapshot } from '@/lib/cache';
 import { type Plan } from '@/lib/types';
 
 // Tiny auth hook shared by every UI surface. Backend-agnostic.
@@ -36,6 +37,7 @@ export function useAuth() {
 
   async function logout() {
     await doLogout();
+    await clearSnapshot();
     setAuthed(false);
     setEmail(null);
     setPlan('free');

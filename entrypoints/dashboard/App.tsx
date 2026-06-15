@@ -1,5 +1,7 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useAuth } from '@/hooks/useAuth';
+import { currentUser } from '@/lib/auth';
+import { readSnapshot, writeSnapshot } from '@/lib/cache';
 import { useSettings } from '@/hooks/useSettings';
 import { useCollections } from '@/hooks/useCollections';
 import { useEscape } from '@/hooks/useEscape';
@@ -52,32 +54,51 @@ export default function App() {
   const view = settings.view;
   const sort = settings.sort;
 
+  const uidRef = useRef<string | null>(null);
+
+  // Stale-while-revalidate: keep showing current items while refreshing.
   const runSearch = useCallback(async () => {
     if (!authed || filter.kind === 'highlights') return;
-    setLoading(true);
     try {
       const opts: Parameters<typeof searchBookmarks>[1] = { sort, perPage: 200 };
       if (filter.kind === 'collection') opts.collection = filter.id;
       else if (filter.kind === 'favorites') opts.favorite = true;
       else if (filter.kind === 'untagged') opts.untagged = true;
       else if (filter.kind === 'tag') opts.tag = filter.tag;
-      setItems(await searchBookmarks(debouncedQuery, opts));
+      const list = await searchBookmarks(debouncedQuery, opts);
+      setItems(list);
+      if (filter.kind === 'all' && !debouncedQuery.trim()) {
+        writeSnapshot({ uid: uidRef.current ?? '', bookmarks: list, collections: collectionsApi.collections, counts: collectionsApi.counts });
+      }
     } catch {
-      setItems([]);
+      /* keep stale items */
     } finally {
       setLoading(false);
     }
-  }, [authed, filter, debouncedQuery, sort]);
+  }, [authed, filter, debouncedQuery, sort, collectionsApi.collections, collectionsApi.counts]);
 
   const refreshMeta = useCallback(async () => {
     if (!authed) return;
     try {
-      setTags(await getAllTags());
-      setStats(await vaultStats());
+      const [t, s] = await Promise.all([getAllTags(), vaultStats()]);
+      setTags(t);
+      setStats(s);
     } catch {
       /* ignore */
     }
   }, [authed]);
+
+  // Paint cached bookmarks instantly on open.
+  useEffect(() => {
+    (async () => {
+      uidRef.current = (await currentUser())?.id ?? null;
+      const snap = await readSnapshot(uidRef.current);
+      if (snap) {
+        setItems(snap.bookmarks);
+        setLoading(false);
+      }
+    })();
+  }, []);
 
   // Debounce the filter input so we don't search on every keystroke.
   useEffect(() => {

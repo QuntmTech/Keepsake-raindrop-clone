@@ -1,5 +1,7 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useAuth } from '@/hooks/useAuth';
+import { currentUser } from '@/lib/auth';
+import { readSnapshot, writeSnapshot } from '@/lib/cache';
 import { useCollections } from '@/hooks/useCollections';
 import { LoginForm } from '@/components/LoginForm';
 import { SaveForm } from '@/components/SaveForm';
@@ -60,35 +62,55 @@ function Vault() {
   const [tags, setTags] = useState<{ tag: string; count: number }[]>([]);
   const [right, setRight] = useState<RightView>('list');
   const [editing, setEditing] = useState<Bookmark | null>(null);
+  const uidRef = useRef<string | null>(null);
 
+  // Stale-while-revalidate: don't flash a skeleton while refreshing in the
+  // background — only show "loading" on the very first paint.
   const run = useCallback(async () => {
     if (filter.kind === 'highlights') return;
-    setLoading(true);
     try {
       const opts: Parameters<typeof searchBookmarks>[1] = { perPage: 100 };
       if (filter.kind === 'collection') opts.collection = filter.id;
       else if (filter.kind === 'favorites') opts.favorite = true;
       else if (filter.kind === 'untagged') opts.untagged = true;
       else if (filter.kind === 'tag') opts.tag = filter.tag;
-      setItems(await searchBookmarks(query, opts));
+      const list = await searchBookmarks(query, opts);
+      setItems(list);
+      // Cache the default view for instant next-open.
+      if (filter.kind === 'all' && !query.trim()) {
+        writeSnapshot({ uid: uidRef.current ?? '', bookmarks: list, collections: c.collections, counts: c.counts });
+      }
     } catch {
-      setItems([]);
+      /* keep stale items */
     } finally {
       setLoading(false);
     }
-  }, [filter, query]);
+  }, [filter, query, c.collections, c.counts]);
 
   const refreshMeta = useCallback(async () => {
     try {
-      setStats(await vaultStats());
-      setTags(await getAllTags());
+      const [s, t] = await Promise.all([vaultStats(), getAllTags()]);
+      setStats(s);
+      setTags(t);
     } catch {
       /* ignore */
     }
   }, []);
 
+  // Paint cached bookmarks instantly on open, then refresh.
   useEffect(() => {
-    const id = setTimeout(run, 180);
+    (async () => {
+      uidRef.current = (await currentUser())?.id ?? null;
+      const snap = await readSnapshot(uidRef.current);
+      if (snap) {
+        setItems(snap.bookmarks);
+        setLoading(false);
+      }
+    })();
+  }, []);
+
+  useEffect(() => {
+    const id = setTimeout(run, 60);
     return () => clearTimeout(id);
   }, [run]);
   useEffect(() => {
