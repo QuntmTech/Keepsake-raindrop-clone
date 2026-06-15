@@ -9,6 +9,7 @@ import {
   type VaultStats,
 } from '../types';
 import { faviconFor, inferType, parseTags, safeDomain, SORT_FILTER, escFilter } from '../util';
+import { HOSTED_PB_URL } from '../config';
 import {
   type AuthUser,
   type Backend,
@@ -23,7 +24,7 @@ import {
 // The server URL is configurable at runtime (Settings → Storage) so users can
 // paste their PocketHost/self-hosted URL without rebuilding the extension.
 const pbUrlStore = storage.defineItem<string>('sync:pb_url', {
-  fallback: import.meta.env.WXT_PB_URL ?? '',
+  fallback: HOSTED_PB_URL,
 });
 const authMirror = storage.defineItem<string | null>('local:pb_auth', { fallback: null });
 

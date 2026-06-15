@@ -2,15 +2,16 @@ import { storage } from 'wxt/utils/storage';
 import { type Backend } from './types';
 import { LocalBackend } from './local';
 import { PocketBaseBackend } from './pocketbase';
+import { HOSTED } from '../config';
 
 export type BackendMode = 'local' | 'pocketbase';
 
-// In a published build, WXT_PB_URL is baked in → default everyone to the hosted
-// cloud backend (real accounts, synced storage, zero setup). In a plain dev
-// build with no URL, default to local so it still works offline.
-export const HOSTED = Boolean(import.meta.env.WXT_PB_URL);
+// Re-export so UI can gate on it (`import { HOSTED } from '@/lib/backend'`).
+export { HOSTED };
 
-// Backend mode lives in sync storage so the choice roams with the user.
+// In a published build a server URL is baked in → default everyone to the hosted
+// cloud backend (real accounts, synced storage, zero setup). With no URL, default
+// to local so it still works offline.
 const modeStore = storage.defineItem<BackendMode>('sync:backend_mode', {
   fallback: HOSTED ? 'pocketbase' : 'local',
 });
