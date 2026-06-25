@@ -11,6 +11,7 @@ import { Icon } from '@/components/Icon';
 import { useToast } from '@/components/Toast';
 import { searchBookmarks, updateBookmark, deleteBookmark, getAllTags, markVisited, watchVault } from '@/lib/bookmarks';
 import { parseNetscapeHtml, parseKeepsakeJson, importItems } from '@/lib/importer';
+import { WALLPAPERS, wallpaperCss } from '@/lib/wallpaper';
 import { type Bookmark, type Collection } from '@/lib/types';
 
 const TILE_MIME = 'application/x-keepsake-tile';
@@ -27,9 +28,10 @@ interface Section {
 // group into collections, search your vault, import links.
 export default function App() {
   const { ready, authed, email, login, signup } = useAuth();
-  const { settings } = useSettings();
+  const { settings, update } = useSettings();
   const c = useCollections(authed);
   const { toast } = useToast();
+  const [wallOpen, setWallOpen] = useState(false);
 
   const [now, setNow] = useState(() => new Date());
   const [query, setQuery] = useState('');
@@ -170,6 +172,12 @@ export default function App() {
     );
 
   const minimal = settings.newTabMode === 'minimal';
+  const wall = wallpaperCss(settings.wallpaper);
+  const onWall = Boolean(wall);
+  const coverFor = (s: Section): string | undefined => {
+    const withImg = s.items.find((b) => b.cover || b.screenshot);
+    return withImg?.cover || withImg?.screenshot || undefined;
+  };
 
   const Tile = ({ b, sectionKey }: { b: Bookmark; sectionKey: string }) => (
     <div
@@ -239,19 +247,26 @@ export default function App() {
         if (id) dropTile(id, s.key);
       }}
     >
-      <div className="mb-2 flex items-center gap-2">
-        {s.key !== 'fav' && <span className="h-2.5 w-2.5 rounded-full" style={{ background: s.color || 'currentColor' }} />}
-        <h2 className="text-xs font-semibold uppercase tracking-wide text-ink-faint">
-          {s.key === 'fav' ? '★ Favorites' : s.title}
-        </h2>
-        <span className="text-xs text-ink-faint">{s.items.length}</span>
-        <button
-          className="ml-auto rounded-md p-1 text-ink-faint hover:text-brand"
-          onClick={() => setAddTo(s.key === 'fav' ? { favorite: true } : { collection: s.key })}
-          title="Add a link here"
-        >
-          <Icon name="plus" size={15} />
-        </button>
+      {/* Catalog-style cover header */}
+      <div
+        className="relative mb-3 flex h-16 items-end overflow-hidden rounded-xl"
+        style={{ background: `linear-gradient(120deg, ${s.color || 'rgb(var(--accent))'} 0%, rgb(var(--accent-dark)) 100%)` }}
+      >
+        {coverFor(s) && (
+          <img src={coverFor(s)} alt="" className="absolute inset-0 h-full w-full object-cover opacity-50" />
+        )}
+        <div className="absolute inset-0 bg-gradient-to-t from-black/60 via-black/10 to-transparent" />
+        <div className="relative flex w-full items-center gap-2 px-3 pb-2 text-white">
+          <h2 className="text-sm font-semibold drop-shadow">{s.key === 'fav' ? '★ Favorites' : s.title}</h2>
+          <span className="rounded-full bg-white/20 px-1.5 text-xs">{s.items.length}</span>
+          <button
+            className="ml-auto rounded-md bg-white/15 p-1 text-white hover:bg-white/30"
+            onClick={() => setAddTo(s.key === 'fav' ? { favorite: true } : { collection: s.key })}
+            title="Add a link here"
+          >
+            <Icon name="plus" size={15} />
+          </button>
+        </div>
       </div>
       <div
         className={`grid grid-cols-[repeat(auto-fill,minmax(96px,1fr))] gap-3 rounded-xl p-1 ${
@@ -272,25 +287,68 @@ export default function App() {
     </div>
   );
 
+  const headBtn = `btn-ghost px-2 ${onWall ? 'text-white/80 hover:text-white hover:bg-white/10' : ''}`;
+
   return (
-    <div className="min-h-screen bg-surface-sunken text-ink">
+    <div
+      className={`relative min-h-screen text-ink ${onWall ? '' : 'bg-surface-sunken'}`}
+      style={onWall ? { background: wall, backgroundAttachment: 'fixed' } : undefined}
+    >
+      {onWall && <div className="pointer-events-none fixed inset-0 bg-black/35" />}
+      <div className="relative">
       <header className="flex items-center gap-2 px-6 py-4">
         <span className="grid h-8 w-8 place-items-center rounded-lg bg-brand text-white">
           <Icon name="bookmark" size={17} fill />
         </span>
-        <span className="text-base font-semibold">Keepsake</span>
+        <span className={`text-base font-semibold ${onWall ? 'text-white drop-shadow' : ''}`}>Keepsake</span>
         <div className="ml-auto flex items-center gap-1.5">
           <input ref={fileRef} type="file" accept=".html,.json" className="hidden" onChange={onFile} />
-          <button className="btn-ghost px-2.5 text-sm" onClick={() => fileRef.current?.click()} title="Import links">
+          <button className={`btn-ghost px-2.5 text-sm ${onWall ? 'text-white/80 hover:text-white hover:bg-white/10' : ''}`} onClick={() => fileRef.current?.click()} title="Import links">
             <Icon name="import" size={17} /> Import
           </button>
-          <button className="btn-ghost px-2" onClick={() => setHelp(true)} title="Help & setup">
-            <span className="grid h-5 w-5 place-items-center rounded-full border border-line text-xs font-bold">?</span>
+          <div className="relative">
+            <button className={headBtn} onClick={() => setWallOpen((o) => !o)} title="Wallpaper">
+              <Icon name="image" size={18} />
+            </button>
+            {wallOpen && (
+              <>
+                <div className="fixed inset-0 z-10" onClick={() => setWallOpen(false)} />
+                <div className="absolute right-0 top-10 z-20 w-60 rounded-xl border border-line bg-surface-raised p-3 shadow-float">
+                  <p className="mb-2 text-xs font-semibold text-ink-soft">Wallpaper</p>
+                  <div className="grid grid-cols-4 gap-2">
+                    {WALLPAPERS.map((w) => (
+                      <button
+                        key={w.key}
+                        className={`h-10 rounded-lg border ${settings.wallpaper === w.key ? 'border-brand ring-2 ring-brand' : 'border-line'}`}
+                        style={{ background: w.css || 'rgb(var(--surface-sunken))' }}
+                        onClick={() => update({ wallpaper: w.key })}
+                        title={w.label}
+                      />
+                    ))}
+                  </div>
+                  <input
+                    className="input mt-2 text-xs"
+                    placeholder="Custom image URL…"
+                    defaultValue={settings.wallpaper.startsWith('url:') ? settings.wallpaper.slice(4) : ''}
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter') {
+                        const v = (e.target as HTMLInputElement).value.trim();
+                        update({ wallpaper: v ? `url:${v}` : '' });
+                        setWallOpen(false);
+                      }
+                    }}
+                  />
+                </div>
+              </>
+            )}
+          </div>
+          <button className={headBtn} onClick={() => setHelp(true)} title="Help & setup">
+            <span className="grid h-5 w-5 place-items-center rounded-full border border-current text-xs font-bold">?</span>
           </button>
-          <a className="btn-ghost px-2" href={browser.runtime.getURL('/dashboard.html')} title="Open dashboard">
+          <a className={headBtn} href={browser.runtime.getURL('/dashboard.html')} title="Open dashboard">
             <Icon name="grid" size={18} />
           </a>
-          <button className="btn-ghost px-2" onClick={() => browser.runtime.openOptionsPage()} title="Settings">
+          <button className={headBtn} onClick={() => browser.runtime.openOptionsPage()} title="Settings">
             <Icon name="settings" size={18} />
           </button>
         </div>
@@ -298,8 +356,8 @@ export default function App() {
 
       <main className="mx-auto w-full max-w-5xl px-6 pb-24">
         <div className="mt-[6vh] text-center">
-          <p className="text-5xl font-semibold tracking-tight">{time}</p>
-          <p className="mt-2 text-lg text-ink-soft">
+          <p className={`text-5xl font-semibold tracking-tight ${onWall ? 'text-white drop-shadow-lg' : ''}`}>{time}</p>
+          <p className={`mt-2 text-lg ${onWall ? 'text-white/90 drop-shadow' : 'text-ink-soft'}`}>
             {greeting}
             {name ? `, ${name}` : ''}.
           </p>
@@ -373,6 +431,7 @@ export default function App() {
         />
       )}
       {help && <HelpDialog onClose={() => setHelp(false)} />}
+      </div>
     </div>
   );
 }

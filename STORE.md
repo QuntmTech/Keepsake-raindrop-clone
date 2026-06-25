@@ -49,6 +49,15 @@ synced to their account.
 - host permission `https://api.anthropic.com/*`: only used when the user enables optional
   AI features with their own API key.
 
+## New-tab override (chrome_url_overrides.newtab) — review note
+The extension replaces the New Tab page with "Keepsake Home", a start page showing the
+user's saved bookmarks/collections + search. This is core to the single purpose (a
+bookmark manager that doubles as your start page). It does NOT inject ads, redirect
+searches to an undisclosed partner, or change the default search engine — the search box
+performs a normal Google web search only when the user presses Enter with no vault match.
+Users can reduce it to a minimal clock+search via Settings, and uninstalling restores the
+default new tab. Disclose this clearly in the listing (Chrome flags new-tab overrides).
+
 ## Privacy policy URL
 [https://yourdomain.com/keepsake-privacy]  (host the contents of PRIVACY.md)
 
