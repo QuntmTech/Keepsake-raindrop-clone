@@ -189,6 +189,7 @@ export class LocalBackend implements Backend {
       domain,
       type: input.type ?? inferType(input.url),
       favorite: Boolean(input.favorite),
+      sort: input.sort,
       readingTime: input.readingTime,
       user: uid,
       created: nowIso(),

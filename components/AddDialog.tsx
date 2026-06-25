@@ -10,12 +10,13 @@ interface Props {
   collections: Collection[];
   allTags: string[];
   defaultCollection?: string;
+  favorite?: boolean;
   onClose: () => void;
   onAdded: () => void;
 }
 
 // Add a bookmark by URL from the dashboard (no active tab needed).
-export function AddDialog({ collections, allTags, defaultCollection, onClose, onAdded }: Props) {
+export function AddDialog({ collections, allTags, defaultCollection, favorite, onClose, onAdded }: Props) {
   const { toast } = useToast();
   const [url, setUrl] = useState('');
   const [title, setTitle] = useState('');
@@ -36,6 +37,7 @@ export function AddDialog({ collections, allTags, defaultCollection, onClose, on
         title: title.trim() || domain || clean,
         tags,
         collection: collection || undefined,
+        favorite,
         domain,
         type: inferType(clean),
         favicon: faviconFor(domain),

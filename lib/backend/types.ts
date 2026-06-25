@@ -25,6 +25,7 @@ export interface SaveBookmarkInput {
   domain?: string;
   type?: BookmarkType;
   favorite?: boolean;
+  sort?: number;
   readingTime?: number;
   screenshotBlob?: Blob;
 }

@@ -32,6 +32,7 @@ export interface Bookmark {
   domain?: string;
   type: BookmarkType;
   favorite?: boolean;
+  sort?: number;             // manual order for Home tiles / lists
   readingTime?: number;      // minutes
   broken?: boolean;          // link-checker flagged it as dead
   lastVisited?: string;      // ISO date of last open from within Keepsake
