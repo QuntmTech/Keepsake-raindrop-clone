@@ -35,7 +35,14 @@ export default function App() {
   const collectionsApi = useCollections(authed);
   const { toast } = useToast();
 
-  const [filter, setFilter] = useState<LibraryFilter>({ kind: 'all' });
+  const [filter, setFilter] = useState<LibraryFilter>(() => {
+    // Open focused when launched from Home (e.g. dashboard.html#c=<id>).
+    const h = typeof location !== 'undefined' ? location.hash : '';
+    if (h.startsWith('#c=')) return { kind: 'collection', id: h.slice(3) };
+    if (h === '#favorites') return { kind: 'favorites' };
+    if (h === '#highlights') return { kind: 'highlights' };
+    return { kind: 'all' };
+  });
   const [query, setQuery] = useState('');
   const [debouncedQuery, setDebouncedQuery] = useState('');
   const [items, setItems] = useState<Bookmark[]>([]);

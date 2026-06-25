@@ -114,6 +114,7 @@ export interface Settings {
   accent: Accent;
   view: ViewMode;
   sort: SortMode;
+  newTabMode: 'home' | 'minimal'; // Keepsake Home new-tab: full or search-only
   defaultCollection?: string; // collection id new saves drop into
 }
 
@@ -128,6 +129,7 @@ export const DEFAULT_SETTINGS: Settings = {
   accent: 'ocean',
   view: 'grid',
   sort: 'newest',
+  newTabMode: 'home',
 };
 
 // Aggregate stats for the dashboard header.

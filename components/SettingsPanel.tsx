@@ -296,6 +296,12 @@ export function SettingsPanel({ compact = false }: { compact?: boolean }) {
           ))}
         </div>
 
+        <label className="mt-3 block text-xs font-medium text-ink-soft">New-tab Home page</label>
+        <select className="input mt-1" value={settings.newTabMode} onChange={(e) => update({ newTabMode: e.target.value as 'home' | 'minimal' })}>
+          <option value="home">Full home (favorites, collections, recent)</option>
+          <option value="minimal">Minimal (clock + search only)</option>
+        </select>
+
         <div className="mt-3 flex gap-3">
           <div className="flex-1">
             <label className="block text-xs font-medium text-ink-soft">Default layout</label>
