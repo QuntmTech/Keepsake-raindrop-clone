@@ -1,6 +1,8 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { storage } from 'wxt/utils/storage';
 import { useAuth } from '@/hooks/useAuth';
+import { currentUser } from '@/lib/auth';
+import { readSnapshot, writeSnapshot } from '@/lib/cache';
 import { useSettings } from '@/hooks/useSettings';
 import { useCollections } from '@/hooks/useCollections';
 import { LoginForm } from '@/components/LoginForm';
@@ -43,11 +45,29 @@ export default function App() {
   const [help, setHelp] = useState(false);
   const [allTags, setAllTags] = useState<string[]>([]);
   const fileRef = useRef<HTMLInputElement>(null);
+  const uidRef = useRef<string | null>(null);
 
   const reloadAll = useCallback(() => {
+    // Keep current links on screen if the request is slow/fails — never blank out.
     searchBookmarks('', { perPage: 500 }).then(setAll).catch(() => {});
     getAllTags().then((t) => setAllTags(t.map((x) => x.tag))).catch(() => {});
   }, []);
+
+  // Paint cached links instantly on open, then refresh.
+  useEffect(() => {
+    (async () => {
+      uidRef.current = (await currentUser())?.id ?? null;
+      const snap = await readSnapshot(uidRef.current);
+      if (snap && snap.bookmarks.length) setAll((cur) => (cur.length ? cur : snap.bookmarks));
+    })();
+  }, []);
+
+  // Keep the snapshot fresh for the next instant open.
+  useEffect(() => {
+    if (all.length) {
+      writeSnapshot({ uid: uidRef.current ?? '', bookmarks: all, collections: c.collections, counts: c.counts });
+    }
+  }, [all, c.collections, c.counts]);
 
   useEffect(() => {
     const id = setInterval(() => setNow(new Date()), 30_000);

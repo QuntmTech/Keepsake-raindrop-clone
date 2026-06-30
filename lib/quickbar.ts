@@ -1,9 +1,13 @@
+import { storage } from 'wxt/utils/storage';
 import { getSettings, setSettings } from './settings';
 import { getBackend } from './backend';
-import { listCollections, findByUrl } from './bookmarks';
+import { listCollections, createCollection, findByUrl } from './bookmarks';
 import { send } from './messaging';
 import { ACCENTS } from './theme';
 import { type Collection } from './types';
+
+// Whether the bar is collapsed to an edge tab (persisted, roams across devices).
+const collapsedStore = storage.defineItem<boolean>('local:quickbar_collapsed', { fallback: false });
 
 // An in-page "Quick Bar": a small, draggable widget pinned to the right edge of
 // every page. Save the current page in one click, drop it straight into a
@@ -22,6 +26,9 @@ const SVG = {
   grid: '<path d="M4 4h7v7H4zM13 4h7v7h-7zM4 13h7v7H4zM13 13h7v7h-7z"/>',
   check: '<path d="M5 13l4 4L19 7"/>',
   close: '<path d="M6 6l12 12M18 6L6 18"/>',
+  chevronR: '<path d="M9 6l6 6-6 6"/>',
+  chevronL: '<path d="M15 6l-6 6 6 6"/>',
+  plus: '<path d="M12 5v14M5 12h14"/>',
 };
 
 function icon(name: keyof typeof SVG, fill = false): string {
@@ -56,6 +63,19 @@ export async function mountQuickBar(): Promise<QuickBarApi | null> {
       transition: opacity .15s, color .12s; }
     .rail:hover .hide { opacity: 1; }
     .hide:hover { color: #fff; background: rgba(255,255,255,.12); }
+    .collapse { width: 38px; height: 22px; display: grid; place-items: center; color: rgba(255,255,255,.4);
+      background: transparent; border: none; border-radius: 8px; cursor: pointer; opacity: 0;
+      transition: opacity .15s, color .12s; }
+    .rail:hover .collapse { opacity: 1; }
+    .collapse:hover { color: #fff; background: rgba(255,255,255,.12); }
+    .tab { position: fixed; right: 0; z-index: 2147483000; display: none; align-items: center;
+      width: 16px; height: 54px; padding: 0; border: none; cursor: pointer; color: rgba(255,255,255,.9);
+      background: rgba(24,26,32,.92); backdrop-filter: blur(8px); border-radius: 10px 0 0 10px;
+      box-shadow: 0 6px 24px rgba(0,0,0,.3); transition: width .15s, opacity .2s; opacity: .5; overflow: hidden; }
+    .tab:hover { width: 30px; opacity: 1; }
+    .tab svg { flex: none; }
+    .tab .tabmark { display: none; }
+    .tab:hover .tabmark { display: inline-grid; place-items: center; color: ${accent}; }
     .btn { width: 38px; height: 38px; display: grid; place-items: center; color: #fff;
       background: transparent; border: none; border-radius: 10px; cursor: pointer;
       transition: background .12s, transform .12s; }
@@ -74,6 +94,7 @@ export async function mountQuickBar(): Promise<QuickBarApi | null> {
       background: transparent; border: none; border-radius: 8px; cursor: pointer;
       color: #eef; font-size: 13px; text-align: left; }
     .row:hover { background: rgba(255,255,255,.08); }
+    .row svg { width: 16px; height: 16px; flex: none; }
     .dot { width: 9px; height: 9px; border-radius: 50%; flex: none; }
     .msg { padding: 14px 12px; font-size: 13px; color: rgba(255,255,255,.7); text-align: center; }
     .link { color: ${accent}; cursor: pointer; text-decoration: underline; }
@@ -84,12 +105,20 @@ export async function mountQuickBar(): Promise<QuickBarApi | null> {
   rail.className = 'rail';
   rail.innerHTML = `
     <button class="hide" title="Hide the Quick Bar (turn it back on in the Keepsake popup → Settings)">${icon('close')}</button>
+    <button class="collapse" title="Collapse to the edge">${icon('chevronR')}</button>
     <div class="grip" title="Drag to move">${icon('grip')}</div>
     <button class="btn save" title="Save this page">${icon('bookmark', true)}</button>
     <button class="btn folder" title="Save to folder">${icon('folder')}</button>
     <button class="btn dash" title="Open Keepsake">${icon('grid')}</button>
   `;
   shadow.appendChild(rail);
+
+  // Collapsed edge tab — peeks from the right; click to expand.
+  const tab = document.createElement('button');
+  tab.className = 'tab';
+  tab.title = 'Open Keepsake Quick Bar';
+  tab.innerHTML = icon('chevronL') + `<span class="tabmark">${icon('bookmark', true)}</span>`;
+  shadow.appendChild(tab);
 
   // ---- position (vertical) ----
   let curY = settings.quickBarY;
@@ -100,10 +129,27 @@ export async function mountQuickBar(): Promise<QuickBarApi | null> {
   };
   const applyTop = () => {
     rail.style.top = `${clampTop(curY)}px`;
+    tab.style.top = `${Math.max(8, Math.min(window.innerHeight - 62, curY * window.innerHeight - 27))}px`;
   };
   applyTop();
   const onResize = () => applyTop();
   window.addEventListener('resize', onResize);
+
+  // ---- collapse to edge tab ----
+  let collapsed = await collapsedStore.getValue();
+  const applyCollapsed = () => {
+    rail.style.display = collapsed ? 'none' : 'flex';
+    tab.style.display = collapsed ? 'flex' : 'none';
+    applyTop();
+  };
+  applyCollapsed();
+  const setCollapsed = async (v: boolean) => {
+    collapsed = v;
+    applyCollapsed();
+    await collapsedStore.setValue(v);
+  };
+  (rail.querySelector('.collapse') as HTMLButtonElement).onclick = () => setCollapsed(true);
+  tab.onclick = () => setCollapsed(false);
 
   // ---- drag ----
   const grip = rail.querySelector('.grip') as HTMLElement;
@@ -237,6 +283,25 @@ export async function mountQuickBar(): Promise<QuickBarApi | null> {
     } catch {
       /* none */
     }
+
+    // New-folder action: create a collection on the fly and save into it.
+    const newRow = document.createElement('button');
+    newRow.className = 'row';
+    newRow.style.color = accent;
+    newRow.innerHTML = `${icon('plus')}<span>New folder…</span>`;
+    newRow.onclick = async () => {
+      const nameInput = window.prompt('New folder name');
+      const name = nameInput?.trim();
+      if (!name) return;
+      try {
+        const created = await createCollection({ name });
+        quickSave(created.id);
+      } catch {
+        /* ignore */
+      }
+      closePop();
+    };
+    pop!.appendChild(newRow);
   }
 
   saveBtn.onclick = () => quickSave();
