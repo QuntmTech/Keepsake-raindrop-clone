@@ -17,6 +17,10 @@ const modeStore = storage.defineItem<BackendMode>('sync:backend_mode', {
 });
 
 export async function getBackendMode(): Promise<BackendMode> {
+  // A hosted/commercial build always uses the cloud backend — ignore any stale
+  // stored 'local' value (e.g. left over from earlier testing), which would
+  // otherwise make cloud logins fail against the wrong (local) account.
+  if (HOSTED) return 'pocketbase';
   return modeStore.getValue();
 }
 
@@ -37,7 +41,7 @@ export async function getBackend(): Promise<Backend> {
   if (instance) return instance;
   if (initPromise) return initPromise;
   initPromise = (async () => {
-    const mode = await modeStore.getValue();
+    const mode = HOSTED ? 'pocketbase' : await modeStore.getValue();
     const backend: Backend = mode === 'pocketbase' ? new PocketBaseBackend() : new LocalBackend();
     await backend.init();
     instance = backend;

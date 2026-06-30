@@ -36,6 +36,18 @@ export async function setPbUrl(url: string): Promise<void> {
   await pbUrlStore.setValue(url.trim().replace(/\/+$/, ''));
 }
 
+// Translate PocketBase auth errors into clear, user-facing messages.
+function authError(e: unknown, kind: 'login' | 'signup'): string {
+  const status = (e as { status?: number })?.status;
+  if (status === 429) return 'Too many attempts — wait a few seconds and try again.';
+  if (!status) return 'Can’t reach the server — check your connection and try again.';
+  if (kind === 'login' && (status === 400 || status === 401 || status === 403))
+    return 'Wrong email or password.';
+  if (kind === 'signup' && status === 400)
+    return 'Could not sign up — that email may already be in use, or the password is too short.';
+  return (e as { message?: string })?.message || 'Something went wrong.';
+}
+
 export class PocketBaseBackend implements Backend {
   readonly kind = 'pocketbase' as const;
   private pb = new PocketBase('http://127.0.0.1:8090');
@@ -43,7 +55,8 @@ export class PocketBaseBackend implements Backend {
   private wired = false;
 
   async init(): Promise<void> {
-    this.url = (await pbUrlStore.getValue()) || 'http://127.0.0.1:8090';
+    // Never fall back to localhost in a hosted build — use the baked-in server.
+    this.url = (await pbUrlStore.getValue()) || HOSTED_PB_URL || 'http://127.0.0.1:8090';
     this.pb = new PocketBase(this.url);
     // CRITICAL: the SDK auto-cancels duplicate in-flight requests by default,
     // which makes concurrent list/search calls (collections + bookmarks +
@@ -97,17 +110,25 @@ export class PocketBaseBackend implements Backend {
   }
 
   async login(email: string, password: string): Promise<AuthUser> {
-    await this.pb.collection('users').authWithPassword(email, password);
+    try {
+      await this.pb.collection('users').authWithPassword(email, password);
+    } catch (e) {
+      throw new Error(authError(e, 'login'));
+    }
     return this.toUser()!;
   }
 
   async signup(email: string, password: string, name?: string): Promise<AuthUser> {
-    await this.pb.collection('users').create({
-      email,
-      password,
-      passwordConfirm: password,
-      name: name || email.split('@')[0],
-    });
+    try {
+      await this.pb.collection('users').create({
+        email,
+        password,
+        passwordConfirm: password,
+        name: name || email.split('@')[0],
+      });
+    } catch (e) {
+      throw new Error(authError(e, 'signup'));
+    }
     return this.login(email, password);
   }
 
