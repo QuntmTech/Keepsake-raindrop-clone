@@ -13,7 +13,7 @@ import { PROVIDER_DEFAULTS, testProviderKey } from '@/lib/llm';
 import { getBackendMode, setBackendMode, HOSTED, type BackendMode } from '@/lib/backend';
 import { getPbUrl, setPbUrl } from '@/lib/backend/pocketbase';
 import { clearLocalData } from '@/lib/backend/local';
-import { parseNetscapeHtml, parseKeepsakeJson, importItems, exportJson } from '@/lib/importer';
+import { detectAndParse, importWithAi, exportJson } from '@/lib/importer';
 import { searchBookmarks, deleteBookmark } from '@/lib/bookmarks';
 
 // All of Keepsake's settings in one component, used by the full-page options
@@ -102,18 +102,23 @@ export function SettingsPanel({ compact = false }: { compact?: boolean }) {
     const file = e.target.files?.[0];
     if (!file) return;
     const text = await file.text();
-    const items = file.name.endsWith('.json') ? parseKeepsakeJson(text) : parseNetscapeHtml(text);
+    const { format, items } = detectAndParse(file.name, text);
     if (items.length === 0) {
       toast('No bookmarks found in that file', 'error');
       if (fileRef.current) fileRef.current.value = '';
       return;
     }
     setImporting(`0 / ${items.length}`);
-    const res = await importItems(items, settings.defaultCollection, (p) =>
+    const res = await importWithAi(items, settings.defaultCollection, (p) =>
       setImporting(`${p.done} / ${p.total}`),
     );
     setImporting(null);
-    toast(`Imported ${res.done - res.failed} bookmarks`, 'success');
+    const label = format === 'raindrop-csv' ? 'from Raindrop' : format === 'pocket-csv' ? 'from Pocket' : '';
+    toast(
+      `Imported ${res.done - res.failed} ${label} · ${res.duplicates} duplicate${res.duplicates === 1 ? '' : 's'} skipped` +
+        (res.queuedForAi ? ` · ${res.queuedForAi} queued for AI filing` : ''),
+      'success',
+    );
     collectionsApi.refresh();
     if (fileRef.current) fileRef.current.value = '';
   }
@@ -420,7 +425,7 @@ export function SettingsPanel({ compact = false }: { compact?: boolean }) {
 
       <Section title="Import & export" compact={compact} hint="Import a browser/raindrop.io bookmarks HTML file or a Keepsake JSON export.">
         <div className="flex flex-wrap items-center gap-2">
-          <input ref={fileRef} type="file" accept=".html,.json" className="hidden" onChange={onFile} />
+          <input ref={fileRef} type="file" accept=".html,.json,.csv" className="hidden" onChange={onFile} />
           <button className="btn-outline" onClick={() => fileRef.current?.click()} disabled={!authed || !!importing}>
             <Icon name="import" size={15} /> {importing ? `Importing ${importing}` : 'Import file'}
           </button>

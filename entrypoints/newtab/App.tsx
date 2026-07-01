@@ -16,7 +16,7 @@ import { Icon } from '@/components/Icon';
 import { useToast } from '@/components/Toast';
 import { searchBookmarks, updateBookmark, deleteBookmark, getAllTags, markVisited, watchVault } from '@/lib/bookmarks';
 import { syncHomeOverlay, watchHomeOverlay } from '@/lib/home';
-import { parseNetscapeHtml, parseKeepsakeJson, importItems } from '@/lib/importer';
+import { detectAndParse, importWithAi } from '@/lib/importer';
 import { WALLPAPERS, wallpaperCss } from '@/lib/wallpaper';
 import { SEARCH_ENGINES, searchUrl } from '@/lib/search';
 import { normUrl } from '@/lib/apps';
@@ -280,14 +280,14 @@ export default function App() {
     const file = e.target.files?.[0];
     if (!file) return;
     const text = await file.text();
-    const items = file.name.endsWith('.json') ? parseKeepsakeJson(text) : parseNetscapeHtml(text);
+    const { items } = detectAndParse(file.name, text);
     if (!items.length) {
       toast('No links found in that file', 'error');
       return;
     }
     toast(`Importing ${items.length}…`, 'info');
-    const res = await importItems(items, undefined);
-    toast(`Imported ${res.done - res.failed} links`, 'success');
+    const res = await importWithAi(items, undefined);
+    toast(`Imported ${res.done - res.failed} links · ${res.duplicates} duplicates skipped${res.queuedForAi ? ` · ${res.queuedForAi} queued for AI filing` : ''}`, 'success');
     reloadAll();
     c.refresh();
     if (fileRef.current) fileRef.current.value = '';
@@ -463,7 +463,7 @@ export default function App() {
         </span>
         <span className={`text-base font-semibold ${onWall ? 'text-white drop-shadow' : ''}`}>Keepsake</span>
         <div className="ml-auto flex items-center gap-1.5">
-          <input ref={fileRef} type="file" accept=".html,.json" className="hidden" onChange={onFile} />
+          <input ref={fileRef} type="file" accept=".html,.json,.csv" className="hidden" onChange={onFile} />
           <button className="btn-primary px-3 py-1.5 text-sm" onClick={() => setCatalogOpen(true)} title="Add apps to your Home">
             <Icon name="plus" size={15} /> Add apps
           </button>
