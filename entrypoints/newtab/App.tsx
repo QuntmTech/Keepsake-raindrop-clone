@@ -22,20 +22,12 @@ import { normUrl } from '@/lib/apps';
 import { type Bookmark, type Collection } from '@/lib/types';
 
 const TILE_MIME = 'application/x-keepsake-tile';
-const SHELF_MIME = 'application/x-keepsake-shelf';
+const FOLDER_MIME = 'application/x-keepsake-folder';
 const seenHelp = storage.defineItem<boolean>('local:seen_home_help', { fallback: false });
-// Which Home sections the user has collapsed (persisted per device).
-const collapsedStore = storage.defineItem<string[]>('local:home_collapsed', { fallback: [] });
 
-interface Section {
-  key: string; // 'fav', 'quick', or collection id
-  title: string;
-  color?: string;
-  items: Bookmark[];
-}
-
-// Keepsake Home — an editable start page: add/edit tiles, drag to rearrange and
-// group into collections, search your vault, import links.
+// Keepsake Home — an Atlas-style launcher: one compact icon grid. Loose apps
+// are single tiles; collections are folder tiles that open a popup. Drag to
+// rearrange, drop a tile onto a folder to file it, search your vault on top.
 export default function App() {
   const { ready, authed, email, login, signup } = useAuth();
   const { settings, update } = useSettings();
@@ -51,10 +43,10 @@ export default function App() {
   const [draggingTile, setDraggingTile] = useState<string | null>(null);
   const [addTo, setAddTo] = useState<{ favorite?: boolean; collection?: string } | null>(null);
   const [editing, setEditing] = useState<Bookmark | null>(null);
-  const [renaming, setRenaming] = useState<{ key: string; value: string } | null>(null);
+  const [renaming, setRenaming] = useState<string | null>(null);
+  const [openFolder, setOpenFolder] = useState<string | null>(null);
   const [help, setHelp] = useState(false);
   const [catalogOpen, setCatalogOpen] = useState(false);
-  const [collapsedKeys, setCollapsedKeys] = useState<string[]>([]);
   const [allTags, setAllTags] = useState<string[]>([]);
   const fileRef = useRef<HTMLInputElement>(null);
   const uidRef = useRef<string | null>(null);
@@ -95,16 +87,6 @@ export default function App() {
     if (!authed) return;
     syncHomeOverlay().then(reloadAll).catch(() => {});
   }, [authed, reloadAll]);
-  useEffect(() => {
-    collapsedStore.getValue().then(setCollapsedKeys);
-  }, []);
-  const toggleCollapsed = (key: string) => {
-    setCollapsedKeys((prev) => {
-      const next = prev.includes(key) ? prev.filter((k) => k !== key) : [...prev, key];
-      collapsedStore.setValue(next);
-      return next;
-    });
-  };
 
   // Show the setup guide once.
   useEffect(() => {
@@ -141,6 +123,15 @@ export default function App() {
     return () => clearTimeout(id);
   }, [query, authed]);
 
+  // Escape closes the folder popup first, then any open pickers.
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') setOpenFolder(null);
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, []);
+
   const byOrder = (a: Bookmark, b: Bookmark) =>
     (a.sort ?? 1e9) - (b.sort ?? 1e9) || b.created.localeCompare(a.created);
 
@@ -148,30 +139,27 @@ export default function App() {
   // library lives in the dashboard, untouched.
   const pinnedItems = useMemo(() => all.filter((b) => b.pinned), [all]);
 
-  const sections: Section[] = useMemo(() => {
-    const favs: Section = {
-      key: 'fav',
-      title: 'Favorites',
-      items: pinnedItems.filter((b) => b.favorite).sort(byOrder),
-    };
-    // Pinned links that aren't favorites and aren't filed anywhere.
-    const loose = pinnedItems.filter((b) => !b.favorite && !b.collection).sort(byOrder);
-    // While a tile is mid-drag, Quick links is always a valid drop target —
-    // it's how you drag a tile OUT of a collection.
-    const quick: Section[] =
-      loose.length || draggingTile ? [{ key: 'quick', title: 'Quick links', items: loose }] : [];
-    // Collection shelves with pinned links; while dragging, show them all so
-    // any collection can receive the tile.
-    const cols: Section[] = c.collections
-      .map((col: Collection) => ({
-        key: col.id,
-        title: col.name,
-        color: col.color,
-        items: pinnedItems.filter((b) => b.collection === col.id && !b.favorite).sort(byOrder),
-      }))
-      .filter((s) => s.items.length > 0 || draggingTile !== null);
-    return [favs, ...quick, ...cols];
-  }, [pinnedItems, c.collections, draggingTile]);
+  const colIds = useMemo(() => new Set(c.collections.map((x) => x.id)), [c.collections]);
+  // Single tiles: pinned links not filed into any (existing) collection.
+  const looseTiles = useMemo(
+    () => pinnedItems.filter((b) => !b.collection || !colIds.has(b.collection)).sort(byOrder),
+    [pinnedItems, colIds],
+  );
+  // Folder tiles: collections that hold at least one pinned link.
+  const folders = useMemo(
+    () =>
+      c.collections
+        .map((col: Collection) => ({
+          col,
+          items: pinnedItems.filter((b) => b.collection === col.id).sort(byOrder),
+        }))
+        .filter((f) => f.items.length > 0),
+    [pinnedItems, c.collections],
+  );
+  const folderItems = useCallback(
+    (colId: string) => folders.find((f) => f.col.id === colId)?.items ?? [],
+    [folders],
+  );
 
   const greeting = useMemo(() => {
     const h = now.getHours();
@@ -188,32 +176,27 @@ export default function App() {
     window.location.href = searchUrl(settings.searchEngine, query);
   };
 
-  // Drop a tile into a section, optionally before a specific tile; reindex order.
-  // Paints the result immediately (optimistic), then persists every position.
-  async function dropTile(bmId: string, sectionKey: string, beforeId?: string) {
-    const section = sections.find((s) => s.key === sectionKey);
-    if (!section) return;
-    const ids = section.items.map((b) => b.id).filter((id) => id !== bmId);
-    let at = beforeId ? ids.indexOf(beforeId) : ids.length;
-    if (at < 0) at = ids.length;
-    ids.splice(at, 0, bmId);
-    // Dropping onto a shelf pins the link to Home and sets its shelf.
+  // Drop a tile into a container ('loose' grid or a collection id), optionally
+  // before a specific tile. Paints the result immediately, then persists.
+  async function dropTile(bmId: string, target: string, beforeId?: string) {
+    const list = (target === 'loose' ? looseTiles : folderItems(target)).map((b) => b.id).filter((id) => id !== bmId);
+    let at = beforeId ? list.indexOf(beforeId) : list.length;
+    if (at < 0) at = list.length;
+    list.splice(at, 0, bmId);
+    // Filing into a folder sets the collection; dropping on the grid clears it.
+    // The favorite flag is left alone — it only matters in the dashboard now.
     const membership: Partial<Bookmark> =
-      sectionKey === 'fav'
-        ? { favorite: true, pinned: true }
-        : sectionKey === 'quick'
-          ? { favorite: false, collection: undefined, pinned: true }
-          : { favorite: false, collection: sectionKey, pinned: true };
+      target === 'loose' ? { collection: undefined, pinned: true } : { collection: target, pinned: true };
     setAll((cur) =>
       cur.map((b) => {
-        const i = ids.indexOf(b.id);
+        const i = list.indexOf(b.id);
         if (i < 0) return b;
         return b.id === bmId ? { ...b, ...membership, sort: i } : { ...b, sort: i };
       }),
     );
     try {
       await Promise.all(
-        ids.map((id, i) => updateBookmark(id, id === bmId ? { ...membership, sort: i } : { sort: i })),
+        list.map((id, i) => updateBookmark(id, id === bmId ? { ...membership, sort: i } : { sort: i })),
       );
     } catch {
       toast('Could not save the new order', 'error');
@@ -221,16 +204,16 @@ export default function App() {
     reloadAll();
   }
 
-  // Move a collection shelf before another shelf (or to the end of the list).
-  async function dropShelf(dragId: string, targetKey: string) {
-    if (dragId === targetKey) return;
+  // Move a folder before another folder ('' = to the end of the grid).
+  async function dropFolder(dragId: string, targetId: string) {
+    if (dragId === targetId) return;
     const ids = c.collections.map((x) => x.id).filter((id) => id !== dragId);
-    const at = ids.indexOf(targetKey);
+    const at = targetId ? ids.indexOf(targetId) : -1;
     ids.splice(at < 0 ? ids.length : at, 0, dragId);
     try {
       await c.reorder(ids);
     } catch {
-      toast('Could not save the shelf order', 'error');
+      toast('Could not save the folder order', 'error');
     }
   }
 
@@ -245,33 +228,34 @@ export default function App() {
     reloadAll();
   }
 
-  async function renameCollection(id: string, name: string) {
-    const clean = name.trim();
+  async function renameCollection(id: string, nameRaw: string) {
+    const clean = nameRaw.trim();
     setRenaming(null);
     if (!clean) return;
     try {
       await c.rename(id, { name: clean });
-      toast('Collection renamed', 'success');
+      toast('Folder renamed', 'success');
     } catch {
-      toast('Could not rename the collection', 'error');
+      toast('Could not rename the folder', 'error');
     }
   }
 
-  // Delete a whole collection from Home: its catalog-only tiles are deleted,
+  // Delete a whole folder from Home: its catalog-only tiles are deleted,
   // real library bookmarks are just unpinned (and survive in the dashboard).
-  async function deleteCollectionFromHome(s: Section) {
+  async function deleteFolderFromHome(col: Collection, items: Bookmark[]) {
     const ok = window.confirm(
-      `Delete the “${s.title}” collection and remove its ${s.items.length} tile${s.items.length === 1 ? '' : 's'} from Home?\n\nBookmarks saved in your library are kept.`,
+      `Delete the “${col.name}” folder and remove its ${items.length} tile${items.length === 1 ? '' : 's'} from Home?\n\nBookmarks saved in your library are kept.`,
     );
     if (!ok) return;
+    setOpenFolder(null);
     try {
       await Promise.all(
-        s.items.map((b) => (b.homeOnly ? deleteBookmark(b.id) : updateBookmark(b.id, { pinned: false }))),
+        items.map((b) => (b.homeOnly ? deleteBookmark(b.id) : updateBookmark(b.id, { pinned: false }))),
       );
-      await c.remove(s.key);
-      toast(`Deleted ${s.title}`, 'success');
+      await c.remove(col.id);
+      toast(`Deleted ${col.name}`, 'success');
     } catch {
-      toast('Could not delete the collection', 'error');
+      toast('Could not delete the folder', 'error');
     }
     reloadAll();
   }
@@ -321,201 +305,147 @@ export default function App() {
   const minimal = settings.newTabMode === 'minimal';
   const wall = wallpaperCss(settings.wallpaper);
   const onWall = Boolean(wall);
-  // Shelf panels: solid cards normally, frosted glass over a wallpaper.
+  // Panels: solid cards normally, frosted glass over a wallpaper.
   const panelCls = onWall
     ? 'border-white/15 bg-surface-raised/90 backdrop-blur-md'
     : 'border-line bg-surface-raised shadow-card';
+  const iconCls = onWall
+    ? 'border-white/20 bg-surface-raised/95 backdrop-blur-md'
+    : 'border-line bg-surface-raised shadow-card';
+  const labelCls = onWall ? 'text-white/90 drop-shadow' : 'text-ink-soft';
 
-  const Tile = ({ b, sectionKey }: { b: Bookmark; sectionKey: string }) => (
-    <div
-      className={`group relative flex min-h-[76px] cursor-pointer flex-col items-center justify-center gap-1.5 rounded-xl border bg-surface p-2 transition hover:-translate-y-0.5 hover:shadow-card ${
-        dropKey === `${sectionKey}:${b.id}` ? 'border-brand ring-2 ring-brand' : 'border-line hover:border-brand/40'
-      } ${draggingTile === b.id ? 'opacity-40' : ''}`}
-      draggable
-      onClick={() => open(b)}
-      onDragStart={(e) => {
-        e.stopPropagation();
-        e.dataTransfer.setData(TILE_MIME, b.id);
-        e.dataTransfer.effectAllowed = 'move';
-        setDraggingTile(b.id);
-      }}
-      onDragEnd={() => {
-        setDraggingTile(null);
-        setDropKey(null);
-      }}
-      onDragOver={(e) => {
-        if (!e.dataTransfer.types.includes(TILE_MIME)) return;
-        e.preventDefault();
-        e.stopPropagation();
-        e.dataTransfer.dropEffect = 'move';
-        setDropKey(`${sectionKey}:${b.id}`);
-      }}
-      onDragLeave={() => setDropKey((k) => (k === `${sectionKey}:${b.id}` ? null : k))}
-      onDrop={(e) => {
-        e.preventDefault();
-        e.stopPropagation();
-        const id = e.dataTransfer.getData(TILE_MIME);
-        setDropKey(null);
-        if (id && id !== b.id) dropTile(id, sectionKey, b.id);
-      }}
-      title={b.title}
-    >
-      <div className="absolute right-1 top-1 flex gap-0.5 opacity-0 transition group-hover:opacity-100">
-        <button
-          className="rounded-md bg-surface/80 p-1 text-ink-faint backdrop-blur hover:text-brand"
-          onClick={(e) => {
-            e.stopPropagation();
-            setEditing(b);
-          }}
-          title="Edit"
-        >
-          <Icon name="edit" size={12} />
-        </button>
-        <button
-          className="rounded-md bg-surface/80 p-1 text-ink-faint backdrop-blur hover:text-red-500"
-          onClick={(e) => {
-            e.stopPropagation();
-            removeFromHome(b);
-          }}
-          title={b.homeOnly ? 'Remove from Home' : 'Remove from Home (bookmark stays in your library)'}
-        >
-          <Icon name="close" size={12} />
-        </button>
-      </div>
-      <Favicon src={b.favicon} size={28} label={b.title} />
-      <span className="line-clamp-2 max-w-full text-center text-[11px] leading-tight text-ink-soft">{b.title}</span>
-    </div>
-  );
-
-  // Compact "shelf" panel — Atlas-style folder card, no giant banner.
-  const SectionBlock = ({ s }: { s: Section }) => {
-    const isCollapsed = collapsedKeys.includes(s.key) && !draggingTile;
-    const isCollection = s.key !== 'fav' && s.key !== 'quick';
-    const dashHash = s.key === 'fav' ? '#favorites' : `#c=${s.key}`;
+  // A single app tile: icon square + label, Atlas-sized. `statik` disables
+  // drag & drop (used in search results, where reordering has no meaning).
+  const Tile = ({ b, container, statik }: { b: Bookmark; container: string; statik?: boolean }) => {
+    const dk = `tile:${container}:${b.id}`;
     return (
-      <section
-        className={`group/shelf rounded-2xl border p-3.5 transition ${panelCls} ${s.key === 'fav' ? 'lg:col-span-2' : ''} ${
-          dropKey === s.key ? 'ring-2 ring-brand' : ''
+      <div
+        className={`group relative flex w-[92px] cursor-pointer flex-col items-center gap-1.5 ${
+          draggingTile === b.id ? 'opacity-40' : ''
         }`}
-        onDragOver={(e) => {
-          if (!e.dataTransfer.types.includes(TILE_MIME) && !e.dataTransfer.types.includes(SHELF_MIME)) return;
-          e.preventDefault();
-          e.dataTransfer.dropEffect = 'move';
-          setDropKey(s.key);
+        draggable={!statik}
+        onClick={() => open(b)}
+        onDragStart={(e) => {
+          e.stopPropagation();
+          e.dataTransfer.setData(TILE_MIME, b.id);
+          e.dataTransfer.effectAllowed = 'move';
+          setDraggingTile(b.id);
         }}
-        onDragLeave={() => setDropKey((k) => (k === s.key ? null : k))}
+        onDragEnd={() => {
+          setDraggingTile(null);
+          setDropKey(null);
+        }}
+        onDragOver={(e) => {
+          if (statik || !e.dataTransfer.types.includes(TILE_MIME)) return;
+          e.preventDefault();
+          e.stopPropagation();
+          e.dataTransfer.dropEffect = 'move';
+          setDropKey(dk);
+        }}
+        onDragLeave={() => setDropKey((k) => (k === dk ? null : k))}
+        onDrop={(e) => {
+          if (statik) return;
+          e.preventDefault();
+          e.stopPropagation();
+          const id = e.dataTransfer.getData(TILE_MIME);
+          setDropKey(null);
+          if (id && id !== b.id) dropTile(id, container, b.id);
+        }}
+        title={b.title}
+      >
+        <div
+          className={`grid h-16 w-16 place-items-center overflow-hidden rounded-2xl border transition group-hover:-translate-y-0.5 group-hover:shadow-float ${
+            dropKey === dk ? 'border-brand ring-2 ring-brand' : iconCls
+          }`}
+        >
+          <Favicon src={b.favicon} size={34} label={b.title} />
+        </div>
+        <div className="absolute -right-1 -top-1 z-10 flex gap-0.5 opacity-0 transition group-hover:opacity-100">
+          <button
+            className="grid h-5 w-5 place-items-center rounded-full border border-line bg-surface text-ink-faint shadow-card hover:text-brand"
+            onClick={(e) => {
+              e.stopPropagation();
+              setEditing(b);
+            }}
+            title="Edit"
+          >
+            <Icon name="edit" size={10} />
+          </button>
+          <button
+            className="grid h-5 w-5 place-items-center rounded-full border border-line bg-surface text-ink-faint shadow-card hover:text-red-500"
+            onClick={(e) => {
+              e.stopPropagation();
+              removeFromHome(b);
+            }}
+            title={b.homeOnly ? 'Remove from Home' : 'Remove from Home (bookmark stays in your library)'}
+          >
+            <Icon name="close" size={10} />
+          </button>
+        </div>
+        <span className={`line-clamp-1 max-w-[92px] text-center text-[11px] leading-tight ${labelCls}`}>{b.title}</span>
+      </div>
+    );
+  };
+
+  // A folder tile: mini 2×2 icon preview. Click opens the folder popup;
+  // drop a tile on it to file the tile into the collection.
+  const FolderTile = ({ col, items }: { col: Collection; items: Bookmark[] }) => {
+    const dk = `folder:${col.id}`;
+    return (
+      <div
+        className="group relative flex w-[92px] cursor-pointer flex-col items-center gap-1.5"
+        draggable
+        onClick={() => setOpenFolder(col.id)}
+        onDragStart={(e) => {
+          e.stopPropagation();
+          e.dataTransfer.setData(FOLDER_MIME, col.id);
+          e.dataTransfer.effectAllowed = 'move';
+        }}
+        onDragOver={(e) => {
+          const t = e.dataTransfer.types;
+          if (!t.includes(TILE_MIME) && !t.includes(FOLDER_MIME)) return;
+          e.preventDefault();
+          e.stopPropagation();
+          e.dataTransfer.dropEffect = 'move';
+          setDropKey(dk);
+        }}
+        onDragLeave={() => setDropKey((k) => (k === dk ? null : k))}
         onDrop={(e) => {
           e.preventDefault();
+          e.stopPropagation();
           setDropKey(null);
-          const shelfId = e.dataTransfer.getData(SHELF_MIME);
-          if (shelfId && isCollection) {
-            dropShelf(shelfId, s.key);
+          const fid = e.dataTransfer.getData(FOLDER_MIME);
+          if (fid) {
+            dropFolder(fid, col.id);
             return;
           }
           const id = e.dataTransfer.getData(TILE_MIME);
-          if (id) dropTile(id, s.key);
+          if (id) dropTile(id, col.id);
         }}
+        title={`${col.name} — ${items.length} app${items.length === 1 ? '' : 's'}`}
       >
-        <div className="flex items-center gap-2">
-          {isCollection && (
-            <span
-              draggable
-              className="cursor-grab rounded p-0.5 text-ink-faint opacity-0 transition hover:bg-surface-sunken group-hover/shelf:opacity-100"
-              onDragStart={(e) => {
-                e.stopPropagation();
-                e.dataTransfer.setData(SHELF_MIME, s.key);
-                e.dataTransfer.effectAllowed = 'move';
-              }}
-              title="Drag to reorder collections"
-            >
-              <Icon name="grip" size={12} />
+        <div
+          className={`grid h-16 w-16 grid-cols-2 content-center justify-items-center gap-1 rounded-2xl border p-2 transition group-hover:-translate-y-0.5 group-hover:shadow-float ${
+            dropKey === dk ? 'border-brand ring-2 ring-brand' : iconCls
+          }`}
+        >
+          {items.slice(0, 4).map((b) => (
+            <span key={b.id} className="grid h-6 w-6 place-items-center overflow-hidden rounded-md bg-surface-sunken">
+              <Favicon src={b.favicon} size={17} label={b.title} />
             </span>
-          )}
-          {s.key === 'fav' ? (
-            <Icon name="star-fill" size={14} className="shrink-0 text-amber-400" />
-          ) : (
-            <span className="h-2.5 w-2.5 shrink-0 rounded-full" style={{ background: s.color || 'rgb(var(--accent))' }} />
-          )}
-          {renaming?.key === s.key ? (
-            <input
-              className="input flex-1 px-2 py-0.5 text-sm"
-              value={renaming.value}
-              autoFocus
-              onChange={(e) => setRenaming({ key: s.key, value: e.target.value })}
-              onKeyDown={(e) => {
-                if (e.key === 'Enter') renameCollection(s.key, renaming.value);
-                if (e.key === 'Escape') setRenaming(null);
-              }}
-              onBlur={() => renameCollection(s.key, renaming.value)}
-            />
-          ) : (
-            <a
-              href={browser.runtime.getURL('/dashboard.html') + dashHash}
-              className="truncate text-sm font-semibold text-ink hover:text-brand"
-              title="Open in dashboard"
-            >
-              {s.key === 'fav' ? 'Favorites' : s.title}
-            </a>
-          )}
-          <span className="rounded-full bg-surface-sunken px-1.5 text-[11px] text-ink-faint">{s.items.length}</span>
-          <div className="ml-auto flex items-center gap-0.5">
-            {isCollection && renaming?.key !== s.key && (
-              <>
-                <button
-                  className="rounded-md p-1 text-ink-faint hover:bg-surface-sunken hover:text-brand"
-                  onClick={() => setRenaming({ key: s.key, value: s.title })}
-                  title="Rename collection"
-                >
-                  <Icon name="edit" size={13} />
-                </button>
-                <button
-                  className="rounded-md p-1 text-ink-faint hover:bg-surface-sunken hover:text-red-500"
-                  onClick={() => deleteCollectionFromHome(s)}
-                  title="Delete collection (removes its tiles from Home)"
-                >
-                  <Icon name="trash" size={13} />
-                </button>
-              </>
-            )}
-            <button
-              className="rounded-md p-1 text-ink-faint hover:bg-surface-sunken hover:text-brand"
-              onClick={() => setAddTo(s.key === 'fav' ? { favorite: true } : isCollection ? { collection: s.key } : {})}
-              title="Add a link here"
-            >
-              <Icon name="plus" size={15} />
-            </button>
-            <button
-              className="rounded-md p-1 text-ink-faint hover:bg-surface-sunken hover:text-ink"
-              onClick={() => toggleCollapsed(s.key)}
-              title={isCollapsed ? 'Expand' : 'Collapse'}
-            >
-              <Icon name="chevron" size={14} className={`transition-transform ${isCollapsed ? '' : 'rotate-90'}`} />
-            </button>
-          </div>
+          ))}
         </div>
-
-        {!isCollapsed && (
-          <div className="mt-3 grid grid-cols-[repeat(auto-fill,minmax(84px,1fr))] gap-2.5">
-            {s.items.map((b) => (
-              <Tile key={b.id} b={b} sectionKey={s.key} />
-            ))}
-            {s.items.length === 0 && draggingTile && (
-              <div className="col-span-full grid min-h-[76px] place-items-center rounded-xl border border-dashed border-brand/40 text-xs text-ink-faint">
-                Drop here
-              </div>
-            )}
-            <button
-              className="flex min-h-[76px] flex-col items-center justify-center gap-1 rounded-xl border border-dashed border-line text-ink-faint transition hover:border-brand/50 hover:text-brand"
-              onClick={() => setAddTo(s.key === 'fav' ? { favorite: true } : isCollection ? { collection: s.key } : {})}
-            >
-              <Icon name="plus" size={16} />
-              <span className="text-[10px]">Add</span>
-            </button>
-          </div>
-        )}
-      </section>
+        <span className={`line-clamp-1 max-w-[92px] text-center text-[11px] leading-tight ${labelCls}`}>{col.name}</span>
+      </div>
     );
   };
+
+  const openFolderData = openFolder
+    ? {
+        col: c.collections.find((x) => x.id === openFolder),
+        items: pinnedItems.filter((b) => b.collection === openFolder).sort(byOrder),
+      }
+    : null;
 
   const headBtn = `btn-ghost px-2 ${onWall ? 'text-white/80 hover:text-white hover:bg-white/10' : ''}`;
 
@@ -588,7 +518,7 @@ export default function App() {
         </div>
       </header>
 
-      <main className="mx-auto w-full max-w-5xl px-6 pb-24">
+      <main className="mx-auto w-full max-w-6xl px-6 pb-24">
         <div className="mt-[4vh] text-center">
           <p className={`text-5xl font-semibold tracking-tight ${onWall ? 'text-white drop-shadow-lg' : ''}`}>{time}</p>
           <p className={`mt-2 text-lg ${onWall ? 'text-white/90 drop-shadow' : 'text-ink-soft'}`}>
@@ -597,7 +527,7 @@ export default function App() {
           </p>
         </div>
 
-        <div className="mx-auto mt-6 flex max-w-xl items-center gap-2 rounded-2xl border border-line bg-surface-raised px-4 py-3 shadow-card focus-within:border-brand/50">
+        <div className={`mx-auto mt-6 flex max-w-xl items-center gap-2 rounded-2xl border px-4 py-3 focus-within:border-brand/50 ${panelCls}`}>
           <Icon name="search" size={20} className="text-ink-faint" />
           <input
             className="flex-1 bg-transparent text-base outline-none placeholder:text-ink-faint"
@@ -629,14 +559,16 @@ export default function App() {
         </div>
 
         {results !== null ? (
-          <div className="mt-8">
-            <h2 className="mb-3 text-xs font-semibold uppercase tracking-wide text-ink-faint">Results for “{query}”</h2>
-            <div className="grid grid-cols-[repeat(auto-fill,minmax(96px,1fr))] gap-3">
+          <div className="mt-10">
+            <h2 className={`mb-4 text-center text-xs font-semibold uppercase tracking-wide ${onWall ? 'text-white/80' : 'text-ink-faint'}`}>
+              Results for “{query}”
+            </h2>
+            <div className="flex flex-wrap items-start justify-center gap-x-2 gap-y-5">
               {results.map((b) => (
-                <Tile key={b.id} b={b} sectionKey={b.favorite ? 'fav' : b.collection ?? 'fav'} />
+                <Tile key={b.id} b={b} container="results" statik />
               ))}
               {results.length === 0 && (
-                <p className="col-span-full py-6 text-center text-sm text-ink-faint">
+                <p className={`py-6 text-center text-sm ${onWall ? 'text-white/80' : 'text-ink-faint'}`}>
                   Nothing saved — press Enter to search the web.
                 </p>
               )}
@@ -657,7 +589,7 @@ export default function App() {
               <button className="btn-primary" onClick={() => setCatalogOpen(true)}>
                 <Icon name="grid" size={16} /> Browse popular apps
               </button>
-              <button className="btn-outline" onClick={() => setAddTo({ favorite: true })}>
+              <button className="btn-outline" onClick={() => setAddTo({})}>
                 <Icon name="plus" size={15} /> Custom link
               </button>
               <button className="btn-outline" onClick={pinAllFavorites}>
@@ -665,14 +597,157 @@ export default function App() {
               </button>
             </div>
           </div>
-        ) : (
-          <div className="mt-8 grid grid-cols-1 items-start gap-4 lg:grid-cols-2">
-            {(minimal ? sections.slice(0, 1) : sections).map((s) => (
-              <SectionBlock key={s.key} s={s} />
+        ) : minimal ? null : (
+          /* The launcher grid: single apps first, then folders, then Add. */
+          <div
+            className={`mt-12 flex flex-wrap items-start justify-center gap-x-2 gap-y-6 rounded-3xl p-3 transition ${
+              dropKey === 'grid' ? 'outline-dashed outline-2 outline-brand/50' : ''
+            }`}
+            onDragOver={(e) => {
+              const t = e.dataTransfer.types;
+              if (!t.includes(TILE_MIME) && !t.includes(FOLDER_MIME)) return;
+              e.preventDefault();
+              e.dataTransfer.dropEffect = 'move';
+              setDropKey('grid');
+            }}
+            onDragLeave={() => setDropKey((k) => (k === 'grid' ? null : k))}
+            onDrop={(e) => {
+              e.preventDefault();
+              setDropKey(null);
+              const fid = e.dataTransfer.getData(FOLDER_MIME);
+              if (fid) {
+                dropFolder(fid, '');
+                return;
+              }
+              const id = e.dataTransfer.getData(TILE_MIME);
+              if (id) dropTile(id, 'loose');
+            }}
+          >
+            {looseTiles.map((b) => (
+              <Tile key={b.id} b={b} container="loose" />
             ))}
+            {folders.map((f) => (
+              <FolderTile key={f.col.id} col={f.col} items={f.items} />
+            ))}
+            <div className="flex w-[92px] flex-col items-center gap-1.5">
+              <button
+                className={`grid h-16 w-16 place-items-center rounded-2xl border border-dashed transition hover:-translate-y-0.5 hover:border-brand/60 hover:text-brand ${
+                  onWall ? 'border-white/40 text-white/80' : 'border-line text-ink-faint'
+                }`}
+                onClick={() => setCatalogOpen(true)}
+                title="Add apps or a custom link"
+              >
+                <Icon name="plus" size={24} />
+              </button>
+              <span className={`text-[11px] leading-tight ${labelCls}`}>Add</span>
+            </div>
           </div>
         )}
       </main>
+
+      {/* Folder popup — Atlas-style: the collection expands into a dialog. */}
+      {openFolderData?.col && (
+        <div
+          className="fixed inset-0 z-[2147483644] grid place-items-center bg-black/40 p-4 backdrop-blur-sm"
+          onClick={() => setOpenFolder(null)}
+        >
+          <div
+            className="flex max-h-[80vh] w-full max-w-2xl flex-col rounded-2xl border border-line bg-surface-raised p-6 shadow-float"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="flex items-center gap-2">
+              <span
+                className="h-2.5 w-2.5 shrink-0 rounded-full"
+                style={{ background: openFolderData.col.color || 'rgb(var(--accent))' }}
+              />
+              {renaming === openFolderData.col.id ? (
+                <input
+                  className="input flex-1 px-2 py-1 text-base font-semibold"
+                  defaultValue={openFolderData.col.name}
+                  autoFocus
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter') renameCollection(openFolderData.col!.id, (e.target as HTMLInputElement).value);
+                    if (e.key === 'Escape') setRenaming(null);
+                  }}
+                  onBlur={(e) => renameCollection(openFolderData.col!.id, e.target.value)}
+                />
+              ) : (
+                <h3 className="truncate text-lg font-semibold text-ink">{openFolderData.col.name}</h3>
+              )}
+              <span className="rounded-full bg-surface-sunken px-2 text-xs text-ink-faint">
+                {openFolderData.items.length}
+              </span>
+              <div className="ml-auto flex items-center gap-0.5">
+                <button
+                  className="btn-ghost px-2"
+                  onClick={() => setAddTo({ collection: openFolderData.col!.id })}
+                  title="Add a link to this folder"
+                >
+                  <Icon name="plus" size={16} />
+                </button>
+                <button
+                  className="btn-ghost px-2"
+                  onClick={() => setRenaming(openFolderData.col!.id)}
+                  title="Rename folder"
+                >
+                  <Icon name="edit" size={15} />
+                </button>
+                <a
+                  className="btn-ghost px-2"
+                  href={browser.runtime.getURL('/dashboard.html') + `#c=${openFolderData.col.id}`}
+                  title="Open in dashboard"
+                >
+                  <Icon name="external" size={15} />
+                </a>
+                <button
+                  className="btn-ghost px-2 hover:text-red-500"
+                  onClick={() => deleteFolderFromHome(openFolderData.col!, openFolderData.items)}
+                  title="Delete folder (removes its tiles from Home)"
+                >
+                  <Icon name="trash" size={15} />
+                </button>
+                <button className="btn-ghost px-2" onClick={() => setOpenFolder(null)} title="Close">
+                  <Icon name="close" size={16} />
+                </button>
+              </div>
+            </div>
+
+            <div className="mt-6 flex flex-wrap items-start justify-center gap-x-2 gap-y-5 overflow-y-auto">
+              {openFolderData.items.map((b) => (
+                <Tile key={b.id} b={b} container={openFolderData.col!.id} />
+              ))}
+              {openFolderData.items.length === 0 && (
+                <p className="py-8 text-center text-sm text-ink-faint">
+                  This folder is empty — it will disappear from Home until you add something.
+                </p>
+              )}
+            </div>
+
+            {draggingTile && (
+              <div
+                className={`mt-4 grid shrink-0 place-items-center rounded-xl border border-dashed py-3 text-xs transition ${
+                  dropKey === 'folder-out' ? 'border-brand text-brand ring-2 ring-brand' : 'border-line text-ink-faint'
+                }`}
+                onDragOver={(e) => {
+                  if (!e.dataTransfer.types.includes(TILE_MIME)) return;
+                  e.preventDefault();
+                  e.dataTransfer.dropEffect = 'move';
+                  setDropKey('folder-out');
+                }}
+                onDragLeave={() => setDropKey((k) => (k === 'folder-out' ? null : k))}
+                onDrop={(e) => {
+                  e.preventDefault();
+                  setDropKey(null);
+                  const id = e.dataTransfer.getData(TILE_MIME);
+                  if (id) dropTile(id, 'loose');
+                }}
+              >
+                Drop here to move out of this folder
+              </div>
+            )}
+          </div>
+        </div>
+      )}
 
       {addTo && (
         <AddDialog
@@ -706,7 +781,7 @@ export default function App() {
           onClose={() => setCatalogOpen(false)}
           onCustom={() => {
             setCatalogOpen(false);
-            setAddTo({ favorite: true });
+            setAddTo({});
           }}
           onChanged={() => {
             reloadAll();
@@ -735,10 +810,10 @@ function HelpDialog({ onClose }: { onClose: () => void }) {
             <b>1. Home is curated:</b> it only shows links you <b>pin</b> — your full bookmark library
             stays separate in the dashboard.
           </li>
-          <li><b>2. Add apps:</b> hit <b>“Add apps”</b> (top bar) for one-click popular apps with icons — or add a whole category at once with <b>“+ Add collection”</b>.</li>
-          <li><b>3. Edit a tile:</b> hover → pencil: change title, icon (paste URL or upload an image), or folder.</li>
-          <li><b>4. Rearrange:</b> drag tiles to reorder, drop onto another shelf to move them in or out of collections, and drag a shelf’s grip to reorder collections. The ✕ removes a tile from Home.</li>
-          <li><b>5. Pin from the library:</b> edit any bookmark → “Show on Home screen”.</li>
+          <li><b>2. Add apps:</b> hit <b>“Add apps”</b> for one-click popular apps — or add a whole category as a folder with <b>“+ Add collection”</b>.</li>
+          <li><b>3. Folders:</b> collections show as compact folder tiles. Click one to open it; use its popup to rename, add, or delete.</li>
+          <li><b>4. Rearrange:</b> drag tiles to reorder. Drop a tile onto a folder to file it; inside a folder, drag to the bottom bar to move it out. Drag folders to reorder them.</li>
+          <li><b>5. Edit a tile:</b> hover → pencil: change title, icon (paste a URL or upload an image), or folder.</li>
           <li>
             <b>6. Make this your homepage:</b> Chrome → <i>Settings → On startup</i> → “Open the New Tab
             page”, and turn on the <i>Home button</i> (Appearance) set to New Tab.
