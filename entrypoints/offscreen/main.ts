@@ -102,6 +102,10 @@ chrome.runtime.onMessage.addListener((msg: OffscreenCommand, _sender, sendRespon
         const m = msg as unknown as { text: string; threshold: number; limit: number; excludeCanonical?: string };
         return { ok: true, matches: await matchLibrary(m.text, m.threshold, m.limit, m.excludeCanonical) };
       }
+      case 'OFFSCREEN_WATCH_FETCH' as never: {
+        const m = msg as unknown as { url: string; mode: string | null; selector?: string; prevText?: string };
+        return await watchFetch(m.url, m.mode, m.selector, m.prevText);
+      }
       default:
         return { ok: false };
     }
@@ -110,6 +114,150 @@ chrome.runtime.onMessage.addListener((msg: OffscreenCommand, _sender, sendRespon
     .catch((e) => sendResponse({ ok: false, error: (e as Error)?.message || String(e) }));
   return true; // async response
 });
+
+// ── Living Bookmarks: fetch + parse (Phase 3) ───────────────────────────────
+// The service worker has no DOMParser — pages are fetched and parsed here.
+// Tier 1: plain fetch. JS-rendered pages that yield nothing get flagged so the
+// background switches them to "checks on visit".
+
+function normalizeForDiff(text: string): string {
+  return text
+    .replace(/\d[\d.,:/-]*/g, '#') // dates, counters, prices — trivial churn
+    .replace(/\s+/g, ' ')
+    .trim()
+    .toLowerCase();
+}
+
+// Jaccard over 3-word shingles — cheap, order-tolerant similarity.
+function shingleSimilarity(a: string, b: string): number {
+  const shingles = (t: string) => {
+    const words = t.split(' ');
+    const set = new Set<string>();
+    for (let i = 0; i < words.length - 2; i++) set.add(`${words[i]} ${words[i + 1]} ${words[i + 2]}`);
+    return set;
+  };
+  const sa = shingles(a);
+  const sb = shingles(b);
+  if (!sa.size && !sb.size) return 1;
+  let inter = 0;
+  for (const s of sa) if (sb.has(s)) inter++;
+  return inter / (sa.size + sb.size - inter || 1);
+}
+
+// Compact human diff: the first few lines that appear/disappear.
+function compactDiff(prev: string, next: string): string {
+  const pl = new Set(prev.split(/(?<=[.!?])\s+/).map((s) => s.trim()));
+  const added = next
+    .split(/(?<=[.!?])\s+/)
+    .map((s) => s.trim())
+    .filter((s) => s.length > 20 && !pl.has(s))
+    .slice(0, 3);
+  return added.length ? `New: ${added.join(' · ')}` : 'Content changed';
+}
+
+// Readability-lite: main/article text without nav/script noise.
+function extractMainText(doc: Document): string {
+  doc.querySelectorAll('script,style,nav,header,footer,aside,noscript,svg').forEach((el) => el.remove());
+  const root =
+    doc.querySelector('article, main, [role="main"], #content, .content, .post, .article') ?? doc.body;
+  return (root?.textContent ?? '').replace(/\s+/g, ' ').trim().slice(0, 60_000);
+}
+
+// Price extraction order (brief 3.2): JSON-LD schema.org Product → og/meta
+// price tags → user-taught CSS selector.
+function extractPrice(doc: Document, selector?: string): { price?: number; raw?: string } {
+  const parseNum = (v: unknown): number | undefined => {
+    if (v == null) return undefined;
+    const n = Number(String(v).replace(/[^\d.]/g, ''));
+    return Number.isFinite(n) && n > 0 ? n : undefined;
+  };
+  // 1. JSON-LD
+  for (const script of doc.querySelectorAll('script[type="application/ld+json"]')) {
+    try {
+      const data = JSON.parse(script.textContent ?? '');
+      const nodes = Array.isArray(data) ? data : data['@graph'] ?? [data];
+      for (const node of nodes) {
+        const type = String(node?.['@type'] ?? '');
+        if (!/Product|Offer/i.test(type)) continue;
+        const offers = node.offers ?? node;
+        const list = Array.isArray(offers) ? offers : [offers];
+        for (const o of list) {
+          const price = parseNum(o?.price ?? o?.lowPrice ?? o?.highPrice ?? o?.priceSpecification?.price);
+          if (price != null) return { price, raw: `${o?.priceCurrency ?? ''} ${price}`.trim() };
+        }
+      }
+    } catch {
+      /* malformed JSON-LD is everywhere */
+    }
+  }
+  // 2. Meta tags
+  const meta =
+    doc.querySelector('meta[property="product:price:amount"], meta[property="og:price:amount"], meta[itemprop="price"]')?.getAttribute('content') ??
+    doc.querySelector('[itemprop="price"]')?.getAttribute('content');
+  const metaPrice = parseNum(meta);
+  if (metaPrice != null) return { price: metaPrice, raw: String(meta) };
+  // 3. User-taught selector
+  if (selector) {
+    const el = doc.querySelector(selector);
+    const raw = el?.textContent?.trim();
+    const price = parseNum(raw?.match(/[\d.,]+/)?.[0]);
+    if (price != null) return { price, raw };
+  }
+  return {};
+}
+
+function extractAvailability(doc: Document, selector?: string): boolean | undefined {
+  if (selector) {
+    const el = doc.querySelector(selector);
+    if (el) return !/out of stock|sold out|unavailable/i.test(el.textContent ?? '');
+  }
+  // JSON-LD availability first, then common text patterns.
+  const html = doc.documentElement.outerHTML;
+  if (/schema\.org\/(InStock|InStoreOnly|OnlineOnly)/i.test(html)) return true;
+  if (/schema\.org\/(OutOfStock|SoldOut|Discontinued)/i.test(html)) return false;
+  const body = doc.body?.textContent ?? '';
+  if (/out of stock|sold out|currently unavailable|niet op voorraad/i.test(body)) return false;
+  if (/add to cart|buy now|in stock|add to bag/i.test(body)) return true;
+  return undefined;
+}
+
+async function watchFetch(url: string, mode: string | null, selector?: string, prevText?: string) {
+  let res: Response;
+  try {
+    res = await fetch(url, { redirect: 'follow', credentials: 'omit' });
+  } catch (e) {
+    return { ok: false, error: String((e as Error)?.message ?? e) };
+  }
+  if (!res.ok) return { ok: false, httpStatus: res.status };
+  const html = await res.text();
+  const doc = new DOMParser().parseFromString(html, 'text/html');
+  const mainText = extractMainText(doc);
+  const looksJsRendered = mainText.length < 200; // empty shell → needs a real DOM
+
+  const out: Record<string, unknown> = { ok: true, httpStatus: res.status, looksJsRendered };
+
+  if (mode === 'price') {
+    const { price, raw } = extractPrice(doc, selector);
+    out.price = price;
+    out.priceRaw = raw;
+  } else if (mode === 'content') {
+    if (selector) {
+      const el = doc.querySelector(selector);
+      out.selectorFound = Boolean(el);
+      out.selectorValue = el?.textContent?.replace(/\s+/g, ' ').trim().slice(0, 500);
+    } else {
+      const normalized = normalizeForDiff(mainText);
+      out.text = normalized;
+      if (prevText) {
+        out.similarity = shingleSimilarity(prevText, normalized);
+        out.diff = compactDiff(prevText, normalized);
+      }
+    }
+  } else if (mode === 'availability') {
+    out.inStock = extractAvailability(doc, selector);
+  }
+  return out;
+}
 
 // System audio comes with the capture stream; the microphone is a separate
 // getUserMedia stream. When both are on, mix them through WebAudio into one

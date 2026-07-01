@@ -5,6 +5,7 @@ import { useEscape } from '@/hooks/useEscape';
 import { TagInput } from './TagInput';
 import { Icon } from './Icon';
 import { IconPicker } from './IconPicker';
+import { WatchDialog } from './WatchDialog';
 import { useToast } from './Toast';
 
 interface Props {
@@ -28,6 +29,7 @@ export function EditDialog({ bookmark, collections, allTags, onClose, onSaved }:
   const [favorite, setFavorite] = useState(Boolean(bookmark.favorite));
   const [pinned, setPinned] = useState(Boolean(bookmark.pinned));
   const [busy, setBusy] = useState(false);
+  const [watching, setWatching] = useState(false);
   useEscape(onClose);
 
   async function save() {
@@ -146,13 +148,18 @@ export function EditDialog({ bookmark, collections, allTags, onClose, onSaved }:
           </label>
         </div>
 
-        <div className="flex justify-end gap-2 border-t border-line p-3">
+        <div className="flex items-center gap-2 border-t border-line p-3">
+          <button className="btn-outline" onClick={() => setWatching(true)} title="Price drops, content changes, back-in-stock alerts">
+            👁 Watch
+          </button>
+          <div className="flex-1" />
           <button className="btn-ghost" onClick={onClose}>Cancel</button>
           <button className="btn-primary" onClick={save} disabled={busy}>
             {busy ? 'Saving…' : 'Save changes'}
           </button>
         </div>
       </div>
+      {watching && <WatchDialog saveId={bookmark.id} onClose={() => setWatching(false)} />}
     </div>
   );
 }

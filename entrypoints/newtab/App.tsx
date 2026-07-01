@@ -9,6 +9,7 @@ import { LoginForm } from '@/components/LoginForm';
 import { AddDialog } from '@/components/AddDialog';
 import { AppCatalog } from '@/components/AppCatalog';
 import { CaptureMenu } from '@/components/CaptureMenu';
+import { WatchingStrip } from '@/components/WatchingStrip';
 import { EditDialog } from '@/components/EditDialog';
 import { Favicon } from '@/components/Favicon';
 import { Icon } from '@/components/Icon';
@@ -643,6 +644,8 @@ export default function App() {
             </div>
           </div>
         )}
+
+        {results === null && !minimal && <WatchingStrip panelCls={panelCls} labelCls={labelCls} />}
       </main>
 
       {/* Folder popup — Atlas-style: the collection expands into a dialog. */}

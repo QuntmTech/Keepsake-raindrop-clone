@@ -19,6 +19,7 @@ import { searchBookmarks } from '@/lib/bookmarks';
 import { agoLabel, autofileSave, findDuplicate, undoFiling, type FiledResult } from '@/lib/autofile';
 import { processQueueTick, scheduleQueue, QUEUE_ALARM } from '@/lib/aiQueue';
 import { matchPage, recallAllowed, type RecallResult } from '@/lib/recall';
+import { checkOnVisit, scheduleWatchAlarm, startWatch, stopWatch, watchTick, WATCH_ALARM, type WatchConfig } from '@/lib/watch';
 import { storage } from 'wxt/utils/storage';
 
 // The background "service worker" is event-driven and can be killed at any time by Chrome.
@@ -31,6 +32,7 @@ export default defineBackground(() => {
     await applyActionBehavior(settings.primarySurface);
     await flushQueue().catch(() => {});
     scheduleQueue();
+    scheduleWatchAlarm();
     await runMigration();
   });
 
@@ -39,12 +41,19 @@ export default defineBackground(() => {
     await applyActionBehavior(settings.primarySurface);
     await flushQueue().catch(() => {});
     scheduleQueue();
+    scheduleWatchAlarm();
     await runMigration();
   });
 
-  // Batch AI queue: embeds + files anything the instant save path missed.
-  browser.alarms?.onAlarm.addListener((alarm) => {
+  // Batch AI queue + Living Bookmarks scheduler. Alarms are re-registered on
+  // install/startup, so watches survive browser restarts.
+  browser.alarms?.onAlarm.addListener(async (alarm) => {
     if (alarm.name === QUEUE_ALARM) processQueueTick().catch(() => {});
+    if (alarm.name === WATCH_ALARM) {
+      // The watch fetch/parse runs in the offscreen document — make sure it exists.
+      await ensureOffscreenDocument().catch(() => {});
+      watchTick().catch(() => {});
+    }
   });
 
   // "Filed: …" notification actions (buttons: Undo / View).
@@ -106,6 +115,8 @@ export default defineBackground(() => {
   browser.webNavigation?.onCompleted.addListener((details) => {
     if (details.frameId !== 0) return;
     runRecall(details.tabId, details.url).catch(() => {});
+    // JS-rendered watched pages re-check from the live DOM on visit.
+    checkOnVisit(details.tabId, details.url).catch(() => {});
   });
   browser.tabs.onRemoved.addListener((tabId) => {
     recallCache.getValue().then((cache) => {
@@ -205,6 +216,33 @@ async function handleMessage(msg: Message): Promise<unknown> {
       }
       const cache = await recallCache.getValue();
       return { ok: true, result: tabId != null ? cache[tabId] ?? null : null };
+    }
+
+    // ---- Living Bookmarks (Phase 3) ----
+    case 'KS_WATCH_START' as never: {
+      const m = msg as unknown as { saveId: string; cfg: WatchConfig };
+      await startWatch(m.saveId, m.cfg);
+      return { ok: true };
+    }
+    case 'KS_WATCH_STOP' as never: {
+      const m = msg as unknown as { saveId: string };
+      await stopWatch(m.saveId);
+      return { ok: true };
+    }
+    case 'KS_WATCH_CHECK_NOW' as never: {
+      await ensureOffscreenDocument().catch(() => {});
+      await watchTick();
+      return { ok: true };
+    }
+    // Element picker: the user points at the price/section to watch.
+    case 'KS_PICK_SELECTOR' as never: {
+      const [tab] = await browser.tabs.query({ active: true, currentWindow: true });
+      if (!tab?.id) return { ok: false, error: 'No active tab' };
+      const [res] = await browser.scripting.executeScript({
+        target: { tabId: tab.id },
+        func: pickElementOnPage,
+      });
+      return { ok: true, selector: (res?.result as string) || null };
     }
 
     // Popup/dialog saves hand the AI pass to the background (it owns the
@@ -546,6 +584,75 @@ async function applyActionBehavior(surface: UiSurface) {
   } catch {
     /* not available in this browser */
   }
+}
+
+// "Point at the price" picker — injected into the page, fully self-contained.
+// Highlights hovered elements; click resolves a stable CSS selector; Esc cancels.
+function pickElementOnPage(): Promise<string | null> {
+  return new Promise((resolve) => {
+    const overlay = document.createElement('div');
+    overlay.style.cssText =
+      'position:fixed;z-index:2147483647;pointer-events:none;border:2px solid #6366f1;background:rgba(99,102,241,.12);border-radius:4px;transition:all .06s';
+    const hint = document.createElement('div');
+    hint.style.cssText =
+      'position:fixed;z-index:2147483647;top:12px;left:50%;transform:translateX(-50%);background:#111;color:#fff;padding:8px 14px;border-radius:99px;font:13px system-ui;box-shadow:0 4px 14px rgba(0,0,0,.3)';
+    hint.textContent = 'Click the price / section to watch — Esc to cancel';
+    document.body.append(overlay, hint);
+
+    const cssPath = (el: Element): string => {
+      const parts: string[] = [];
+      let node: Element | null = el;
+      while (node && node !== document.body && parts.length < 6) {
+        let part = node.tagName.toLowerCase();
+        if (node.id) {
+          parts.unshift(`#${CSS.escape(node.id)}`);
+          break;
+        }
+        const cls = [...node.classList].filter((c) => /^[a-zA-Z][\w-]*$/.test(c)).slice(0, 2);
+        if (cls.length) part += '.' + cls.map((c) => CSS.escape(c)).join('.');
+        const parent: Element | null = node.parentElement;
+        if (parent) {
+          const same = [...parent.children].filter((c) => c.tagName === node!.tagName);
+          if (same.length > 1) part += `:nth-of-type(${same.indexOf(node) + 1})`;
+        }
+        parts.unshift(part);
+        node = parent;
+      }
+      return parts.join(' > ');
+    };
+
+    let current: Element | null = null;
+    const move = (e: MouseEvent) => {
+      const el = document.elementFromPoint(e.clientX, e.clientY);
+      if (!el || el === overlay || el === hint) return;
+      current = el;
+      const r = el.getBoundingClientRect();
+      overlay.style.left = `${r.left}px`;
+      overlay.style.top = `${r.top}px`;
+      overlay.style.width = `${r.width}px`;
+      overlay.style.height = `${r.height}px`;
+    };
+    const finish = (value: string | null) => {
+      document.removeEventListener('mousemove', move, true);
+      document.removeEventListener('click', click, true);
+      document.removeEventListener('keydown', key, true);
+      overlay.remove();
+      hint.remove();
+      resolve(value);
+    };
+    const click = (e: MouseEvent) => {
+      e.preventDefault();
+      e.stopPropagation();
+      finish(current ? cssPath(current) : null);
+    };
+    const key = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') finish(null);
+    };
+    document.addEventListener('mousemove', move, true);
+    document.addEventListener('click', click, true);
+    document.addEventListener('keydown', key, true);
+    setTimeout(() => finish(null), 60_000); // never hang the message channel
+  });
 }
 
 async function ensureContextMenu() {
