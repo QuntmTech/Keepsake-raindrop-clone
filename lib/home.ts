@@ -42,15 +42,25 @@ function pickDropped(requested: HomeFields, result: Bookmark): HomeFields {
   return dropped;
 }
 
-async function writeOverlay(user: string, id: string, dropped: HomeFields, verified: (keyof HomeFields)[]) {
-  const all = await overlayStore.getValue();
-  const mine = { ...(all[user] ?? {}) };
-  const entry: HomeFields = { ...(mine[id] ?? {}) };
-  for (const k of verified) delete entry[k]; // server round-tripped it — server wins now
-  Object.assign(entry, dropped);
-  if (Object.keys(entry).length) mine[id] = entry;
-  else delete mine[id];
-  await overlayStore.setValue({ ...all, [user]: mine });
+// All overlay mutations are serialized through this chain: drag-drop and
+// bulk operations fire many updateBookmark calls in parallel, and an unlocked
+// read-modify-write here would let last-writer-wins silently drop sibling
+// tiles' pin/sort entries (the exact data this overlay exists to protect).
+let overlayWriteLock: Promise<unknown> = Promise.resolve();
+
+function writeOverlay(user: string, id: string, dropped: HomeFields, verified: (keyof HomeFields)[]) {
+  const run = overlayWriteLock.then(async () => {
+    const all = await overlayStore.getValue();
+    const mine = { ...(all[user] ?? {}) };
+    const entry: HomeFields = { ...(mine[id] ?? {}) };
+    for (const k of verified) delete entry[k]; // server round-tripped it — server wins now
+    Object.assign(entry, dropped);
+    if (Object.keys(entry).length) mine[id] = entry;
+    else delete mine[id];
+    await overlayStore.setValue({ ...all, [user]: mine });
+  });
+  overlayWriteLock = run.catch(() => {}); // a failed write must not poison the chain
+  return run;
 }
 
 // Merge overlay values over freshly-fetched bookmarks. Server values win only

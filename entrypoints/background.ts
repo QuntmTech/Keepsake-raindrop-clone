@@ -15,10 +15,11 @@ import { inferType, safeDomain } from '@/lib/util';
 import { type UiSurface } from '@/lib/types';
 import { migrateToSaves } from '@/lib/save';
 import { saveCaptureToLibrary } from '@/lib/captureSave';
-import { searchBookmarks } from '@/lib/bookmarks';
+import { searchBookmarks, updateBookmark } from '@/lib/bookmarks';
 import { agoLabel, autofileSave, findDuplicate, undoFiling, type FiledResult } from '@/lib/autofile';
 import { processQueueTick, scheduleQueue, QUEUE_ALARM } from '@/lib/aiQueue';
 import { matchPage, recallAllowed, type RecallResult } from '@/lib/recall';
+import { ensureOffscreen } from '@/lib/embedder';
 import { checkOnVisit, scheduleWatchAlarm, startWatch, stopWatch, watchTick, WATCH_ALARM, type WatchConfig } from '@/lib/watch';
 import { storage } from 'wxt/utils/storage';
 
@@ -207,9 +208,8 @@ async function handleMessage(msg: Message): Promise<unknown> {
     }
 
     // Side panel asks for the current tab's Ambient Recall matches.
-    case 'KS_GET_RECALL' as never: {
-      const m = msg as unknown as { tabId?: number };
-      let tabId = m.tabId;
+    case 'KS_GET_RECALL': {
+      let tabId = msg.tabId;
       if (tabId == null) {
         const [tab] = await browser.tabs.query({ active: true, currentWindow: true });
         tabId = tab?.id;
@@ -219,23 +219,16 @@ async function handleMessage(msg: Message): Promise<unknown> {
     }
 
     // ---- Living Bookmarks (Phase 3) ----
-    case 'KS_WATCH_START' as never: {
-      const m = msg as unknown as { saveId: string; cfg: WatchConfig };
-      await startWatch(m.saveId, m.cfg);
+    case 'KS_WATCH_START': {
+      await startWatch(msg.saveId, msg.cfg);
       return { ok: true };
     }
-    case 'KS_WATCH_STOP' as never: {
-      const m = msg as unknown as { saveId: string };
-      await stopWatch(m.saveId);
-      return { ok: true };
-    }
-    case 'KS_WATCH_CHECK_NOW' as never: {
-      await ensureOffscreenDocument().catch(() => {});
-      await watchTick();
+    case 'KS_WATCH_STOP': {
+      await stopWatch(msg.saveId);
       return { ok: true };
     }
     // Element picker: the user points at the price/section to watch.
-    case 'KS_PICK_SELECTOR' as never: {
+    case 'KS_PICK_SELECTOR': {
       const [tab] = await browser.tabs.query({ active: true, currentWindow: true });
       if (!tab?.id) return { ok: false, error: 'No active tab' };
       const [res] = await browser.scripting.executeScript({
@@ -247,9 +240,8 @@ async function handleMessage(msg: Message): Promise<unknown> {
 
     // Popup/dialog saves hand the AI pass to the background (it owns the
     // offscreen embedder and survives the popup closing).
-    case 'KS_AUTOFILE' as never: {
-      const m = msg as unknown as { id: string; tabId?: number };
-      const result = await autofileSave(m.id, { tabId: m.tabId }).catch(() => null);
+    case 'KS_AUTOFILE': {
+      const result = await autofileSave(msg.id, { tabId: msg.tabId }).catch(() => null);
       if (result) await announceFiling(result);
       return { ok: true, result };
     }
@@ -291,9 +283,18 @@ async function handleMessage(msg: Message): Promise<unknown> {
       await startRecording(msg.options);
       return { ok: true };
 
-    case 'KS_STOP_RECORDING':
-      await browser.runtime.sendMessage({ target: 'ks-offscreen', type: 'OFFSCREEN_STOP' });
+    case 'KS_STOP_RECORDING': {
+      const resp = (await browser.runtime
+        .sendMessage({ target: 'ks-offscreen', type: 'OFFSCREEN_STOP' })
+        .catch(() => null)) as { ok?: boolean } | null;
+      if (!resp?.ok) {
+        // The recorder is gone (crashed / never started) — clear the stuck
+        // state instead of pretending the stop worked.
+        await recordingStateStore.setValue(IDLE_RECORDING_STATE);
+        await browser.action.setBadgeText({ text: '' });
+      }
       return { ok: true };
+    }
 
     case 'KS_GET_RECORDING_STATE':
       return await verifiedRecordingState();
@@ -376,16 +377,9 @@ async function captureFullPage(tabId: number): Promise<void> {
   }).catch(() => {});
 }
 
-async function ensureOffscreenDocument(): Promise<void> {
-  // getContexts (not an in-memory flag): survives service-worker restarts.
-  const contexts = await (browser.runtime as any).getContexts({ contextTypes: ['OFFSCREEN_DOCUMENT'] });
-  if (contexts.length > 0) return;
-  await (browser as any).offscreen.createDocument({
-    url: browser.runtime.getURL('/offscreen.html'),
-    reasons: ['USER_MEDIA', 'DISPLAY_MEDIA'],
-    justification: 'Recording the screen/tab so the capture survives the popup closing',
-  });
-}
+// Offscreen creation is shared with the embedder/watcher: lib/embedder.ts
+// exports the single memoized creator (one offscreen document per extension).
+const ensureOffscreenDocument = ensureOffscreen;
 
 async function startRecording(options: RecordOptions): Promise<void> {
   const state = await verifiedRecordingState();
@@ -425,12 +419,20 @@ async function startRecording(options: RecordOptions): Promise<void> {
 }
 
 // Storage says "recording", but is the offscreen recorder actually alive?
-// (It dies on browser restart; don't show a stuck REC state forever.)
+// The offscreen document itself is NOT proof — the embedder/recall/watcher
+// keep one alive constantly — so ask the recorder for its real state.
 async function verifiedRecordingState() {
   const state = await recordingStateStore.getValue();
   if (!state.isRecording) return state;
   const contexts = await (browser.runtime as any).getContexts({ contextTypes: ['OFFSCREEN_DOCUMENT'] });
-  if (contexts.length === 0) {
+  let live = false;
+  if (contexts.length > 0) {
+    const resp = (await browser.runtime
+      .sendMessage({ target: 'ks-offscreen', type: 'OFFSCREEN_GET_STATE' })
+      .catch(() => null)) as { ok?: boolean; recording?: boolean } | null;
+    live = Boolean(resp?.recording);
+  }
+  if (!live) {
     await recordingStateStore.setValue(IDLE_RECORDING_STATE);
     await browser.action.setBadgeText({ text: '' });
     return IDLE_RECORDING_STATE;
@@ -479,10 +481,18 @@ async function saveTab(tab: chrome.tabs.Tab, collection?: string) {
   const settings = await getSettings();
 
   // Dedupe by canonical URL — surface the existing save instead of duplicating.
+  // An explicitly picked folder (Quick Bar / context) still gets honored by
+  // moving the existing save there.
   const dup = await findDuplicate(tab.url).catch(() => undefined);
   if (dup) {
-    await flash('∃', '#6366f1');
-    notify('Already saved', `You saved this ${agoLabel(dup.timestamps.createdAt)}. Open the dashboard to view it.`);
+    if (collection) {
+      await updateBookmark(dup.id, { collection }).catch(() => {});
+      await flash('✓', '#16a34a');
+      notify('Already saved — moved', `You saved this ${agoLabel(dup.timestamps.createdAt)}; it's now in the folder you picked.`);
+    } else {
+      await flash('∃', '#6366f1');
+      notify('Already saved', `You saved this ${agoLabel(dup.timestamps.createdAt)}. Open the dashboard to view it.`);
+    }
     return;
   }
 
@@ -521,9 +531,10 @@ async function saveTab(tab: chrome.tabs.Tab, collection?: string) {
     return;
   }
 
-  // Background AI pass — extract, embed locally, auto-file. Awaited so the
-  // service worker stays alive, but the save above already succeeded.
-  const result = await autofileSave(saved.id, { tabId: tab.id }).catch(() => null);
+  // Background AI pass — embed locally, auto-file. Awaited so the service
+  // worker stays alive, but the save above already succeeded. The metadata
+  // extracted above is passed through so the page isn't re-injected.
+  const result = await autofileSave(saved.id, { tabId: tab.id, meta }).catch(() => null);
   if (result) await announceFiling(result);
 }
 

@@ -11,7 +11,7 @@ import {
 import { enqueueSave } from '@/lib/queue';
 import { send, dataUrlToBlob, type ScreenshotResult, type MetaResult } from '@/lib/messaging';
 import { getSettings } from '@/lib/settings';
-import { aiAvailable, getAiSettings, suggestTags, summarize, suggestCollection, type PageContext } from '@/lib/ai';
+import { aiAvailable, getAiSettings, suggestTags, summarize, type PageContext } from '@/lib/ai';
 import { type Collection } from '@/lib/types';
 import { type PageMeta } from '@/lib/metadata';
 import { TagInput } from './TagInput';
@@ -122,15 +122,8 @@ export function SaveForm({ onSaved }: { onSaved?: () => void }) {
               .catch(() => {}),
           );
         }
-        if (ai.autoCollection && cols.length) {
-          jobs.push(
-            suggestCollection(ctx, cols.map((c) => ({ id: c.id, name: c.name })))
-              .then((id) => {
-                if (id) setCollection((cur) => cur || id);
-              })
-              .catch(() => {}),
-          );
-        }
+        // Collection suggestion removed: filing is owned by the auto-file
+        // pipeline (KS_AUTOFILE after save) — two competing filers would fight.
         Promise.allSettled(jobs).finally(() => setAiBusy(false));
       }
     })();

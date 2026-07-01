@@ -1,6 +1,7 @@
 import { useMemo, useState } from 'react';
 import { APP_CATEGORIES, categoryColor, normUrl, type CatalogApp, type CatalogCategory } from '@/lib/apps';
-import { saveBookmark, updateBookmark, findByUrl, listCollections, createCollection, safeDomain } from '@/lib/bookmarks';
+import { saveBookmark, updateBookmark, listCollections, createCollection, safeDomain } from '@/lib/bookmarks';
+import { findSaveByUrl } from '@/lib/save';
 import { type Bookmark } from '@/lib/types';
 import { useEscape } from '@/hooks/useEscape';
 import { Icon } from './Icon';
@@ -42,14 +43,21 @@ export function AppCatalog({ pinnedUrls, onClose, onCustom, onChanged }: Props) 
 
   const isAdded = (a: CatalogApp) => pinnedUrls.has(normUrl(a.url)) || justAdded.has(a.url);
 
-  // Pin one catalog app to Home. If the URL is already in the vault we pin the
-  // existing bookmark instead of duplicating it; otherwise we create a
-  // home-only tile. Resolves only when the pin durably stuck (server or
-  // overlay), so the success toast is truthful.
+  // Pin one catalog app to Home. If the URL is already saved (matched by
+  // canonical URL, so trailing slashes/www don't fork duplicates) we pin the
+  // existing record instead of duplicating it — WITHOUT reorganizing it: a
+  // library bookmark keeps its collection and favorite flag; only tiles that
+  // have no collection yet adopt the cluster collection. Resolves only when
+  // the pin durably stuck (server or overlay), so the success toast is truthful.
   async function pinApp(a: CatalogApp, extra: Partial<Bookmark> = {}): Promise<void> {
-    const existing = await findByUrl(a.url);
+    const dup = await findSaveByUrl(a.url, { homeOnly: 'include' });
+    const existing = dup ? { id: dup.id, collection: dup.organization.collectionId } : null;
     const bm = existing
-      ? await updateBookmark(existing.id, { pinned: true, ...extra })
+      ? await updateBookmark(existing.id, {
+          pinned: true,
+          ...(extra.sort !== undefined ? { sort: extra.sort } : {}),
+          ...(extra.collection && !existing.collection ? { collection: extra.collection } : {}),
+        })
       : await saveBookmark({
           url: a.url,
           title: a.name,
@@ -58,7 +66,6 @@ export function AppCatalog({ pinnedUrls, onClose, onCustom, onChanged }: Props) 
           type: 'link',
           pinned: true,
           homeOnly: true,
-          favorite: true, // lands in the Favorites shelf for one-click access
           ...extra,
         });
     if (!bm.pinned) throw new Error('Pin did not persist');
@@ -96,8 +103,7 @@ export function AppCatalog({ pinnedUrls, onClose, onCustom, onChanged }: Props) 
           skipped++;
           continue;
         }
-        // favorite: false so tiles land on the collection's own shelf.
-        await pinApp(a, { favorite: false, collection: col.id, sort: i });
+        await pinApp(a, { collection: col.id, sort: i });
         added++;
       }
       onChanged();

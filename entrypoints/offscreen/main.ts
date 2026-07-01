@@ -53,8 +53,31 @@ function dot(a: number[], b: number[]): number {
   return s;
 }
 
-// Semantic match: embed the query, scan the library's vectors straight from
-// IndexedDB (same origin as every other extension context). Local-only.
+// Semantic match: embed the query, scan the library's vectors. Vectors are
+// held in a compact in-memory cache (id + canonical + Float32Array) so a
+// navigation never deserializes full Save rows (fullText etc.) — refreshed
+// on a short TTL since this document is long-lived. Local-only.
+interface VecEntry {
+  id: string;
+  canonicalUrl: string;
+  vec: Float32Array;
+}
+let vecCache: { ts: number; entries: VecEntry[] } | null = null;
+const VEC_TTL = 30_000;
+
+async function libraryVectors(): Promise<VecEntry[]> {
+  if (vecCache && Date.now() - vecCache.ts < VEC_TTL) return vecCache.entries;
+  const entries: VecEntry[] = [];
+  await db.saves.each((s) => {
+    // Launcher tiles are not library content — never surface them as recall.
+    if (s.organization.homeOnly) return;
+    if (!s.ai.embedding || s.ai.embedding.length === 0) return;
+    entries.push({ id: s.id, canonicalUrl: s.canonicalUrl, vec: Float32Array.from(s.ai.embedding) });
+  });
+  vecCache = { ts: Date.now(), entries };
+  return entries;
+}
+
 async function matchLibrary(
   text: string,
   threshold: number,
@@ -62,13 +85,11 @@ async function matchLibrary(
   excludeCanonical?: string,
 ): Promise<Array<{ id: string; score: number }>> {
   const [q] = await embed([text]);
-  const rows = await db.saves.toArray();
   const scored: Array<{ id: string; score: number }> = [];
-  for (const s of rows) {
-    if (!s.ai.embedding || s.ai.embedding.length === 0) continue;
-    if (excludeCanonical && s.canonicalUrl === excludeCanonical) continue;
-    const score = dot(q, s.ai.embedding);
-    if (score >= threshold) scored.push({ id: s.id, score });
+  for (const e of await libraryVectors()) {
+    if (excludeCanonical && e.canonicalUrl === excludeCanonical) continue;
+    const score = dot(q, e.vec as unknown as number[]);
+    if (score >= threshold) scored.push({ id: e.id, score });
   }
   scored.sort((a, b) => b.score - a.score);
   return scored.slice(0, limit);
@@ -94,6 +115,10 @@ chrome.runtime.onMessage.addListener((msg: OffscreenCommand, _sender, sendRespon
       case 'OFFSCREEN_STOP':
         await stopRecording();
         return { ok: true };
+      case 'OFFSCREEN_GET_STATE' as never:
+        // The recorder's real state — the background can't infer it from the
+        // document's existence anymore (the embedder keeps this doc alive).
+        return { ok: true, recording: Boolean(mediaRecorder && mediaRecorder.state !== 'inactive') };
       case 'OFFSCREEN_EMBED' as never: {
         const m = msg as unknown as { texts: string[] };
         return { ok: true, vectors: await embed(m.texts) };
@@ -224,7 +249,8 @@ function extractAvailability(doc: Document, selector?: string): boolean | undefi
 async function watchFetch(url: string, mode: string | null, selector?: string, prevText?: string) {
   let res: Response;
   try {
-    res = await fetch(url, { redirect: 'follow', credentials: 'omit' });
+    // Hard timeout: a tarpit host must never stall the watch scheduler.
+    res = await fetch(url, { redirect: 'follow', credentials: 'omit', signal: AbortSignal.timeout(20_000) });
   } catch (e) {
     return { ok: false, error: String((e as Error)?.message ?? e) };
   }

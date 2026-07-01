@@ -11,6 +11,7 @@ export interface LlmRequest {
   system?: string;
   prompt: string;
   maxTokens?: number;
+  tier?: 'fast' | 'smart'; // fast = tagging/filing (default); smart = ask-your-library
 }
 
 // Sensible default models per provider (used when the stored model id belongs
@@ -111,20 +112,43 @@ export async function llmComplete(req: LlmRequest): Promise<string> {
   const s = await getAiSettings();
   if (!s.enabled || !s.apiKey.trim()) throw new Error('No API key configured');
   const provider = (s.provider ?? 'anthropic') as LlmProvider;
-  return ADAPTERS[provider](s.apiKey.trim(), modelFor(provider, s.fastModel), req);
+  const stored = req.tier === 'smart' ? s.smartModel : s.fastModel;
+  return ADAPTERS[provider](s.apiKey.trim(), modelFor(provider, stored), req);
 }
 
-// Pull the first JSON value out of a model response (handles ```json fences).
+// Pull the first JSON value out of a model response. Handles ```json fences
+// AND trailing prose after the JSON ("{"a":1} Hope this helps!") by scanning
+// for the balanced end of the first JSON value instead of parsing to EOF.
 export function extractJson<T>(text: string): T | null {
   const fenced = text.match(/```(?:json)?\s*([\s\S]*?)```/);
   const raw = fenced ? fenced[1] : text;
   const start = raw.search(/[[{]/);
   if (start < 0) return null;
-  try {
-    return JSON.parse(raw.slice(start)) as T;
-  } catch {
-    return null;
+  let depth = 0;
+  let inStr = false;
+  let esc = false;
+  for (let i = start; i < raw.length; i++) {
+    const ch = raw[i];
+    if (inStr) {
+      if (esc) esc = false;
+      else if (ch === '\\') esc = true;
+      else if (ch === '"') inStr = false;
+      continue;
+    }
+    if (ch === '"') inStr = true;
+    else if (ch === '{' || ch === '[') depth++;
+    else if (ch === '}' || ch === ']') {
+      depth--;
+      if (depth === 0) {
+        try {
+          return JSON.parse(raw.slice(start, i + 1)) as T;
+        } catch {
+          return null;
+        }
+      }
+    }
   }
+  return null;
 }
 
 // ── Chrome built-in AI (Gemini Nano) ────────────────────────────────────────

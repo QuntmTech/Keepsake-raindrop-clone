@@ -83,3 +83,13 @@ export function nowIso(): string {
 export function escFilter(s: string): string {
   return s.replace(/"/g, '\\"');
 }
+
+// Human "saved N ago" label shared by notifications and recall UI.
+export function agoLabel(iso: string): string {
+  const days = Math.max(0, Math.floor((Date.now() - new Date(iso).getTime()) / 86_400_000));
+  if (days === 0) return 'today';
+  if (days === 1) return 'yesterday';
+  if (days < 30) return `${days} days ago`;
+  if (days < 365) return `${Math.round(days / 30)} month${days >= 60 ? 's' : ''} ago`;
+  return `${Math.round(days / 365)} year${days >= 730 ? 's' : ''} ago`;
+}

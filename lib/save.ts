@@ -43,6 +43,7 @@ export interface Save {
     collectionId?: string;
     tags: string[];
     pinned: boolean;
+    homeOnly?: boolean; // Home launcher tile — excluded from dedupe/recall/auto-filing
     sortOrder?: number;
   };
   monitoring: {
@@ -174,12 +175,16 @@ export async function deleteSave(id: string): Promise<void> {
   });
 }
 
-export async function findSaveByUrl(url: string): Promise<Save | undefined> {
-  return db.saves.where('canonicalUrl').equals(canonicalUrl(url)).first();
-}
-
-export async function allSaves(): Promise<Save[]> {
-  return db.saves.toArray();
+// Home launcher tiles are not library content: dedupe, recall, and imports
+// must not treat them as "already saved". Pass homeOnly:'include' only where
+// tiles genuinely count (e.g. the catalog's own re-add check).
+export async function findSaveByUrl(
+  url: string,
+  opts: { homeOnly?: 'include' } = {},
+): Promise<Save | undefined> {
+  const rows = await db.saves.where('canonicalUrl').equals(canonicalUrl(url)).toArray();
+  if (opts.homeOnly === 'include') return rows[0];
+  return rows.find((s) => !s.organization.homeOnly);
 }
 
 export async function putBlob(saveId: string, kind: SaveBlob['kind'], blob: Blob): Promise<string> {
@@ -188,9 +193,6 @@ export async function putBlob(saveId: string, kind: SaveBlob['kind'], blob: Blob
   return id;
 }
 
-export async function getBlob(ref: string): Promise<Blob | undefined> {
-  return (await db.blobs.get(ref))?.blob;
-}
 
 // Mirror a vault bookmark into its sidecar Save row. Never loses AI data:
 // existing content/ai/monitoring/archive fields are preserved on update.
@@ -221,6 +223,7 @@ export function saveFromBookmark(b: Bookmark, existing?: Save): Save {
       collectionId: b.collection,
       tags: b.tags ?? [],
       pinned: Boolean(b.pinned),
+      homeOnly: Boolean(b.homeOnly),
       sortOrder: b.sort,
     },
     timestamps: {
@@ -231,14 +234,17 @@ export function saveFromBookmark(b: Bookmark, existing?: Save): Save {
   };
 }
 
-// Fire-and-forget sidecar upsert used by the saveBookmark facade — a failure
-// here must never break the user's save (the queue reconciles later).
+// Sidecar upsert used by the saveBookmark facade. Runs the read-merge-write
+// inside one transaction so it can never interleave with patchSave and revert
+// freshly written ai fields. A failure must never break the user's save.
 export async function upsertSidecar(b: Bookmark): Promise<void> {
   try {
-    const existing = await db.saves.get(b.id);
-    await db.saves.put(saveFromBookmark(b, existing));
+    await db.transaction('rw', db.saves, async () => {
+      const existing = await db.saves.get(b.id);
+      await db.saves.put(saveFromBookmark(b, existing));
+    });
   } catch {
-    /* reconciled by the batch queue */
+    /* reconciled by the startup sweep */
   }
 }
 
@@ -250,7 +256,14 @@ export async function upsertSidecar(b: Bookmark): Promise<void> {
 const MIGRATED_KEY = 'migrated_saves_v820';
 const backupDone = storage.defineItem<boolean>('local:backup_v820_done', { fallback: false });
 
-export async function migrateToSaves(fetchAll: () => Promise<Bookmark[]>): Promise<number> {
+export async function migrateToSaves(
+  fetchAll: () => Promise<Bookmark[]>,
+  // Startup sweeps mark newly mirrored rows as user-filed (pre-existing vault
+  // organization is sacred); the import escape hatch passes false so its rows
+  // flow through the AI queue.
+  opts: { respectExisting?: boolean } = {},
+): Promise<number> {
+  const respectExisting = opts.respectExisting ?? true;
   // 1. One-time backup of the legacy local stores (local-mode data + caches).
   if (!(await backupDone.getValue())) {
     try {
@@ -264,7 +277,9 @@ export async function migrateToSaves(fetchAll: () => Promise<Bookmark[]>): Promi
     }
   }
 
-  // 2. Mirror every vault bookmark that doesn't have a Save row yet.
+  // 2. Reconcile the sidecar with the vault: create missing rows, refresh the
+  // mirrored core/organization fields of existing ones (edits made on another
+  // device arrive here), and drop link rows whose bookmark no longer exists.
   let created = 0;
   try {
     const bookmarks = await fetchAll();
@@ -274,11 +289,27 @@ export async function migrateToSaves(fetchAll: () => Promise<Bookmark[]>): Promi
     bookmarks.forEach((b, i) => {
       const row = existing[i];
       if (!row) {
-        rows.push(saveFromBookmark(b));
+        const fresh = saveFromBookmark(b);
+        if (respectExisting) fresh.ai.filedBy = 'user';
+        rows.push(fresh);
         created++;
+      } else {
+        rows.push(saveFromBookmark(b, row)); // refresh mirror, keep ai/monitoring
       }
     });
     if (rows.length) await db.saves.bulkPut(rows);
+
+    // Deletions: only safe when the fetch plausibly covered the whole vault.
+    if (bookmarks.length < 2000) {
+      const alive = new Set(ids);
+      const orphans = await db.saves
+        .filter((s) => s.type === 'link' && !alive.has(s.id))
+        .primaryKeys();
+      if (orphans.length) {
+        await db.saves.bulkDelete(orphans);
+        await db.blobs.where('saveId').anyOf(orphans).delete();
+      }
+    }
     await db.meta.put({ key: MIGRATED_KEY, value: nowIso() });
   } catch {
     /* vault unreachable (offline/logged out) — next startup retries */

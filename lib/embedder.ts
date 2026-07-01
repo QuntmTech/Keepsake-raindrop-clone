@@ -6,19 +6,34 @@
 //
 // Everything here is 100% local: no text ever leaves the device.
 
-export const EMBED_DIM = 384;
+// THE single offscreen-document creator for the whole extension (recorder,
+// embedder, watch fetcher all share one document — Chrome allows only one).
+// In-flight memoization + tolerating the "already exists" error close the
+// check-then-create race between concurrent callers.
+let creating: Promise<void> | null = null;
 
-async function ensureOffscreen(): Promise<void> {
-  const contexts = await (browser.runtime as any).getContexts({ contextTypes: ['OFFSCREEN_DOCUMENT'] });
-  if (contexts.length > 0) return;
-  await (browser as any).offscreen.createDocument({
-    url: browser.runtime.getURL('/offscreen.html'),
-    // One offscreen document per extension: it hosts BOTH the recorder and the
-    // embedding model, so the union of reasons is declared here.
-    reasons: ['USER_MEDIA', 'DISPLAY_MEDIA', 'WORKERS'],
-    justification:
-      'Runs the local embedding model for auto-filing and Ambient Recall, and screen recording so captures survive popup close',
-  });
+export async function ensureOffscreen(): Promise<void> {
+  if (creating) return creating;
+  creating = (async () => {
+    const contexts = await (browser.runtime as any).getContexts({ contextTypes: ['OFFSCREEN_DOCUMENT'] });
+    if (contexts.length > 0) return;
+    try {
+      await (browser as any).offscreen.createDocument({
+        url: browser.runtime.getURL('/offscreen.html'),
+        reasons: ['USER_MEDIA', 'DISPLAY_MEDIA', 'WORKERS'],
+        justification:
+          'Runs the local embedding model for auto-filing and Ambient Recall, screen recording so captures survive popup close, and page fetches for watched bookmarks',
+      });
+    } catch (e) {
+      // A concurrent caller (other module / other SW event) won the race.
+      if (!String(e).includes('single offscreen')) throw e;
+    }
+  })();
+  try {
+    await creating;
+  } finally {
+    creating = null;
+  }
 }
 
 async function callOffscreen<T>(msg: Record<string, unknown>, timeoutMs = 120_000): Promise<T> {
@@ -54,11 +69,4 @@ export async function semanticMatch(
     excludeCanonical: opts.excludeCanonical,
   });
   return resp.matches;
-}
-
-export function cosine(a: number[], b: number[]): number {
-  let dot = 0;
-  const n = Math.min(a.length, b.length);
-  for (let i = 0; i < n; i++) dot += a[i] * b[i];
-  return dot; // vectors are unit-normalized at embed time
 }

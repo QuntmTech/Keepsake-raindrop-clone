@@ -42,7 +42,7 @@ export default function App() {
   const [all, setAll] = useState<Bookmark[]>([]);
   const [dropKey, setDropKey] = useState<string | null>(null);
   const [draggingTile, setDraggingTile] = useState<string | null>(null);
-  const [addTo, setAddTo] = useState<{ favorite?: boolean; collection?: string } | null>(null);
+  const [addTo, setAddTo] = useState<{ collection?: string } | null>(null);
   const [editing, setEditing] = useState<Bookmark | null>(null);
   const [renaming, setRenaming] = useState<string | null>(null);
   const [openFolder, setOpenFolder] = useState<string | null>(null);
@@ -180,7 +180,9 @@ export default function App() {
   // Drop a tile into a container ('loose' grid or a collection id), optionally
   // before a specific tile. Paints the result immediately, then persists.
   async function dropTile(bmId: string, target: string, beforeId?: string) {
-    const list = (target === 'loose' ? looseTiles : folderItems(target)).map((b) => b.id).filter((id) => id !== bmId);
+    const container = target === 'loose' ? looseTiles : folderItems(target);
+    const bySort = new Map(container.map((b) => [b.id, b.sort]));
+    const list = container.map((b) => b.id).filter((id) => id !== bmId);
     let at = beforeId ? list.indexOf(beforeId) : list.length;
     if (at < 0) at = list.length;
     list.splice(at, 0, bmId);
@@ -196,8 +198,16 @@ export default function App() {
       }),
     );
     try {
+      // Only persist rows whose position actually changed — one drag must not
+      // fan out into a PATCH per tile in the container.
       await Promise.all(
-        list.map((id, i) => updateBookmark(id, id === bmId ? { ...membership, sort: i } : { sort: i })),
+        list
+          .map((id, i) => {
+            if (id === bmId) return updateBookmark(id, { ...membership, sort: i });
+            if (bySort.get(id) === i) return null;
+            return updateBookmark(id, { sort: i });
+          })
+          .filter((p): p is Promise<Bookmark> => p !== null),
       );
     } catch {
       toast('Could not save the new order', 'error');
@@ -317,10 +327,15 @@ export default function App() {
 
   // A single app tile: icon square + label, Atlas-sized. `statik` disables
   // drag & drop (used in search results, where reordering has no meaning).
-  const Tile = ({ b, container, statik }: { b: Bookmark; container: string; statik?: boolean }) => {
+  // Render FUNCTIONS, not nested components: a component type defined inside
+  // App would get a new identity every render, forcing React to unmount and
+  // remount every tile (killing drag state and flashing icons on each
+  // clock tick / keystroke).
+  const renderTile = (b: Bookmark, container: string, statik?: boolean) => {
     const dk = `tile:${container}:${b.id}`;
     return (
       <div
+        key={b.id}
         className={`group relative flex w-[92px] cursor-pointer flex-col items-center gap-1.5 ${
           draggingTile === b.id ? 'opacity-40' : ''
         }`}
@@ -390,10 +405,11 @@ export default function App() {
 
   // A folder tile: mini 2×2 icon preview. Click opens the folder popup;
   // drop a tile on it to file the tile into the collection.
-  const FolderTile = ({ col, items }: { col: Collection; items: Bookmark[] }) => {
+  const renderFolder = (col: Collection, items: Bookmark[]) => {
     const dk = `folder:${col.id}`;
     return (
       <div
+        key={col.id}
         className="group relative flex w-[92px] cursor-pointer flex-col items-center gap-1.5"
         draggable
         onClick={() => setOpenFolder(col.id)}
@@ -565,9 +581,7 @@ export default function App() {
               Results for “{query}”
             </h2>
             <div className="flex flex-wrap items-start justify-center gap-x-2 gap-y-5">
-              {results.map((b) => (
-                <Tile key={b.id} b={b} container="results" statik />
-              ))}
+              {results.map((b) => renderTile(b, 'results', true))}
               {results.length === 0 && (
                 <p className={`py-6 text-center text-sm ${onWall ? 'text-white/80' : 'text-ink-faint'}`}>
                   Nothing saved — press Enter to search the web.
@@ -624,12 +638,8 @@ export default function App() {
               if (id) dropTile(id, 'loose');
             }}
           >
-            {looseTiles.map((b) => (
-              <Tile key={b.id} b={b} container="loose" />
-            ))}
-            {folders.map((f) => (
-              <FolderTile key={f.col.id} col={f.col} items={f.items} />
-            ))}
+            {looseTiles.map((b) => renderTile(b, 'loose'))}
+            {folders.map((f) => renderFolder(f.col, f.items))}
             <div className="flex w-[92px] flex-col items-center gap-1.5">
               <button
                 className={`grid h-16 w-16 place-items-center rounded-2xl border border-dashed transition hover:-translate-y-0.5 hover:border-brand/60 hover:text-brand ${
@@ -716,9 +726,7 @@ export default function App() {
             </div>
 
             <div className="mt-6 flex flex-wrap items-start justify-center gap-x-2 gap-y-5 overflow-y-auto">
-              {openFolderData.items.map((b) => (
-                <Tile key={b.id} b={b} container={openFolderData.col!.id} />
-              ))}
+              {openFolderData.items.map((b) => renderTile(b, openFolderData.col!.id))}
               {openFolderData.items.length === 0 && (
                 <p className="py-8 text-center text-sm text-ink-faint">
                   This folder is empty — it will disappear from Home until you add something.
@@ -757,7 +765,6 @@ export default function App() {
           collections={c.collections}
           allTags={allTags}
           defaultCollection={addTo.collection}
-          favorite={addTo.favorite}
           pinned
           onClose={() => setAddTo(null)}
           onAdded={() => {

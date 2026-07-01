@@ -3,7 +3,7 @@ import { createCollection, listCollections, updateBookmark } from './bookmarks';
 import { embedTexts } from './embedder';
 import { builtinSummarize, extractJson, llmAvailable, llmComplete } from './llm';
 import { extractPageMeta, type PageMeta } from './metadata';
-import { db, getSave, patchSave, putBlob, findSaveByUrl, type Save } from './save';
+import { canonicalUrl, db, getSave, patchSave, putBlob, findSaveByUrl, type Save } from './save';
 import { nowIso } from './util';
 
 // Zero-organization auto-filing (Phase 1). Runs in the background worker.
@@ -46,14 +46,7 @@ export async function findDuplicate(url: string): Promise<Save | undefined> {
   return findSaveByUrl(url);
 }
 
-export function agoLabel(iso: string): string {
-  const days = Math.max(0, Math.floor((Date.now() - new Date(iso).getTime()) / 86_400_000));
-  if (days === 0) return 'today';
-  if (days === 1) return 'yesterday';
-  if (days < 30) return `${days} days ago`;
-  if (days < 365) return `${Math.round(days / 30)} month${days >= 60 ? 's' : ''} ago`;
-  return `${Math.round(days / 365)} year${days >= 730 ? 's' : ''} ago`;
-}
+export { agoLabel } from './util';
 
 // Extract the page's full text via the injected extractor (activeTab/scripting).
 async function extractContent(tabId: number): Promise<PageMeta | null> {
@@ -71,6 +64,9 @@ async function snapshotTab(tabId: number, saveId: string): Promise<void> {
   try {
     const granted = await browser.permissions.contains({ permissions: ['pageCapture'] });
     if (!granted || !browser.pageCapture) return;
+    // Never snapshot a tab that navigated away from the saved URL.
+    const [tab, save] = await Promise.all([browser.tabs.get(tabId).catch(() => null), getSave(saveId)]);
+    if (!tab?.url || !save || canonicalUrl(tab.url) !== save.canonicalUrl) return;
     const blob: Blob = await new Promise((resolve, reject) =>
       browser.pageCapture.saveAsMHTML({ tabId }, (b?: Blob) =>
         b ? resolve(b) : reject(new Error(browser.runtime.lastError?.message || 'no blob')),
@@ -132,44 +128,49 @@ async function decideFiling(save: Save): Promise<FilingDecision | null> {
 }
 
 // The main pipeline. Never throws — every failure degrades to a queued state.
-export async function autofileSave(saveId: string, opts: { tabId?: number } = {}): Promise<FiledResult> {
+export async function autofileSave(saveId: string, opts: { tabId?: number; meta?: PageMeta | null } = {}): Promise<FiledResult> {
   const fallback: FiledResult = { saveId, status: 'unprocessed', tags: [] };
   const save = await getSave(saveId);
   if (!save || save.type !== 'link') return fallback;
+  // Launcher tiles (Home catalog / pinned custom links) are not library
+  // content: never file, tag, or summarize them — that would silently move
+  // tiles around Home and pollute Inbox.
+  if (save.organization.homeOnly || save.organization.pinned) {
+    await ensureEmbedding(save); // still useful for on-Home search
+    return { saveId, status: 'kept', tags: [] };
+  }
   const ai = await getAiSettings();
 
-  // 1. Content extraction (needs a live tab; imports/queue runs skip this).
-  if (opts.tabId != null) {
-    const meta = await extractContent(opts.tabId);
-    if (meta?.text) {
-      await patchSave(saveId, (s) => {
-        s.content.fullText = meta.text ?? s.content.fullText;
-        s.content.excerpt = (meta.description || meta.text?.slice(0, 300)) ?? s.content.excerpt;
-      });
-      save.content.fullText = meta.text;
-      save.content.excerpt = meta.description || meta.text.slice(0, 300);
+  // 1. Content extraction. Prefer the metadata the save path already
+  // extracted; only re-inject when we have none, and never read a tab that
+  // has navigated away from the saved URL (we'd file the wrong page).
+  let meta = opts.meta ?? null;
+  if (!meta?.text && opts.tabId != null) {
+    const tab = await browser.tabs.get(opts.tabId).catch(() => null);
+    if (tab?.url && canonicalUrl(tab.url) === save.canonicalUrl) {
+      meta = await extractContent(opts.tabId);
     }
-    snapshotTab(opts.tabId, saveId); // fire-and-forget
   }
+  if (meta?.text) {
+    await patchSave(saveId, (s) => {
+      s.content.fullText = meta!.text ?? s.content.fullText;
+      s.content.excerpt = (meta!.description || meta!.text?.slice(0, 300)) ?? s.content.excerpt;
+    });
+    save.content.fullText = meta.text;
+    save.content.excerpt = meta.description || meta.text.slice(0, 300);
+  }
+  if (opts.tabId != null) snapshotTab(opts.tabId, saveId); // guarded inside; fire-and-forget
 
   // 2. Local embedding — always attempted, free, powers recall + dedupe.
-  try {
-    const text = [save.title, save.content.excerpt ?? save.description ?? '', (save.content.fullText ?? '').slice(0, 2000)]
-      .filter(Boolean)
-      .join('\n');
-    const [vec] = await embedTexts([text || save.url]);
-    if (vec) {
-      await patchSave(saveId, (s) => {
-        s.ai.embedding = vec;
-        s.ai.processedAt = nowIso();
-      });
-    }
-  } catch {
-    /* model still downloading / offscreen busy — queue retries */
-  }
+  await ensureEmbedding(save);
 
-  // Respect a collection the user picked explicitly (SaveForm dropdown etc.).
-  const userFiled = Boolean(save.organization.collectionId) && save.ai.filedBy !== 'ai';
+  // A save that was already decided — by the user OR by a previous AI pass —
+  // is never re-filed. This makes re-runs (queue retries after a failed
+  // embed, double triggers) harmless instead of destructive.
+  if (save.ai.filedBy != null) return { saveId, status: 'kept', tags: save.ai.tags };
+  // A collection the user picked explicitly (SaveForm dropdown, quickbar
+  // folder, default collection) is respected: tags/summary only.
+  const userFiled = Boolean(save.organization.collectionId);
 
   // 3. LLM pass: summary + tags + filing decision.
   if (ai.enabled && ai.autoFile && (await llmAvailable())) {
@@ -203,31 +204,47 @@ export async function autofileSave(saveId: string, opts: { tabId?: number } = {}
         collectionName = inbox.name;
       }
 
-      // Built-in on-device AI is preferred for the summary when present (free).
-      const summary =
-        (await builtinSummarize(save.content.fullText ?? `${save.title}. ${save.description ?? ''}`)) ||
-        decision.summary;
+      // Honor the per-feature toggles, and never clobber an existing summary.
+      const tags = ai.autoTag ? decision.tags : [];
+      let summary = save.ai.summary ?? undefined;
+      if (ai.autoSummarize && !summary) {
+        // Built-in on-device AI is preferred when present (free + private).
+        summary =
+          (await builtinSummarize(save.content.fullText ?? `${save.title}. ${save.description ?? ''}`)) ||
+          decision.summary;
+      }
 
       await updateBookmark(saveId, {
         ...(status === 'kept' ? {} : { collection: collectionId }),
-        aiTags: decision.tags,
-        summary,
+        ...(tags.length
+          ? {
+              aiTags: tags,
+              // The tag sidebar/filters/search read the user-visible tags —
+              // merge (user-entered tags win and are never removed).
+              tags: [...new Set([...save.organization.tags, ...tags])],
+            }
+          : {}),
+        ...(summary ? { summary } : {}),
       }).catch(() => {});
       await patchSave(saveId, (s) => {
-        s.ai.summary = summary;
-        s.ai.tags = decision.tags;
+        if (summary) s.ai.summary = summary;
+        s.ai.tags = tags;
         s.ai.filedBy = status === 'kept' ? 'user' : 'ai';
         s.ai.confidence = decision.confidence;
         s.ai.processedAt = nowIso();
         if (status !== 'kept') s.organization.collectionId = collectionId;
       });
-      return { saveId, status, collectionId, collectionName, tags: decision.tags, summary, confidence: decision.confidence };
+      return { saveId, status, collectionId, collectionName, tags, summary, confidence: decision.confidence };
     } catch {
-      /* fall through to unprocessed */
+      // Provider errored (rate limit, bad key, unparseable output). Do NOT
+      // demote the save — leave it exactly as saved so the queue can retry,
+      // and signal 'unprocessed' so the queue's backoff engages.
+      return fallback;
     }
   }
 
-  // 4. Keyless / offline degradation: Inbox + "unprocessed", queue retries.
+  // 4. Keyless degradation: file into Inbox once, tag 'unprocessed'; the
+  // queue upgrades it when a key appears.
   if (!userFiled) {
     try {
       const inbox = await ensureInbox();
@@ -242,6 +259,25 @@ export async function autofileSave(saveId: string, opts: { tabId?: number } = {}
     }
   }
   return fallback;
+}
+
+async function ensureEmbedding(save: Save): Promise<void> {
+  if (save.ai.embedding?.length) return;
+  try {
+    const text = [save.title, save.content.excerpt ?? save.description ?? '', (save.content.fullText ?? '').slice(0, 2000)]
+      .filter(Boolean)
+      .join('\n');
+    const [vec] = await embedTexts([text || save.url]);
+    if (vec) {
+      save.ai.embedding = vec;
+      await patchSave(save.id, (s) => {
+        s.ai.embedding = vec;
+        s.ai.processedAt = nowIso();
+      });
+    }
+  } catch {
+    /* model still downloading / offscreen busy — queue retries */
+  }
 }
 
 // Undo from the "Filed: …" toast/notification → move to Inbox, mark as

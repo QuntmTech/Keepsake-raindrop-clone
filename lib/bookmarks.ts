@@ -26,14 +26,15 @@ export { safeDomain, inferType, faviconFor } from './util';
 export async function saveBookmark(input: SaveBookmarkInput): Promise<Bookmark> {
   const bm = await saveHomeBookmark(input);
   // Sidecar: mirror into the IndexedDB Save store (the AI-native layer).
-  // Fire-and-forget — the batch queue reconciles any misses.
-  upsertSidecar(bm).catch(() => {});
+  // Awaited so callers (auto-file, popup close) can rely on the row existing;
+  // a sidecar failure still never fails the user's save.
+  await upsertSidecar(bm).catch(() => {});
   return bm;
 }
 
 export async function updateBookmark(id: string, patch: Partial<Bookmark>): Promise<Bookmark> {
   const bm = await updateHomeBookmark(id, patch);
-  upsertSidecar(bm).catch(() => {});
+  await upsertSidecar(bm).catch(() => {});
   return bm;
 }
 
@@ -53,10 +54,16 @@ export async function markVisited(id: string): Promise<void> {
 
 export async function searchBookmarks(query: string, opts: LibrarySearchOpts = {}): Promise<Bookmark[]> {
   const { homeTiles, ...backendOpts } = opts;
-  const items = await (await getBackend()).searchBookmarks(query, backendOpts);
+  const filtering = homeTiles !== 'include' && !backendOpts.collection;
+  // The homeOnly filter runs AFTER backend pagination, so over-fetch when
+  // filtering — otherwise a page of recent launcher tiles would return an
+  // empty "recent" list even though older real bookmarks exist.
+  const perPage = backendOpts.perPage ?? 60;
+  const fetchOpts = filtering ? { ...backendOpts, perPage: Math.min(perPage * 2 + 20, 500) } : backendOpts;
+  const items = await (await getBackend()).searchBookmarks(query, fetchOpts);
   const merged = await applyHomeOverlay(items);
-  if (homeTiles === 'include' || backendOpts.collection) return merged;
-  return merged.filter((b) => !b.homeOnly);
+  if (!filtering) return merged;
+  return merged.filter((b) => !b.homeOnly).slice(0, perPage);
 }
 
 export async function recentBookmarks(limit = 12): Promise<Bookmark[]> {

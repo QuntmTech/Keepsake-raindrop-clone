@@ -63,10 +63,17 @@ export async function matchPage(page: { url: string; title?: string; description
   const canon = canonicalUrl(page.url);
   const domain = safeDomain(page.url);
 
+  // Launcher tiles aren't library content — "You saved this" must mean a real save.
   const exactRows = await db.saves.where('canonicalUrl').equals(canon).toArray();
-  const exact = exactRows.map((s) => toItem(s, 'exact'));
+  const exact = exactRows.filter((s) => !s.organization.homeOnly).map((s) => toItem(s, 'exact'));
 
-  const domainCount = domain ? await db.saves.where('domain').equals(domain).count() : 0;
+  const domainCount = domain
+    ? await db.saves
+        .where('domain')
+        .equals(domain)
+        .filter((s) => !s.organization.homeOnly)
+        .count()
+    : 0;
 
   let semantic: RecallItem[] = [];
   const queryText = [page.title, page.description].filter(Boolean).join('\n');

@@ -92,7 +92,6 @@ export interface AiSettings {
   apiKey: string;
   autoTag: boolean;          // suggest tags on save
   autoSummarize: boolean;    // generate a TL;DR on save
-  autoCollection: boolean;   // suggest a collection on save
   autoFile: boolean;         // zero-organization auto-filing on save
   fastModel: string;         // tagging/summarizing/filing (cheap + quick)
   smartModel: string;        // "ask your library" Q&A
@@ -104,7 +103,6 @@ export const DEFAULT_AI_SETTINGS: AiSettings = {
   apiKey: '',
   autoTag: true,
   autoSummarize: true,
-  autoCollection: false,
   autoFile: true,
   fastModel: 'claude-haiku-4-5',
   smartModel: 'claude-opus-4-8',

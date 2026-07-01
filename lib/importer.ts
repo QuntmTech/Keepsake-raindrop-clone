@@ -203,10 +203,14 @@ export async function importWithAi(
   onProgress?: (p: ImportProgress) => void,
 ): Promise<EscapeHatchResult> {
   // Dedupe inside the file AND against the library, both by canonical URL.
+  // Home launcher tiles don't count as library content — importing a URL the
+  // user merely has as a Home tile must still create a real bookmark.
   const seen = new Set<string>();
   const canons = items.map((i) => canonicalUrl(i.url));
   const existing = new Set(
-    (await db.saves.where('canonicalUrl').anyOf([...new Set(canons)]).toArray()).map((s) => s.canonicalUrl),
+    (await db.saves.where('canonicalUrl').anyOf([...new Set(canons)]).toArray())
+      .filter((s) => !s.organization.homeOnly)
+      .map((s) => s.canonicalUrl),
   );
   const fresh: ParsedItem[] = [];
   items.forEach((item, i) => {
@@ -221,8 +225,9 @@ export async function importWithAi(
 
   // Create sidecar Saves for the batch (idempotent sweep), which is exactly
   // what the alarms queue polls for unembedded/unfiled work.
-  const queuedForAi = await migrateToSaves(() =>
-    searchBookmarks('', { perPage: 5000, homeTiles: 'include' }),
+  const queuedForAi = await migrateToSaves(
+    () => searchBookmarks('', { perPage: 5000, homeTiles: 'include' }),
+    { respectExisting: false }, // imported rows should flow through the AI queue
   ).catch(() => 0);
 
   return { ...progress, duplicates, queuedForAi };
@@ -243,6 +248,11 @@ export function exportJson(bookmarks: Bookmark[]): Blob {
       domain: b.domain,
       type: b.type,
       favorite: b.favorite,
+      // Home layout survives a backup/restore round trip.
+      pinned: b.pinned,
+      homeOnly: b.homeOnly,
+      sort: b.sort,
+      collection: b.collection,
       created: b.created,
     })),
   };

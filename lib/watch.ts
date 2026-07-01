@@ -1,4 +1,4 @@
-import { db, getSave, patchSave, type Save, type WatchFrequency, type WatchMode } from './save';
+import { db, findSaveByUrl, getSave, patchSave, type Save, type WatchFrequency, type WatchMode } from './save';
 
 // Living Bookmarks (Phase 3): saves that act instead of sitting. A
 // chrome.alarms master scheduler wakes every 15 minutes, pulls due watches
@@ -74,14 +74,19 @@ export interface WatchProbe {
 
 async function probePage(save: Save, prevText?: string): Promise<WatchProbe> {
   try {
-    const resp = (await browser.runtime.sendMessage({
-      target: 'ks-offscreen',
-      type: 'OFFSCREEN_WATCH_FETCH',
-      url: save.url,
-      mode: save.monitoring.mode,
-      selector: save.monitoring.selector,
-      prevText,
-    })) as WatchProbe & { ok: boolean };
+    // Deadline belt-and-suspenders on top of the offscreen fetch timeout: a
+    // stuck probe must never stall the scheduler.
+    const resp = (await Promise.race([
+      browser.runtime.sendMessage({
+        target: 'ks-offscreen',
+        type: 'OFFSCREEN_WATCH_FETCH',
+        url: save.url,
+        mode: save.monitoring.mode,
+        selector: save.monitoring.selector,
+        prevText,
+      }),
+      new Promise((_, reject) => setTimeout(() => reject(new Error('probe timeout')), 45_000)),
+    ])) as WatchProbe & { ok: boolean };
     return resp ?? { ok: false, error: 'no response' };
   } catch (e) {
     return { ok: false, error: String((e as Error)?.message ?? e) };
@@ -178,8 +183,12 @@ export async function applyProbe(save: Save, probe: WatchProbe): Promise<void> {
       changed = prev !== undefined && probe.price !== prev;
       const rule = m.alertRule;
       const dropped = prev !== undefined && probe.price < prev;
-      if (rule?.type === 'below' && rule.value != null && probe.price <= rule.value) {
-        alertText = `Price is ${probe.priceRaw ?? probe.price} — at or below your ${rule.value} alert`;
+      // 'below' alerts on entering/moving within the threshold — not on every
+      // unchanged check (that would repeat the same notification hourly).
+      const belowNow = rule?.type === 'below' && rule.value != null && probe.price <= rule.value;
+      const belowBefore = rule?.type === 'below' && rule.value != null && prev !== undefined && prev <= rule.value;
+      if (belowNow && (changed || !belowBefore)) {
+        alertText = `Price is ${probe.priceRaw ?? probe.price} — at or below your ${rule!.value} alert`;
       } else if ((!rule || rule.type === 'any-change') && dropped) {
         alertText = `Price dropped: ${m.lastValue} → ${probe.priceRaw ?? probe.price}`;
       }
@@ -241,6 +250,16 @@ export async function watchTick(): Promise<void> {
     byDomain.set(s.domain, list);
   }
 
+  // Claim every selected watch's slot up front: even if a probe hangs or the
+  // worker dies, the same URL can't wedge the scheduler tick after tick.
+  await Promise.all(
+    due.map((s) =>
+      patchSave(s.id, (row) => {
+        row.monitoring.nextCheckAt = now + FREQ_MS[row.monitoring.frequency];
+      }),
+    ),
+  );
+
   // Domains in parallel; within a domain strictly sequential + cooldown.
   await Promise.all(
     [...byDomain.values()].map(async (list) => {
@@ -258,10 +277,7 @@ export async function watchTick(): Promise<void> {
 // "Checks on visit" for JS-rendered pages: the user opened a watched page —
 // read the value straight out of the live DOM (content-script piggyback).
 export async function checkOnVisit(tabId: number, url: string): Promise<void> {
-  const save = await (async () => {
-    const { canonicalUrl } = await import('./save');
-    return db.saves.where('canonicalUrl').equals(canonicalUrl(url)).first();
-  })();
+  const save = await findSaveByUrl(url, { homeOnly: 'include' });
   if (!save?.monitoring.enabled || !save.monitoring.jsRendered) return;
   try {
     const [res] = await browser.scripting.executeScript({

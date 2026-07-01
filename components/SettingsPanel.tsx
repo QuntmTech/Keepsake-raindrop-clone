@@ -124,7 +124,8 @@ export function SettingsPanel({ compact = false }: { compact?: boolean }) {
   }
 
   async function doExport() {
-    const all = await searchBookmarks('', { perPage: 9999 });
+    // homeTiles:'include' — a backup must contain the Home launcher tiles too.
+    const all = await searchBookmarks('', { perPage: 9999, homeTiles: 'include' });
     if (all.length === 0) {
       toast('Nothing to export yet', 'info');
       return;

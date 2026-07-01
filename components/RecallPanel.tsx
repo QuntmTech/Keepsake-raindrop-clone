@@ -2,19 +2,12 @@ import { useCallback, useEffect, useState } from 'react';
 import { Favicon } from './Favicon';
 import { Icon } from './Icon';
 import { type RecallItem, type RecallResult } from '@/lib/recall';
+import { agoLabel as ago } from '@/lib/util';
 
 // Ambient Recall surface (side panel): what the library knows about the page
 // in the current tab. Exact matches ("you saved this") are visually distinct
 // from semantic ones ("you saved things about this").
 
-function ago(iso: string): string {
-  const days = Math.max(0, Math.floor((Date.now() - new Date(iso).getTime()) / 86_400_000));
-  if (days === 0) return 'today';
-  if (days === 1) return 'yesterday';
-  if (days < 30) return `${days}d ago`;
-  if (days < 365) return `${Math.round(days / 30)}mo ago`;
-  return `${Math.round(days / 365)}y ago`;
-}
 
 export function RecallPanel() {
   const [result, setResult] = useState<RecallResult | null>(null);

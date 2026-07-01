@@ -5,6 +5,7 @@
 import { type HighlightColor } from './types';
 import { type PageMeta } from './metadata';
 import { type CaptureMessage } from './capture';
+import { type WatchConfig } from './watch';
 
 export type Message =
   | { type: 'SAVE_CURRENT_PAGE'; collection?: string }
@@ -16,6 +17,12 @@ export type Message =
   | { type: 'CREATE_HIGHLIGHT'; url: string; text: string; color: HighlightColor; anchor?: string }
   | { type: 'FLUSH_QUEUE' }
   | { type: 'PING' }
+  // AI-native core (v8.2)
+  | { type: 'KS_AUTOFILE'; id: string; tabId?: number } // run the auto-file pipeline for a fresh save
+  | { type: 'KS_GET_RECALL'; tabId?: number } // Ambient Recall matches for a tab
+  | { type: 'KS_WATCH_START'; saveId: string; cfg: WatchConfig }
+  | { type: 'KS_WATCH_STOP'; saveId: string }
+  | { type: 'KS_PICK_SELECTOR' } // element picker on the active tab -> CSS selector
   | CaptureMessage; // screenshots + screen recording (see lib/capture.ts)
 
 export interface ScreenshotResult {

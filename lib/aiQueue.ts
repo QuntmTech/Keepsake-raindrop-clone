@@ -35,10 +35,14 @@ export async function processQueueTick(): Promise<void> {
 
   const hasLlm = await llmAvailable();
   // Work = links missing an embedding, or (when an LLM is usable) never filed.
+  // Launcher tiles (homeOnly/pinned) are excluded — they're not library
+  // content and must never be re-filed or Inboxed.
   const pending = await db.saves
     .filter(
       (s) =>
         s.type === 'link' &&
+        !s.organization.homeOnly &&
+        !s.organization.pinned &&
         (!s.ai.embedding || s.ai.embedding.length === 0 || (hasLlm && s.ai.filedBy == null)),
     )
     .limit(BATCH_PER_TICK)
