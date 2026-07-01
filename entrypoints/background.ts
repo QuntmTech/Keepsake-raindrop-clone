@@ -18,6 +18,7 @@ import { saveCaptureToLibrary } from '@/lib/captureSave';
 import { searchBookmarks } from '@/lib/bookmarks';
 import { agoLabel, autofileSave, findDuplicate, undoFiling, type FiledResult } from '@/lib/autofile';
 import { processQueueTick, scheduleQueue, QUEUE_ALARM } from '@/lib/aiQueue';
+import { matchPage, recallAllowed, type RecallResult } from '@/lib/recall';
 import { storage } from 'wxt/utils/storage';
 
 // The background "service worker" is event-driven and can be killed at any time by Chrome.
@@ -98,7 +99,65 @@ export default defineBackground(() => {
     handleMessage(msg).then(sendResponse).catch((e) => sendResponse({ ok: false, error: String(e) }));
     return true; // keep the channel open for the async response
   });
+
+  // ── Ambient Recall (Phase 2) ──────────────────────────────────────────────
+  // On navigation, match the page against the library — locally only — and
+  // show a per-tab badge. Debounced per tab+URL; opt-in via Settings.
+  browser.webNavigation?.onCompleted.addListener((details) => {
+    if (details.frameId !== 0) return;
+    runRecall(details.tabId, details.url).catch(() => {});
+  });
+  browser.tabs.onRemoved.addListener((tabId) => {
+    recallCache.getValue().then((cache) => {
+      if (cache[tabId]) {
+        delete cache[tabId];
+        recallCache.setValue(cache);
+      }
+    });
+  });
 });
+
+// Per-tab recall results; session-scoped so the side panel can read them and
+// nothing persists across browser restarts.
+const recallCache = storage.defineItem<Record<number, RecallResult>>('session:recall_cache', { fallback: {} });
+
+async function runRecall(tabId: number, url: string): Promise<void> {
+  if (!(await recallAllowed(url))) return;
+  const cache = await recallCache.getValue();
+  const prev = cache[tabId];
+  if (prev && prev.url === url && Date.now() - prev.checkedAt < 60_000) return; // debounce SPA re-fires
+
+  // Cheap page signals only: tab title + meta description. No page read.
+  const tab = await browser.tabs.get(tabId).catch(() => null);
+  if (!tab || tab.url !== url) return;
+  let description: string | undefined;
+  try {
+    const [res] = await browser.scripting.executeScript({
+      target: { tabId },
+      func: () => document.querySelector('meta[name="description"], meta[property="og:description"]')?.getAttribute('content') ?? '',
+    });
+    description = (res?.result as string) || undefined;
+  } catch {
+    /* protected page — title alone still matches */
+  }
+
+  const result = await matchPage({ url, title: tab.title, description });
+  const fresh = await recallCache.getValue();
+  fresh[tabId] = result;
+  await recallCache.setValue(fresh);
+
+  // Badge: count of related saves; exact matches get the distinct green.
+  try {
+    if (result.total > 0) {
+      await browser.action.setBadgeText({ text: String(result.total), tabId });
+      await browser.action.setBadgeBackgroundColor({ color: result.exact.length ? '#16a34a' : '#6366f1', tabId });
+    } else {
+      await browser.action.setBadgeText({ text: '', tabId });
+    }
+  } catch {
+    /* tab gone */
+  }
+}
 
 async function handleMessage(msg: Message): Promise<unknown> {
   await getBackend(); // restore session
@@ -134,6 +193,18 @@ async function handleMessage(msg: Message): Promise<unknown> {
     case 'FLUSH_QUEUE': {
       const n = await flushQueue();
       return { ok: true, flushed: n };
+    }
+
+    // Side panel asks for the current tab's Ambient Recall matches.
+    case 'KS_GET_RECALL' as never: {
+      const m = msg as unknown as { tabId?: number };
+      let tabId = m.tabId;
+      if (tabId == null) {
+        const [tab] = await browser.tabs.query({ active: true, currentWindow: true });
+        tabId = tab?.id;
+      }
+      const cache = await recallCache.getValue();
+      return { ok: true, result: tabId != null ? cache[tabId] ?? null : null };
     }
 
     // Popup/dialog saves hand the AI pass to the background (it owns the

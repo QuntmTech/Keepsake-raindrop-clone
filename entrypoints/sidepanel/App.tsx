@@ -4,11 +4,12 @@ import { LoginForm } from '@/components/LoginForm';
 import { SaveForm } from '@/components/SaveForm';
 import { LibraryBrowser } from '@/components/LibraryBrowser';
 import { AIAssistant } from '@/components/AIAssistant';
+import { RecallPanel } from '@/components/RecallPanel';
 import { SettingsPanel } from '@/components/SettingsPanel';
 import { Icon, type IconName } from '@/components/Icon';
 import { send } from '@/lib/messaging';
 
-type Tab = 'save' | 'library' | 'ask' | 'settings';
+type Tab = 'save' | 'related' | 'library' | 'ask' | 'settings';
 
 // The side panel stays docked while you browse.
 export default function App() {
@@ -31,12 +32,18 @@ export default function App() {
     <div className="flex h-screen flex-col bg-surface text-ink">
       <div className="flex border-b border-line">
         <TabBtn icon="plus" label="Save" active={tab === 'save'} onClick={() => setTab('save')} />
+        <TabBtn icon="sparkles" label="This page" active={tab === 'related'} onClick={() => setTab('related')} />
         <TabBtn icon="grid" label="Library" active={tab === 'library'} onClick={() => setTab('library')} />
         <TabBtn icon="sparkles" label="Ask" active={tab === 'ask'} onClick={() => setTab('ask')} />
         <TabBtn icon="settings" label="Settings" active={tab === 'settings'} onClick={() => setTab('settings')} />
       </div>
       <div className="flex-1 overflow-hidden">
         {tab === 'save' && <SaveForm onSaved={() => setTab('library')} />}
+        {tab === 'related' && (
+          <div className="h-full overflow-y-auto">
+            <RecallPanel />
+          </div>
+        )}
         {tab === 'library' && <LibraryBrowser autoFocus />}
         {tab === 'ask' && <AIAssistant />}
         {tab === 'settings' && (

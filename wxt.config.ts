@@ -29,6 +29,7 @@ export default defineConfig({
       'desktopCapture', // screen/window picker for recording
       'notifications', // capture failures + "Filed:" toasts + watch alerts
       'alarms', // AI batch queue + Living Bookmarks watch scheduler
+      'webNavigation', // Ambient Recall: match the library on navigation (local-only)
     ],
 
     // Full-fidelity MHTML page snapshots are invasive → opt-in only.

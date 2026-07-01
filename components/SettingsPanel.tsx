@@ -310,6 +310,38 @@ export function SettingsPanel({ compact = false }: { compact?: boolean }) {
         )}
       </Section>
 
+      <Section
+        title="Ambient Recall"
+        compact={compact}
+        hint="Surfaces 'you saved things about this' while you browse. All matching runs on your device against your own library — no page content ever leaves it, and no network calls are made."
+      >
+        <Toggle
+          label="Show related saves while browsing (badge + side panel)"
+          checked={settings.recallEnabled}
+          onChange={(v) => update({ recallEnabled: v })}
+        />
+        {settings.recallEnabled && (
+          <>
+            <label className="mt-2 block text-xs font-medium text-ink-soft">
+              Never match on these sites (one domain per line — banking etc.)
+            </label>
+            <textarea
+              className="input mt-1 h-20 font-mono text-xs"
+              placeholder={'mybank.com\nhealthportal.com'}
+              defaultValue={settings.recallBlocklist.join('\n')}
+              onBlur={(e) =>
+                update({
+                  recallBlocklist: e.target.value
+                    .split('\n')
+                    .map((d) => d.trim())
+                    .filter(Boolean),
+                })
+              }
+            />
+          </>
+        )}
+      </Section>
+
       <Section title="Capture" compact={compact} hint="The Quick Bar is a draggable widget on the edge of every page. Shortcut: Ctrl+Shift+K pops the folder picker.">
         <Toggle label="Show the in-page Quick Bar" checked={settings.enableQuickBar} onChange={(v) => update({ enableQuickBar: v })} />
         <Toggle label="Highlights & annotations on pages" checked={settings.enableHighlights} onChange={(v) => update({ enableHighlights: v })} />
