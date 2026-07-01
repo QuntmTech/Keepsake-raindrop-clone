@@ -171,6 +171,7 @@ export class PocketBaseBackend implements Backend {
     domain: rec.domain || safeDomain(rec.url),
     type: (rec.type as BookmarkType) || inferType(rec.url),
     favorite: Boolean(rec.favorite),
+    pinned: Boolean(rec.pinned),
     sort: typeof rec.sort === 'number' ? rec.sort : undefined,
     readingTime: typeof rec.readingTime === 'number' ? rec.readingTime : undefined,
     broken: Boolean(rec.broken),
@@ -196,6 +197,7 @@ export class PocketBaseBackend implements Backend {
     form.set('domain', domain);
     form.set('type', input.type ?? inferType(input.url));
     form.set('favorite', String(Boolean(input.favorite)));
+    form.set('pinned', String(Boolean(input.pinned)));
     if (typeof input.sort === 'number') form.set('sort', String(input.sort));
     if (input.cover) form.set('cover', input.cover);
     if (input.favicon) form.set('favicon', input.favicon);
@@ -207,7 +209,13 @@ export class PocketBaseBackend implements Backend {
   }
 
   async updateBookmark(id: string, patch: Partial<Bookmark>): Promise<Bookmark> {
-    const body: Record<string, unknown> = { ...patch };
+    const body: Record<string, unknown> = {};
+    // CRITICAL: JSON.stringify drops undefined values, so "clear this field"
+    // (e.g. remove from a collection => collection: undefined) would silently
+    // never save. Convert explicit undefined to '' so PocketBase clears it.
+    for (const [k, v] of Object.entries(patch)) {
+      body[k] = v === undefined ? '' : v;
+    }
     if (patch.tags) body.tags = JSON.stringify(patch.tags);
     if (patch.aiTags) body.aiTags = JSON.stringify(patch.aiTags);
     const rec = await this.pb.collection('bookmarks').update(id, body);

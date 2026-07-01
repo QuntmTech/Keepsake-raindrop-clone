@@ -4,6 +4,7 @@ import { saveBookmark, safeDomain, inferType, faviconFor } from '@/lib/bookmarks
 import { useEscape } from '@/hooks/useEscape';
 import { TagInput } from './TagInput';
 import { Icon } from './Icon';
+import { IconPicker } from './IconPicker';
 import { useToast } from './Toast';
 
 interface Props {
@@ -11,15 +12,17 @@ interface Props {
   allTags: string[];
   defaultCollection?: string;
   favorite?: boolean;
+  pinned?: boolean; // adding from the Home screen pins the link there
   onClose: () => void;
   onAdded: () => void;
 }
 
 // Add a bookmark by URL from the dashboard (no active tab needed).
-export function AddDialog({ collections, allTags, defaultCollection, favorite, onClose, onAdded }: Props) {
+export function AddDialog({ collections, allTags, defaultCollection, favorite, pinned, onClose, onAdded }: Props) {
   const { toast } = useToast();
   const [url, setUrl] = useState('');
   const [title, setTitle] = useState('');
+  const [favicon, setFavicon] = useState('');
   const [tags, setTags] = useState<string[]>([]);
   const [collection, setCollection] = useState(defaultCollection ?? '');
   const [busy, setBusy] = useState(false);
@@ -38,9 +41,10 @@ export function AddDialog({ collections, allTags, defaultCollection, favorite, o
         tags,
         collection: collection || undefined,
         favorite,
+        pinned,
         domain,
         type: inferType(clean),
-        favicon: faviconFor(domain),
+        favicon: favicon.trim() || faviconFor(domain),
       });
       toast('Added to your vault', 'success');
       onAdded();
@@ -82,6 +86,7 @@ export function AddDialog({ collections, allTags, defaultCollection, favorite, o
             value={title}
             onChange={(e) => setTitle(e.target.value)}
           />
+          <IconPicker value={favicon} fallback={faviconFor(safeDomain(url))} onChange={setFavicon} />
           <TagInput tags={tags} onChange={setTags} suggestions={allTags} />
           <select className="input" value={collection} onChange={(e) => setCollection(e.target.value)}>
             <option value="">No collection</option>

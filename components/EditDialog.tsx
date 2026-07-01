@@ -4,7 +4,7 @@ import { updateBookmark, safeDomain, faviconFor } from '@/lib/bookmarks';
 import { useEscape } from '@/hooks/useEscape';
 import { TagInput } from './TagInput';
 import { Icon } from './Icon';
-import { Favicon } from './Favicon';
+import { IconPicker } from './IconPicker';
 import { useToast } from './Toast';
 
 interface Props {
@@ -26,6 +26,7 @@ export function EditDialog({ bookmark, collections, allTags, onClose, onSaved }:
   const [tags, setTags] = useState<string[]>(bookmark.tags ?? []);
   const [collection, setCollection] = useState(bookmark.collection ?? '');
   const [favorite, setFavorite] = useState(Boolean(bookmark.favorite));
+  const [pinned, setPinned] = useState(Boolean(bookmark.pinned));
   const [busy, setBusy] = useState(false);
   useEscape(onClose);
 
@@ -50,6 +51,7 @@ export function EditDialog({ bookmark, collections, allTags, onClose, onSaved }:
         tags,
         collection: collection || undefined,
         favorite,
+        pinned,
       });
       onSaved(updated);
       toast('Saved', 'success');
@@ -110,13 +112,8 @@ export function EditDialog({ bookmark, collections, allTags, onClose, onSaved }:
           <label className="text-xs font-medium text-ink-soft">URL</label>
           <input className="input text-xs" value={url} onChange={(e) => setUrl(e.target.value)} placeholder="https://example.com" />
 
-          <label className="text-xs font-medium text-ink-soft">Icon (favicon) URL</label>
-          <div className="flex items-center gap-2">
-            <span className="grid h-8 w-8 shrink-0 place-items-center rounded-md border border-line">
-              <Favicon src={favicon || faviconFor(safeDomain(url))} size={16} />
-            </span>
-            <input className="input py-1.5 text-xs" value={favicon} onChange={(e) => setFavicon(e.target.value)} placeholder="Leave blank to auto-detect" />
-          </div>
+          <label className="text-xs font-medium text-ink-soft">Icon — paste a URL or upload an image</label>
+          <IconPicker value={favicon} fallback={faviconFor(safeDomain(url))} onChange={setFavicon} />
 
           <label className="text-xs font-medium text-ink-soft">Summary</label>
           <textarea className="input resize-none" rows={2} value={summary} onChange={(e) => setSummary(e.target.value)} placeholder="A short TL;DR" />
@@ -141,6 +138,11 @@ export function EditDialog({ bookmark, collections, allTags, onClose, onSaved }:
           <label className="flex items-center gap-2 text-sm text-ink-soft">
             <input type="checkbox" checked={favorite} onChange={(e) => setFavorite(e.target.checked)} />
             Mark as favorite
+          </label>
+
+          <label className="flex items-center gap-2 text-sm text-ink-soft">
+            <input type="checkbox" checked={pinned} onChange={(e) => setPinned(e.target.checked)} />
+            Show on Home screen
           </label>
         </div>
 

@@ -32,6 +32,7 @@ export interface Bookmark {
   domain?: string;
   type: BookmarkType;
   favorite?: boolean;
+  pinned?: boolean;          // shown on the Home screen (curated — separate from the library)
   sort?: number;             // manual order for Home tiles / lists
   readingTime?: number;      // minutes
   broken?: boolean;          // link-checker flagged it as dead

@@ -7,6 +7,7 @@ import { useSettings } from '@/hooks/useSettings';
 import { useCollections } from '@/hooks/useCollections';
 import { LoginForm } from '@/components/LoginForm';
 import { AddDialog } from '@/components/AddDialog';
+import { AppCatalog } from '@/components/AppCatalog';
 import { EditDialog } from '@/components/EditDialog';
 import { Favicon } from '@/components/Favicon';
 import { Icon } from '@/components/Icon';
@@ -15,10 +16,13 @@ import { searchBookmarks, updateBookmark, deleteBookmark, getAllTags, markVisite
 import { parseNetscapeHtml, parseKeepsakeJson, importItems } from '@/lib/importer';
 import { WALLPAPERS, wallpaperCss } from '@/lib/wallpaper';
 import { SEARCH_ENGINES, searchUrl } from '@/lib/search';
+import { normUrl } from '@/lib/apps';
 import { type Bookmark, type Collection } from '@/lib/types';
 
 const TILE_MIME = 'application/x-keepsake-tile';
 const seenHelp = storage.defineItem<boolean>('local:seen_home_help', { fallback: false });
+// Which Home sections the user has collapsed (persisted per device).
+const collapsedStore = storage.defineItem<string[]>('local:home_collapsed', { fallback: [] });
 
 interface Section {
   key: string; // 'fav' or collection id
@@ -44,6 +48,8 @@ export default function App() {
   const [addTo, setAddTo] = useState<{ favorite?: boolean; collection?: string } | null>(null);
   const [editing, setEditing] = useState<Bookmark | null>(null);
   const [help, setHelp] = useState(false);
+  const [catalogOpen, setCatalogOpen] = useState(false);
+  const [collapsedKeys, setCollapsedKeys] = useState<string[]>([]);
   const [allTags, setAllTags] = useState<string[]>([]);
   const fileRef = useRef<HTMLInputElement>(null);
   const uidRef = useRef<string | null>(null);
@@ -77,6 +83,17 @@ export default function App() {
   useEffect(() => {
     if (authed) reloadAll();
   }, [authed, reloadAll]);
+  useEffect(() => {
+    collapsedStore.getValue().then(setCollapsedKeys);
+  }, []);
+  const toggleCollapsed = (key: string) => {
+    setCollapsedKeys((prev) => {
+      const next = prev.includes(key) ? prev.filter((k) => k !== key) : [...prev, key];
+      collapsedStore.setValue(next);
+      return next;
+    });
+  };
+
   // Show the setup guide once.
   useEffect(() => {
     if (!authed) return;
@@ -108,16 +125,30 @@ export default function App() {
   const byOrder = (a: Bookmark, b: Bookmark) =>
     (a.sort ?? 1e9) - (b.sort ?? 1e9) || b.created.localeCompare(a.created);
 
+  // Home is CURATED: only bookmarks pinned to Home show up here — your full
+  // library lives in the dashboard, untouched.
+  const pinnedItems = useMemo(() => all.filter((b) => b.pinned), [all]);
+
   const sections: Section[] = useMemo(() => {
-    const favs: Section = { key: 'fav', title: 'Favorites', items: all.filter((b) => b.favorite).sort(byOrder) };
-    const cols: Section[] = c.collections.map((col: Collection) => ({
-      key: col.id,
-      title: col.name,
-      color: col.color,
-      items: all.filter((b) => b.collection === col.id).sort(byOrder),
-    }));
-    return [favs, ...cols];
-  }, [all, c.collections]);
+    const favs: Section = {
+      key: 'fav',
+      title: 'Favorites',
+      items: pinnedItems.filter((b) => b.favorite).sort(byOrder),
+    };
+    // Pinned links that aren't favorites and aren't filed anywhere.
+    const loose = pinnedItems.filter((b) => !b.favorite && !b.collection).sort(byOrder);
+    const quick: Section[] = loose.length ? [{ key: 'quick', title: 'Quick links', items: loose }] : [];
+    // Only show collection shelves that actually have pinned links (no clutter).
+    const cols: Section[] = c.collections
+      .map((col: Collection) => ({
+        key: col.id,
+        title: col.name,
+        color: col.color,
+        items: pinnedItems.filter((b) => b.collection === col.id && !b.favorite).sort(byOrder),
+      }))
+      .filter((s) => s.items.length > 0);
+    return [favs, ...quick, ...cols];
+  }, [pinnedItems, c.collections]);
 
   const greeting = useMemo(() => {
     const h = now.getHours();
@@ -142,7 +173,13 @@ export default function App() {
     let at = beforeId ? ids.indexOf(beforeId) : ids.length;
     if (at < 0) at = ids.length;
     ids.splice(at, 0, bmId);
-    const membership = sectionKey === 'fav' ? { favorite: true } : { collection: sectionKey };
+    // Dropping onto a shelf pins the link to Home and sets its shelf.
+    const membership =
+      sectionKey === 'fav'
+        ? { favorite: true, pinned: true }
+        : sectionKey === 'quick'
+          ? { favorite: false, collection: undefined, pinned: true }
+          : { favorite: false, collection: sectionKey, pinned: true };
     try {
       await Promise.all(
         ids.map((id, i) => updateBookmark(id, id === bmId ? { ...membership, sort: i } : { sort: i })),
@@ -153,18 +190,23 @@ export default function App() {
     reloadAll();
   }
 
-  async function removeFromHome(b: Bookmark, sectionKey: string) {
-    // From Favorites -> just unfavorite; from a collection -> unfile it.
-    await updateBookmark(b.id, sectionKey === 'fav' ? { favorite: false } : { collection: undefined });
+  async function removeFromHome(b: Bookmark) {
+    // Unpin from Home only — the bookmark stays in your library untouched.
+    await updateBookmark(b.id, { pinned: false });
     reloadAll();
-  }
-  async function del(b: Bookmark) {
-    if (!confirm(`Delete “${b.title}”?`)) return;
-    await deleteBookmark(b.id);
-    reloadAll();
-    toast('Deleted', 'info');
   }
 
+  // One-click bootstrap: pin everything you've already favorited.
+  async function pinAllFavorites() {
+    const favs = all.filter((b) => b.favorite && !b.pinned);
+    if (!favs.length) {
+      toast('No favorites to pin yet — use + to add links', 'info');
+      return;
+    }
+    await Promise.all(favs.map((b) => updateBookmark(b.id, { pinned: true })));
+    toast(`Pinned ${favs.length} favorite${favs.length === 1 ? '' : 's'} to Home`, 'success');
+    reloadAll();
+  }
   async function onFile(e: React.ChangeEvent<HTMLInputElement>) {
     const file = e.target.files?.[0];
     if (!file) return;
@@ -195,14 +237,14 @@ export default function App() {
   const minimal = settings.newTabMode === 'minimal';
   const wall = wallpaperCss(settings.wallpaper);
   const onWall = Boolean(wall);
-  const coverFor = (s: Section): string | undefined => {
-    const withImg = s.items.find((b) => b.cover || b.screenshot);
-    return withImg?.cover || withImg?.screenshot || undefined;
-  };
+  // Shelf panels: solid cards normally, frosted glass over a wallpaper.
+  const panelCls = onWall
+    ? 'border-white/15 bg-surface-raised/90 backdrop-blur-md'
+    : 'border-line bg-surface-raised shadow-card';
 
   const Tile = ({ b, sectionKey }: { b: Bookmark; sectionKey: string }) => (
     <div
-      className={`group relative flex cursor-pointer flex-col items-center gap-2 rounded-xl border bg-surface-raised p-3 transition hover:-translate-y-0.5 hover:shadow-card ${
+      className={`group relative flex min-h-[76px] cursor-pointer flex-col items-center justify-center gap-1.5 rounded-xl border bg-surface p-2 transition hover:-translate-y-0.5 hover:shadow-card ${
         dropKey === `${sectionKey}:${b.id}` ? 'border-brand ring-2 ring-brand' : 'border-line hover:border-brand/40'
       }`}
       draggable
@@ -241,72 +283,88 @@ export default function App() {
           className="rounded-md bg-surface/80 p-1 text-ink-faint backdrop-blur hover:text-red-500"
           onClick={(e) => {
             e.stopPropagation();
-            removeFromHome(b, sectionKey);
+            removeFromHome(b);
           }}
-          title="Remove from this section"
+          title="Remove from Home (bookmark stays in your library)"
         >
           <Icon name="close" size={12} />
         </button>
       </div>
-      <Favicon src={b.favicon} size={30} />
-      <span className="line-clamp-2 text-center text-xs text-ink-soft">{b.title}</span>
+      <Favicon src={b.favicon} size={28} />
+      <span className="line-clamp-2 max-w-full text-center text-[11px] leading-tight text-ink-soft">{b.title}</span>
     </div>
   );
 
-  const SectionBlock = ({ s }: { s: Section }) => (
-    <div
-      className="rounded-2xl"
-      onDragOver={(e) => {
-        e.preventDefault();
-        setDropKey(s.key);
-      }}
-      onDragLeave={() => setDropKey((k) => (k === s.key ? null : k))}
-      onDrop={(e) => {
-        e.preventDefault();
-        const id = e.dataTransfer.getData(TILE_MIME);
-        setDropKey(null);
-        if (id) dropTile(id, s.key);
-      }}
-    >
-      {/* Catalog-style cover header */}
-      <div
-        className="relative mb-3 flex h-16 items-end overflow-hidden rounded-xl"
-        style={{ background: `linear-gradient(120deg, ${s.color || 'rgb(var(--accent))'} 0%, rgb(var(--accent-dark)) 100%)` }}
-      >
-        {coverFor(s) && (
-          <img src={coverFor(s)} alt="" className="absolute inset-0 h-full w-full object-cover opacity-50" />
-        )}
-        <div className="absolute inset-0 bg-gradient-to-t from-black/60 via-black/10 to-transparent" />
-        <div className="relative flex w-full items-center gap-2 px-3 pb-2 text-white">
-          <h2 className="text-sm font-semibold drop-shadow">{s.key === 'fav' ? '★ Favorites' : s.title}</h2>
-          <span className="rounded-full bg-white/20 px-1.5 text-xs">{s.items.length}</span>
-          <button
-            className="ml-auto rounded-md bg-white/15 p-1 text-white hover:bg-white/30"
-            onClick={() => setAddTo(s.key === 'fav' ? { favorite: true } : { collection: s.key })}
-            title="Add a link here"
-          >
-            <Icon name="plus" size={15} />
-          </button>
-        </div>
-      </div>
-      <div
-        className={`grid grid-cols-[repeat(auto-fill,minmax(96px,1fr))] gap-3 rounded-xl p-1 ${
-          dropKey === s.key ? 'ring-2 ring-brand ring-inset' : ''
+  // Compact "shelf" panel — Atlas-style folder card, no giant banner.
+  const SectionBlock = ({ s }: { s: Section }) => {
+    const isCollapsed = collapsedKeys.includes(s.key);
+    const dashHash = s.key === 'fav' ? '#favorites' : `#c=${s.key}`;
+    return (
+      <section
+        className={`rounded-2xl border p-3.5 transition ${panelCls} ${s.key === 'fav' ? 'lg:col-span-2' : ''} ${
+          dropKey === s.key ? 'ring-2 ring-brand' : ''
         }`}
+        onDragOver={(e) => {
+          e.preventDefault();
+          setDropKey(s.key);
+        }}
+        onDragLeave={() => setDropKey((k) => (k === s.key ? null : k))}
+        onDrop={(e) => {
+          e.preventDefault();
+          const id = e.dataTransfer.getData(TILE_MIME);
+          setDropKey(null);
+          if (id) dropTile(id, s.key);
+        }}
       >
-        {s.items.map((b) => (
-          <Tile key={b.id} b={b} sectionKey={s.key} />
-        ))}
-        <button
-          className="flex min-h-[84px] flex-col items-center justify-center gap-1 rounded-xl border border-dashed border-line text-ink-faint transition hover:border-brand/50 hover:text-brand"
-          onClick={() => setAddTo(s.key === 'fav' ? { favorite: true } : { collection: s.key })}
-        >
-          <Icon name="plus" size={18} />
-          <span className="text-[11px]">Add</span>
-        </button>
-      </div>
-    </div>
-  );
+        <div className="flex items-center gap-2">
+          {s.key === 'fav' ? (
+            <Icon name="star-fill" size={14} className="shrink-0 text-amber-400" />
+          ) : (
+            <span className="h-2.5 w-2.5 shrink-0 rounded-full" style={{ background: s.color || 'rgb(var(--accent))' }} />
+          )}
+          <a
+            href={browser.runtime.getURL('/dashboard.html') + dashHash}
+            className="truncate text-sm font-semibold text-ink hover:text-brand"
+            title="Open in dashboard"
+          >
+            {s.key === 'fav' ? 'Favorites' : s.title}
+          </a>
+          <span className="rounded-full bg-surface-sunken px-1.5 text-[11px] text-ink-faint">{s.items.length}</span>
+          <div className="ml-auto flex items-center gap-0.5">
+            <button
+              className="rounded-md p-1 text-ink-faint hover:bg-surface-sunken hover:text-brand"
+              onClick={() => setAddTo(s.key === 'fav' ? { favorite: true } : { collection: s.key })}
+              title="Add a link here"
+            >
+              <Icon name="plus" size={15} />
+            </button>
+            <button
+              className="rounded-md p-1 text-ink-faint hover:bg-surface-sunken hover:text-ink"
+              onClick={() => toggleCollapsed(s.key)}
+              title={isCollapsed ? 'Expand' : 'Collapse'}
+            >
+              <Icon name="chevron" size={14} className={`transition-transform ${isCollapsed ? '' : 'rotate-90'}`} />
+            </button>
+          </div>
+        </div>
+
+        {!isCollapsed && (
+          <div className="mt-3 grid grid-cols-[repeat(auto-fill,minmax(84px,1fr))] gap-2.5">
+            {s.items.map((b) => (
+              <Tile key={b.id} b={b} sectionKey={s.key} />
+            ))}
+            <button
+              className="flex min-h-[76px] flex-col items-center justify-center gap-1 rounded-xl border border-dashed border-line text-ink-faint transition hover:border-brand/50 hover:text-brand"
+              onClick={() => setAddTo(s.key === 'fav' ? { favorite: true } : { collection: s.key })}
+            >
+              <Icon name="plus" size={16} />
+              <span className="text-[10px]">Add</span>
+            </button>
+          </div>
+        )}
+      </section>
+    );
+  };
 
   const headBtn = `btn-ghost px-2 ${onWall ? 'text-white/80 hover:text-white hover:bg-white/10' : ''}`;
 
@@ -324,6 +382,9 @@ export default function App() {
         <span className={`text-base font-semibold ${onWall ? 'text-white drop-shadow' : ''}`}>Keepsake</span>
         <div className="ml-auto flex items-center gap-1.5">
           <input ref={fileRef} type="file" accept=".html,.json" className="hidden" onChange={onFile} />
+          <button className="btn-primary px-3 py-1.5 text-sm" onClick={() => setCatalogOpen(true)} title="Add apps to your Home">
+            <Icon name="plus" size={15} /> Add apps
+          </button>
           <button className={`btn-ghost px-2.5 text-sm ${onWall ? 'text-white/80 hover:text-white hover:bg-white/10' : ''}`} onClick={() => fileRef.current?.click()} title="Import links">
             <Icon name="import" size={17} /> Import
           </button>
@@ -376,7 +437,7 @@ export default function App() {
       </header>
 
       <main className="mx-auto w-full max-w-5xl px-6 pb-24">
-        <div className="mt-[6vh] text-center">
+        <div className="mt-[4vh] text-center">
           <p className={`text-5xl font-semibold tracking-tight ${onWall ? 'text-white drop-shadow-lg' : ''}`}>{time}</p>
           <p className={`mt-2 text-lg ${onWall ? 'text-white/90 drop-shadow' : 'text-ink-soft'}`}>
             {greeting}
@@ -429,8 +490,31 @@ export default function App() {
               )}
             </div>
           </div>
+        ) : pinnedItems.length === 0 ? (
+          /* Curated-Home bootstrap: nothing pinned yet */
+          <div className={`mx-auto mt-10 max-w-lg rounded-2xl border p-8 text-center ${panelCls}`}>
+            <span className="mx-auto mb-3 grid h-12 w-12 place-items-center rounded-2xl bg-brand/10 text-brand">
+              <Icon name="star" size={24} />
+            </span>
+            <h2 className="text-base font-semibold text-ink">Build your Home screen</h2>
+            <p className="mx-auto mt-1 max-w-sm text-sm text-ink-soft">
+              Home only shows links you <b>pin</b> — your full bookmark library stays separate in the
+              dashboard. Add the sites you actually open every day.
+            </p>
+            <div className="mt-5 flex flex-wrap justify-center gap-2">
+              <button className="btn-primary" onClick={() => setCatalogOpen(true)}>
+                <Icon name="grid" size={16} /> Browse popular apps
+              </button>
+              <button className="btn-outline" onClick={() => setAddTo({ favorite: true })}>
+                <Icon name="plus" size={15} /> Custom link
+              </button>
+              <button className="btn-outline" onClick={pinAllFavorites}>
+                <Icon name="star" size={15} /> Pin all my favorites
+              </button>
+            </div>
+          </div>
         ) : (
-          <div className="mt-10 space-y-8">
+          <div className="mt-8 grid grid-cols-1 items-start gap-4 lg:grid-cols-2">
             {(minimal ? sections.slice(0, 1) : sections).map((s) => (
               <SectionBlock key={s.key} s={s} />
             ))}
@@ -444,6 +528,7 @@ export default function App() {
           allTags={allTags}
           defaultCollection={addTo.collection}
           favorite={addTo.favorite}
+          pinned
           onClose={() => setAddTo(null)}
           onAdded={() => {
             reloadAll();
@@ -458,6 +543,20 @@ export default function App() {
           allTags={allTags}
           onClose={() => setEditing(null)}
           onSaved={() => {
+            reloadAll();
+            c.refresh();
+          }}
+        />
+      )}
+      {catalogOpen && (
+        <AppCatalog
+          pinnedUrls={new Set(pinnedItems.map((b) => normUrl(b.url)))}
+          onClose={() => setCatalogOpen(false)}
+          onCustom={() => {
+            setCatalogOpen(false);
+            setAddTo({ favorite: true });
+          }}
+          onChanged={() => {
             reloadAll();
             c.refresh();
           }}
@@ -480,16 +579,19 @@ function HelpDialog({ onClose }: { onClose: () => void }) {
           </button>
         </div>
         <ol className="space-y-2 text-sm text-ink-soft">
-          <li><b>1. New tab:</b> already replaced with Keepsake Home. ✓</li>
           <li>
-            <b>2. Homepage button + startup:</b> Chrome → <i>Settings → On startup</i> → “Open the New Tab page”, and turn on
-            the <i>Home button</i> (Appearance) set to New Tab.
+            <b>1. Home is curated:</b> it only shows links you <b>pin</b> — your full bookmark library
+            stays separate in the dashboard.
           </li>
-          <li><b>3. Add tiles:</b> click <b>+</b> in any section (Favorites or a collection).</li>
-          <li><b>4. Edit:</b> hover a tile → pencil to change its title, icon, or collection.</li>
-          <li><b>5. Rearrange:</b> drag tiles to reorder; drop one onto another collection to <b>group</b> it there.</li>
-          <li><b>6. Import:</b> use <b>Import</b> (top bar) to bring in a Chrome/Brave/raindrop bookmarks file.</li>
-          <li><b>7. Search:</b> type to find saved links; press <b>Enter</b> to search the web.</li>
+          <li><b>2. Add apps:</b> hit <b>“Add apps”</b> (top bar) for one-click popular apps with icons, or make a custom one (name, URL, upload your own icon).</li>
+          <li><b>3. Edit a tile:</b> hover → pencil: change title, icon (paste URL or upload an image), or folder.</li>
+          <li><b>4. Rearrange:</b> drag tiles to reorder; drop onto another shelf to move it. The ✕ only removes it from Home — the bookmark stays saved.</li>
+          <li><b>5. Pin from the library:</b> edit any bookmark → “Show on Home screen”.</li>
+          <li>
+            <b>6. Make this your homepage:</b> Chrome → <i>Settings → On startup</i> → “Open the New Tab
+            page”, and turn on the <i>Home button</i> (Appearance) set to New Tab.
+          </li>
+          <li><b>7. Search:</b> type to search your vault; press <b>Enter</b> to search the web (engine picker on the right).</li>
         </ol>
         <button className="btn-primary mt-4 w-full" onClick={onClose}>
           Got it
