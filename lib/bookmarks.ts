@@ -2,6 +2,7 @@ import { getBackend } from './backend';
 import { type Bookmark } from './types';
 import { type SaveBookmarkInput, type SearchOpts } from './backend/types';
 import { applyHomeOverlay, forgetHomeOverlay, saveHomeBookmark, updateHomeBookmark } from './home';
+import { deleteSave, upsertSidecar } from './save';
 
 // Facade over the active backend. Components import from here regardless of
 // whether data lives in chrome.storage (local) or PocketBase.
@@ -23,16 +24,23 @@ export { safeDomain, inferType, faviconFor } from './util';
 // schema drops pinned/sort/homeOnly, they land in the overlay instead of
 // vanishing. Saves without those fields behave exactly as before.
 export async function saveBookmark(input: SaveBookmarkInput): Promise<Bookmark> {
-  return saveHomeBookmark(input);
+  const bm = await saveHomeBookmark(input);
+  // Sidecar: mirror into the IndexedDB Save store (the AI-native layer).
+  // Fire-and-forget — the batch queue reconciles any misses.
+  upsertSidecar(bm).catch(() => {});
+  return bm;
 }
 
 export async function updateBookmark(id: string, patch: Partial<Bookmark>): Promise<Bookmark> {
-  return updateHomeBookmark(id, patch);
+  const bm = await updateHomeBookmark(id, patch);
+  upsertSidecar(bm).catch(() => {});
+  return bm;
 }
 
 export async function deleteBookmark(id: string): Promise<void> {
   await (await getBackend()).deleteBookmark(id);
   await forgetHomeOverlay(id);
+  deleteSave(id).catch(() => {});
 }
 
 export async function toggleFavorite(id: string, favorite: boolean): Promise<Bookmark> {

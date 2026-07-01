@@ -14,6 +14,9 @@ import {
 } from '@/lib/capture';
 import { inferType, safeDomain } from '@/lib/util';
 import { type UiSurface } from '@/lib/types';
+import { migrateToSaves } from '@/lib/save';
+import { saveCaptureToLibrary } from '@/lib/captureSave';
+import { searchBookmarks } from '@/lib/bookmarks';
 
 // The background "service worker" is event-driven and can be killed at any time by Chrome.
 // Never rely on long-lived in-memory state here — read from storage when you need it.
@@ -24,12 +27,14 @@ export default defineBackground(() => {
     const settings = await getSettings();
     await applyActionBehavior(settings.primarySurface);
     await flushQueue().catch(() => {});
+    await runMigration();
   });
 
   browser.runtime.onStartup?.addListener(async () => {
     const settings = await getSettings();
     await applyActionBehavior(settings.primarySurface);
     await flushQueue().catch(() => {});
+    await runMigration();
   });
 
   // Re-apply icon behavior whenever the user changes the primary surface.
@@ -110,7 +115,16 @@ async function handleMessage(msg: Message): Promise<unknown> {
 
     case 'KS_CAPTURE_VISIBLE': {
       const dataUrl = await browser.tabs.captureVisibleTab(undefined as any, { format: 'png' });
-      await browser.downloads.download({ url: dataUrl, filename: screenshotFilename('visible') });
+      const filename = screenshotFilename('visible');
+      await browser.downloads.download({ url: dataUrl, filename });
+      const [tab] = await browser.tabs.query({ active: true, currentWindow: true });
+      saveCaptureToLibrary({
+        kind: 'screenshot',
+        blob: dataUrlToBlob(dataUrl),
+        pageUrl: tab?.url,
+        pageTitle: tab?.title,
+        filename,
+      }).catch(() => {});
       return { ok: true };
     }
 
@@ -144,8 +158,25 @@ async function handleMessage(msg: Message): Promise<unknown> {
     // Offscreen finished: the blob: URL it minted stays valid while the
     // offscreen document is alive, so download it before closing anything.
     case 'KS_RECORDING_READY': {
+      const prior = await recordingStateStore.getValue();
       await recordingStateStore.setValue(IDLE_RECORDING_STATE);
       await browser.action.setBadgeText({ text: '' });
+      // The blob: URL resolves same-origin while the offscreen document lives —
+      // pull the bytes now so the recording also lands in the library.
+      try {
+        const blob = await (await fetch(msg.url)).blob();
+        const tab = prior.tabId ? await browser.tabs.get(prior.tabId).catch(() => null) : null;
+        saveCaptureToLibrary({
+          kind: 'recording',
+          blob,
+          pageUrl: tab?.url,
+          pageTitle: tab?.title,
+          filename: msg.filename,
+          durationMs: msg.durationMs,
+        }).catch(() => {});
+      } catch {
+        /* library copy is best-effort — the download below still happens */
+      }
       try {
         await browser.downloads.download({ url: msg.url, filename: msg.filename });
         return { ok: true };
@@ -164,6 +195,12 @@ async function handleMessage(msg: Message): Promise<unknown> {
     default:
       return { ok: false, error: 'unknown message' };
   }
+}
+
+// Mirror the vault into the IndexedDB Save store (idempotent, additive; the
+// legacy chrome.storage stores get a one-time versioned backup first).
+async function runMigration() {
+  await migrateToSaves(() => searchBookmarks('', { perPage: 2000, homeTiles: 'include' })).catch(() => 0);
 }
 
 // ---- capture plumbing ----
@@ -186,6 +223,14 @@ async function captureFullPage(tabId: number): Promise<void> {
   if (!dataUrl) throw new Error('Capture returned nothing');
   const filename = screenshotFilename('full').replace(/\.png$/, dataUrl.startsWith('data:image/jpeg') ? '.jpg' : '.png');
   await browser.downloads.download({ url: dataUrl, filename });
+  const tab = await browser.tabs.get(tabId).catch(() => null);
+  saveCaptureToLibrary({
+    kind: 'screenshot',
+    blob: dataUrlToBlob(dataUrl),
+    pageUrl: tab?.url,
+    pageTitle: tab?.title,
+    filename,
+  }).catch(() => {});
 }
 
 async function ensureOffscreenDocument(): Promise<void> {

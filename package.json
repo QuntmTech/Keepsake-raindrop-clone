@@ -14,6 +14,8 @@
     "postinstall": "wxt prepare"
   },
   "dependencies": {
+    "@xenova/transformers": "^2.17.2",
+    "dexie": "^4.4.4",
     "pocketbase": "^0.26.0",
     "react": "^19.1.0",
     "react-dom": "^19.1.0"
