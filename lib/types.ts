@@ -21,6 +21,7 @@ export interface Bookmark {
   title: string;
   description?: string;
   summary?: string;          // AI-generated TL;DR
+  content?: string;          // cached page text (link-rot-proof reading copy)
   note?: string;             // user's own note
   tags: string[];
   aiTags?: string[];         // tags suggested by AI (kept distinct so user edits win)
@@ -31,6 +32,8 @@ export interface Bookmark {
   domain?: string;
   type: BookmarkType;
   favorite?: boolean;
+  pinned?: boolean;          // shown on the Home screen (curated — separate from the library)
+  sort?: number;             // manual order for Home tiles / lists
   readingTime?: number;      // minutes
   broken?: boolean;          // link-checker flagged it as dead
   lastVisited?: string;      // ISO date of last open from within Keepsake
@@ -53,6 +56,10 @@ export interface Highlight {
 }
 
 export type HighlightColor = 'yellow' | 'green' | 'blue' | 'pink' | 'orange';
+
+// Account tier. `owner` is you (unlimited, forever); `pro` is a paid customer;
+// `free` is the default limited tier. Stored on the user record (`plan`).
+export type Plan = 'free' | 'pro' | 'owner';
 
 // Robust highlight anchor — quote + surrounding context survives DOM changes
 // far better than a raw first-match search. Serialized into Highlight.anchor.
@@ -109,6 +116,9 @@ export interface Settings {
   accent: Accent;
   view: ViewMode;
   sort: SortMode;
+  newTabMode: 'home' | 'minimal'; // Keepsake Home new-tab: full or search-only
+  wallpaper: string; // Home background: '' | preset key | 'url:<image>'
+  searchEngine: 'google' | 'duckduckgo' | 'bing' | 'brave' | 'ecosia'; // Home web search
   defaultCollection?: string; // collection id new saves drop into
 }
 
@@ -123,6 +133,9 @@ export const DEFAULT_SETTINGS: Settings = {
   accent: 'ocean',
   view: 'grid',
   sort: 'newest',
+  newTabMode: 'home',
+  wallpaper: '',
+  searchEngine: 'google',
 };
 
 // Aggregate stats for the dashboard header.

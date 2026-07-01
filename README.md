@@ -31,9 +31,20 @@ Build a loadable bundle:
 
 ```bash
 npm run build        # output in .output/chrome-mv3
-# chrome://extensions → Developer mode → Load unpacked → .output/chrome-mv3
 npm run compile      # type-check only
+npm run zip          # single installable zip in .output/
 ```
+
+### Loading it into Chrome (read this if you hit "Manifest file is missing")
+This is a source project — the browser can't read the `.tsx` files directly. `npm run build`
+compiles everything (including a generated `manifest.json`) into **`.output/chrome-mv3/`**.
+
+1. Run `npm run build`.
+2. Go to `chrome://extensions`, turn on **Developer mode** (top-right).
+3. Click **Load unpacked** (NOT "Pack extension") and select the **`.output/chrome-mv3`** folder
+   — the one that contains `manifest.json`, not the project root.
+
+"Pack extension" is only for producing a `.crx` for distribution; you don't need it to test.
 
 ### Turning on AI (optional)
 Settings → **AI** → enable, paste an Anthropic API key (`console.anthropic.com`), Test key.

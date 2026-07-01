@@ -42,6 +42,14 @@ const bookmarksStore = storage.defineItem<Bookmark[]>('local:bookmarks', { fallb
 const collectionsStore = storage.defineItem<Collection[]>('local:collections', { fallback: [] });
 const highlightsStore = storage.defineItem<Highlight[]>('local:highlights', { fallback: [] });
 
+// Wipe all locally-stored bookmarks, collections, and highlights (keeps the
+// account). Used by Settings → "Clear local data" in local mode.
+export async function clearLocalData(): Promise<void> {
+  await bookmarksStore.setValue([]);
+  await collectionsStore.setValue([]);
+  await highlightsStore.setValue([]);
+}
+
 async function sha256(text: string): Promise<string> {
   const data = new TextEncoder().encode(text);
   const digest = await crypto.subtle.digest('SHA-256', data);
@@ -60,8 +68,19 @@ function blobToDataUrl(blob: Blob): Promise<string> {
 export class LocalBackend implements Backend {
   readonly kind = 'local' as const;
   private user: AuthUser | null = null;
+  private wired = false;
 
   async init(): Promise<void> {
+    await this.refreshSession();
+    // Stay in sync when auth changes in ANOTHER context (e.g. you log in via the
+    // popup while a page — and its content-script Quick Bar — is already open).
+    if (!this.wired) {
+      this.wired = true;
+      sessionStore.watch(() => this.refreshSession());
+    }
+  }
+
+  private async refreshSession(): Promise<void> {
     const uid = await sessionStore.getValue();
     if (!uid) {
       this.user = null;
@@ -69,7 +88,7 @@ export class LocalBackend implements Backend {
     }
     const users = await usersStore.getValue();
     const u = users.find((x) => x.id === uid);
-    this.user = u ? { id: u.id, email: u.email, name: u.name } : null;
+    this.user = u ? { id: u.id, email: u.email, name: u.name, plan: 'owner' } : null;
   }
 
   // ---- auth ----
@@ -91,7 +110,7 @@ export class LocalBackend implements Backend {
     };
     await usersStore.setValue([...users, user]);
     await sessionStore.setValue(user.id);
-    this.user = { id: user.id, email: user.email, name: user.name };
+    this.user = { id: user.id, email: user.email, name: user.name, plan: 'owner' };
     return this.user;
   }
 
@@ -103,7 +122,7 @@ export class LocalBackend implements Backend {
     const hash = await sha256(u.salt + password);
     if (hash !== u.hash) throw new Error('Incorrect password');
     await sessionStore.setValue(u.id);
-    this.user = { id: u.id, email: u.email, name: u.name };
+    this.user = { id: u.id, email: u.email, name: u.name, plan: 'owner' };
     return this.user;
   }
 
@@ -117,6 +136,18 @@ export class LocalBackend implements Backend {
   }
   isLoggedIn(): boolean {
     return this.user !== null;
+  }
+
+  // Notify open UIs whenever the vault changes (in any context).
+  watch(cb: () => void): () => void {
+    const u1 = bookmarksStore.watch(() => cb());
+    const u2 = collectionsStore.watch(() => cb());
+    const u3 = highlightsStore.watch(() => cb());
+    return () => {
+      u1();
+      u2();
+      u3();
+    };
   }
 
   private uid(): string {
@@ -147,6 +178,7 @@ export class LocalBackend implements Backend {
       title: input.title || input.url,
       description: input.description,
       summary: input.summary,
+      content: input.content,
       note: input.note,
       tags: input.tags ?? [],
       aiTags: input.aiTags ?? [],
@@ -157,6 +189,8 @@ export class LocalBackend implements Backend {
       domain,
       type: input.type ?? inferType(input.url),
       favorite: Boolean(input.favorite),
+      pinned: Boolean(input.pinned),
+      sort: input.sort,
       readingTime: input.readingTime,
       user: uid,
       created: nowIso(),
@@ -165,6 +199,43 @@ export class LocalBackend implements Backend {
     const all = await bookmarksStore.getValue();
     await bookmarksStore.setValue([bm, ...all]);
     return bm;
+  }
+
+  // Bulk import: build all records and write the store once (fast for big files).
+  async bulkSave(inputs: SaveBookmarkInput[]): Promise<number> {
+    const uid = this.uid();
+    const all = await bookmarksStore.getValue();
+    const now = nowIso();
+    const existing = new Set(all.filter((b) => b.user === uid).map((b) => b.url));
+    const recs: Bookmark[] = [];
+    for (const input of inputs) {
+      if (existing.has(input.url)) continue; // skip duplicates already in the vault
+      existing.add(input.url);
+      const domain = input.domain ?? safeDomain(input.url);
+      recs.push({
+        id: genId(),
+        url: input.url,
+        title: input.title || input.url,
+        description: input.description,
+        summary: input.summary,
+        note: input.note,
+        tags: input.tags ?? [],
+        aiTags: input.aiTags ?? [],
+        collection: input.collection,
+        cover: input.cover,
+        favicon: input.favicon ?? faviconFor(domain),
+        domain,
+        type: input.type ?? inferType(input.url),
+        favorite: Boolean(input.favorite),
+        pinned: Boolean(input.pinned),
+        readingTime: input.readingTime,
+        user: uid,
+        created: now,
+        updated: now,
+      });
+    }
+    await bookmarksStore.setValue([...recs, ...all]);
+    return recs.length;
   }
 
   async updateBookmark(id: string, patch: Partial<Bookmark>): Promise<Bookmark> {

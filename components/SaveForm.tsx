@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import {
   saveBookmark,
   listCollections,
+  createCollection,
   getAllTags,
   findByUrl,
   inferType,
@@ -10,7 +11,7 @@ import {
 import { enqueueSave } from '@/lib/queue';
 import { send, dataUrlToBlob, type ScreenshotResult, type MetaResult } from '@/lib/messaging';
 import { getSettings } from '@/lib/settings';
-import { aiAvailable, getAiSettings, suggestTags, summarize, type PageContext } from '@/lib/ai';
+import { aiAvailable, getAiSettings, suggestTags, summarize, suggestCollection, type PageContext } from '@/lib/ai';
 import { type Collection } from '@/lib/types';
 import { type PageMeta } from '@/lib/metadata';
 import { TagInput } from './TagInput';
@@ -36,6 +37,23 @@ export function SaveForm({ onSaved }: { onSaved?: () => void }) {
   const [done, setDone] = useState(false);
   const [aiBusy, setAiBusy] = useState(false);
   const [existing, setExisting] = useState(false);
+  const [creatingFolder, setCreatingFolder] = useState(false);
+  const [newFolder, setNewFolder] = useState('');
+
+  async function createFolder() {
+    const name = newFolder.trim();
+    if (!name) return;
+    try {
+      const c = await createCollection({ name });
+      setCollections((prev) => [...prev, c].sort((a, b) => a.name.localeCompare(b.name)));
+      setCollection(c.id);
+      setNewFolder('');
+      setCreatingFolder(false);
+      toast(`Folder “${name}” created`, 'success');
+    } catch {
+      toast('Could not create folder', 'error');
+    }
+  }
 
   useEffect(() => {
     (async () => {
@@ -46,8 +64,10 @@ export function SaveForm({ onSaved }: { onSaved?: () => void }) {
       setUrl(tabUrl);
 
       let tagNames: string[] = [];
+      let cols: Collection[] = [];
       try {
-        setCollections(await listCollections());
+        cols = await listCollections();
+        setCollections(cols);
         tagNames = (await getAllTags()).map((t) => t.tag);
         setAllTags(tagNames);
       } catch {
@@ -102,6 +122,15 @@ export function SaveForm({ onSaved }: { onSaved?: () => void }) {
               .catch(() => {}),
           );
         }
+        if (ai.autoCollection && cols.length) {
+          jobs.push(
+            suggestCollection(ctx, cols.map((c) => ({ id: c.id, name: c.name })))
+              .then((id) => {
+                if (id) setCollection((cur) => cur || id);
+              })
+              .catch(() => {}),
+          );
+        }
         Promise.allSettled(jobs).finally(() => setAiBusy(false));
       }
     })();
@@ -127,6 +156,7 @@ export function SaveForm({ onSaved }: { onSaved?: () => void }) {
         title: title || url,
         note: note || undefined,
         summary: summary || undefined,
+        content: meta?.text,
         description: meta?.description,
         tags,
         aiTags,
@@ -225,19 +255,60 @@ export function SaveForm({ onSaved }: { onSaved?: () => void }) {
         placeholder="Add tags…"
       />
 
-      <select
-        className="input"
-        value={collection}
-        onChange={(e) => setCollection(e.target.value)}
-      >
-        <option value="">No collection</option>
-        {collections.map((c) => (
-          <option key={c.id} value={c.id}>
-            {c.icon ? `${c.icon} ` : ''}
-            {c.name}
-          </option>
-        ))}
-      </select>
+      {creatingFolder ? (
+        <div className="flex items-center gap-1.5">
+          <input
+            className="input flex-1"
+            autoFocus
+            placeholder="New folder name"
+            value={newFolder}
+            onChange={(e) => setNewFolder(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter') createFolder();
+              else if (e.key === 'Escape') {
+                setCreatingFolder(false);
+                setNewFolder('');
+              }
+            }}
+          />
+          <button className="btn-primary px-2.5" onClick={createFolder} title="Create folder">
+            <Icon name="check" size={16} />
+          </button>
+          <button
+            className="btn-ghost px-2"
+            onClick={() => {
+              setCreatingFolder(false);
+              setNewFolder('');
+            }}
+            title="Cancel"
+          >
+            <Icon name="close" size={16} />
+          </button>
+        </div>
+      ) : (
+        <div className="flex items-center gap-1.5">
+          <select
+            className="input flex-1"
+            value={collection}
+            onChange={(e) => setCollection(e.target.value)}
+          >
+            <option value="">No collection</option>
+            {collections.map((c) => (
+              <option key={c.id} value={c.id}>
+                {c.icon ? `${c.icon} ` : ''}
+                {c.name}
+              </option>
+            ))}
+          </select>
+          <button
+            className="btn-outline px-2.5"
+            onClick={() => setCreatingFolder(true)}
+            title="New folder"
+          >
+            <Icon name="plus" size={16} />
+          </button>
+        </div>
+      )}
 
       <input
         className="input text-sm"

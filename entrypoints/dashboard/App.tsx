@@ -1,5 +1,7 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useAuth } from '@/hooks/useAuth';
+import { currentUser } from '@/lib/auth';
+import { readSnapshot, writeSnapshot } from '@/lib/cache';
 import { useSettings } from '@/hooks/useSettings';
 import { useCollections } from '@/hooks/useCollections';
 import { useEscape } from '@/hooks/useEscape';
@@ -11,24 +13,36 @@ import { AIAssistant } from '@/components/AIAssistant';
 import { AddDialog } from '@/components/AddDialog';
 import { EditDialog } from '@/components/EditDialog';
 import { HighlightsView } from '@/components/HighlightsView';
+import { ReaderView } from '@/components/ReaderView';
+import { PlanBadge } from '@/components/PlanBadge';
 import { Icon, type IconName } from '@/components/Icon';
 import { useToast } from '@/components/Toast';
 import {
   searchBookmarks,
   deleteBookmark,
   toggleFavorite,
+  updateBookmark,
   getAllTags,
   vaultStats,
+  watchVault,
 } from '@/lib/bookmarks';
-import { type Bookmark, type SortMode, type ViewMode, type VaultStats } from '@/lib/types';
+import { aiAvailable, semanticFind } from '@/lib/ai';
+import { type Bookmark, type Plan, type SortMode, type ViewMode, type VaultStats } from '@/lib/types';
 
 export default function App() {
-  const { ready, authed, email, login, signup, logout } = useAuth();
+  const { ready, authed, email, plan, login, signup, logout } = useAuth();
   const { settings, update } = useSettings();
   const collectionsApi = useCollections(authed);
   const { toast } = useToast();
 
-  const [filter, setFilter] = useState<LibraryFilter>({ kind: 'all' });
+  const [filter, setFilter] = useState<LibraryFilter>(() => {
+    // Open focused when launched from Home (e.g. dashboard.html#c=<id>).
+    const h = typeof location !== 'undefined' ? location.hash : '';
+    if (h.startsWith('#c=')) return { kind: 'collection', id: h.slice(3) };
+    if (h === '#favorites') return { kind: 'favorites' };
+    if (h === '#highlights') return { kind: 'highlights' };
+    return { kind: 'all' };
+  });
   const [query, setQuery] = useState('');
   const [debouncedQuery, setDebouncedQuery] = useState('');
   const [items, setItems] = useState<Bookmark[]>([]);
@@ -39,36 +53,59 @@ export default function App() {
   const [aiOpen, setAiOpen] = useState(false);
   const [addOpen, setAddOpen] = useState(false);
   const [editing, setEditing] = useState<Bookmark | null>(null);
+  const [reading, setReading] = useState<Bookmark | null>(null);
+  const [aiOn, setAiOn] = useState(false);
+  const [aiResults, setAiResults] = useState<Bookmark[] | null>(null);
+  const [aiSearching, setAiSearching] = useState(false);
 
   const view = settings.view;
   const sort = settings.sort;
 
+  const uidRef = useRef<string | null>(null);
+
+  // Stale-while-revalidate: keep showing current items while refreshing.
   const runSearch = useCallback(async () => {
     if (!authed || filter.kind === 'highlights') return;
-    setLoading(true);
     try {
       const opts: Parameters<typeof searchBookmarks>[1] = { sort, perPage: 200 };
       if (filter.kind === 'collection') opts.collection = filter.id;
       else if (filter.kind === 'favorites') opts.favorite = true;
       else if (filter.kind === 'untagged') opts.untagged = true;
       else if (filter.kind === 'tag') opts.tag = filter.tag;
-      setItems(await searchBookmarks(debouncedQuery, opts));
+      const list = await searchBookmarks(debouncedQuery, opts);
+      setItems(list);
+      if (filter.kind === 'all' && !debouncedQuery.trim()) {
+        writeSnapshot({ uid: uidRef.current ?? '', bookmarks: list, collections: collectionsApi.collections, counts: collectionsApi.counts });
+      }
     } catch {
-      setItems([]);
+      /* keep stale items */
     } finally {
       setLoading(false);
     }
-  }, [authed, filter, debouncedQuery, sort]);
+  }, [authed, filter, debouncedQuery, sort, collectionsApi.collections, collectionsApi.counts]);
 
   const refreshMeta = useCallback(async () => {
     if (!authed) return;
     try {
-      setTags(await getAllTags());
-      setStats(await vaultStats());
+      const [t, s] = await Promise.all([getAllTags(), vaultStats()]);
+      setTags(t);
+      setStats(s);
     } catch {
       /* ignore */
     }
   }, [authed]);
+
+  // Paint cached bookmarks instantly on open.
+  useEffect(() => {
+    (async () => {
+      uidRef.current = (await currentUser())?.id ?? null;
+      const snap = await readSnapshot(uidRef.current);
+      if (snap) {
+        setItems(snap.bookmarks);
+        setLoading(false);
+      }
+    })();
+  }, []);
 
   // Debounce the filter input so we don't search on every keystroke.
   useEffect(() => {
@@ -98,9 +135,44 @@ export default function App() {
   // Escape closes the AI slide-over.
   useEscape(() => setAiOpen(false), aiOpen);
 
+  useEffect(() => {
+    aiAvailable().then(setAiOn);
+  }, []);
+  // Leaving a filter exits AI-search results.
+  useEffect(() => {
+    setAiResults(null);
+  }, [filter]);
+
+  async function runAiSearch() {
+    const q = query.trim();
+    if (!q) {
+      toast('Type something to search for first', 'info');
+      return;
+    }
+    setAiSearching(true);
+    try {
+      const corpus = await searchBookmarks('', { perPage: 300 });
+      setAiResults(await semanticFind(q, corpus));
+    } catch {
+      toast('AI search failed', 'error');
+    } finally {
+      setAiSearching(false);
+    }
+  }
+
+  // Live-refresh when the vault changes anywhere (Quick Bar, shortcut, another tab).
+  useEffect(() => {
+    return watchVault(() => {
+      runSearch();
+      refreshMeta();
+      collectionsApi.refresh();
+    });
+  }, [runSearch, refreshMeta, collectionsApi]);
+
   async function remove(id: string) {
     await deleteBookmark(id);
     setItems((p) => p.filter((b) => b.id !== id));
+    setAiResults((p) => (p ? p.filter((b) => b.id !== id) : p));
     toast('Deleted', 'info');
     refreshMeta();
     collectionsApi.refresh();
@@ -108,12 +180,30 @@ export default function App() {
   async function fav(b: Bookmark) {
     const updated = await toggleFavorite(b.id, !b.favorite);
     setItems((p) => p.map((x) => (x.id === b.id ? updated : x)));
+    setAiResults((p) => (p ? p.map((x) => (x.id === b.id ? updated : x)) : p));
     refreshMeta();
   }
   function onEdited(b: Bookmark) {
     setItems((p) => p.map((x) => (x.id === b.id ? b : x)));
+    setAiResults((p) => (p ? p.map((x) => (x.id === b.id ? b : x)) : p));
     refreshMeta();
     collectionsApi.refresh();
+  }
+
+  // Drag a bookmark onto a collection (or "All bookmarks" to unsort it).
+  async function moveToCollection(bookmarkId: string, collectionId: string | undefined) {
+    const updated = await updateBookmark(bookmarkId, { collection: collectionId });
+    // If we're viewing a specific collection, the moved item may leave the view.
+    setItems((p) =>
+      filter.kind === 'collection' && filter.id !== collectionId
+        ? p.filter((b) => b.id !== bookmarkId)
+        : p.map((b) => (b.id === bookmarkId ? updated : b)),
+    );
+    collectionsApi.refresh();
+    const name = collectionId
+      ? collectionsApi.collections.find((c) => c.id === collectionId)?.name ?? 'collection'
+      : null;
+    toast(name ? `Moved to ${name}` : 'Removed from collection', 'success');
   }
 
   const allTagNames = useMemo(() => tags.map((t) => t.tag), [tags]);
@@ -141,6 +231,15 @@ export default function App() {
 
   const paletteCommands = [
     { id: 'new', label: 'New bookmark', icon: 'plus' as IconName, run: () => setAddOpen(true) },
+    {
+      id: 'newcol',
+      label: 'New collection',
+      icon: 'folder' as IconName,
+      run: () => {
+        const n = prompt('New collection name');
+        if (n?.trim()) collectionsApi.create({ name: n.trim() });
+      },
+    },
     { id: 'ask', label: 'Ask your library (AI)', icon: 'sparkles' as IconName, run: () => setAiOpen(true) },
     { id: 'all', label: 'Go to: All bookmarks', icon: 'grid' as IconName, run: () => setFilter({ kind: 'all' }) },
     { id: 'fav', label: 'Go to: Favorites', icon: 'star' as IconName, run: () => setFilter({ kind: 'favorites' }) },
@@ -161,6 +260,8 @@ export default function App() {
         onCreate={collectionsApi.create}
         onRename={collectionsApi.rename}
         onRemove={collectionsApi.remove}
+        onMove={moveToCollection}
+        onReorder={collectionsApi.reorder}
       />
 
       <div className="flex min-w-0 flex-1 flex-col">
@@ -189,7 +290,7 @@ export default function App() {
             <Icon name="plus" size={16} /> Add
           </button>
 
-          <AccountMenu email={email} onLogout={logout} />
+          <AccountMenu email={email} plan={plan} onLogout={logout} />
         </header>
 
         {/* Toolbar */}
@@ -204,7 +305,18 @@ export default function App() {
                 placeholder="Filter results…"
                 value={query}
                 onChange={(e) => setQuery(e.target.value)}
+                onKeyDown={(e) => e.key === 'Enter' && aiOn && runAiSearch()}
               />
+              {aiOn && (
+                <button
+                  className="btn-outline px-2.5 py-1.5"
+                  onClick={runAiSearch}
+                  disabled={aiSearching}
+                  title="AI search — find by meaning, not just keywords"
+                >
+                  <Icon name="sparkles" size={15} />
+                </button>
+              )}
 
               <select
                 className="rounded-lg border border-line bg-surface-raised px-2 py-1.5 text-sm outline-none"
@@ -238,6 +350,26 @@ export default function App() {
         <main className="flex-1 overflow-y-auto p-5">
           {isHighlights ? (
             <HighlightsView onCountChange={refreshMeta} />
+          ) : aiResults !== null ? (
+            <>
+              <div className="mb-3 flex items-center gap-2 rounded-lg bg-brand/10 px-3 py-2 text-sm text-brand">
+                <Icon name="sparkles" size={15} />
+                AI results for “{query}” · {aiResults.length}
+                <button className="ml-auto text-xs underline hover:no-underline" onClick={() => setAiResults(null)}>
+                  Clear
+                </button>
+              </div>
+              <BookmarkGrid
+                items={aiResults}
+                loading={aiSearching}
+                view={view}
+                onDelete={remove}
+                onToggleFavorite={fav}
+                onEdit={setEditing}
+                onRead={setReading}
+                emptyHint="No AI matches — try rephrasing your search."
+              />
+            </>
           ) : (
             <BookmarkGrid
               items={items}
@@ -246,6 +378,7 @@ export default function App() {
               onDelete={remove}
               onToggleFavorite={fav}
               onEdit={setEditing}
+              onRead={setReading}
               emptyHint={
                 filter.kind === 'all'
                   ? 'Click “Add”, use the toolbar icon, or right-click any page → “Save page to Keepsake”.'
@@ -290,11 +423,13 @@ export default function App() {
           onSaved={onEdited}
         />
       )}
+
+      {reading && <ReaderView bookmark={reading} onClose={() => setReading(null)} />}
     </div>
   );
 }
 
-function AccountMenu({ email, onLogout }: { email: string | null; onLogout: () => void }) {
+function AccountMenu({ email, plan, onLogout }: { email: string | null; plan: Plan; onLogout: () => void }) {
   const [open, setOpen] = useState(false);
   return (
     <div className="relative">
@@ -309,7 +444,10 @@ function AccountMenu({ email, onLogout }: { email: string | null; onLogout: () =
         <>
           <div className="fixed inset-0 z-10" onClick={() => setOpen(false)} />
           <div className="absolute right-0 top-11 z-20 w-52 overflow-hidden rounded-xl border border-line bg-surface-raised shadow-float animate-pop-in">
-            <div className="border-b border-line px-3 py-2 text-xs text-ink-faint">{email}</div>
+            <div className="flex items-center justify-between gap-2 border-b border-line px-3 py-2 text-xs text-ink-faint">
+              <span className="truncate">{email}</span>
+              <PlanBadge plan={plan} />
+            </div>
             <button
               className="flex w-full items-center gap-2 px-3 py-2 text-sm text-ink-soft hover:bg-surface-sunken"
               onClick={() => browser.runtime.openOptionsPage()}

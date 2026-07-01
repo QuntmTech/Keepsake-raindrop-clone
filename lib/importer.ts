@@ -1,4 +1,6 @@
 import { saveBookmark } from './bookmarks';
+import { getBackend } from './backend';
+import { type SaveBookmarkInput } from './backend/types';
 import { safeDomain, inferType, faviconFor } from './bookmarks';
 import { type Bookmark } from './types';
 
@@ -55,20 +57,36 @@ export async function importItems(
   collection: string | undefined,
   onProgress?: (p: ImportProgress) => void,
 ): Promise<ImportProgress> {
+  const toInput = (item: ParsedItem): SaveBookmarkInput => {
+    const domain = safeDomain(item.url);
+    return {
+      url: item.url,
+      title: item.title,
+      tags: item.tags ?? [],
+      collection,
+      domain,
+      type: inferType(item.url),
+      favicon: faviconFor(domain),
+    };
+  };
+
+  const backend = await getBackend();
+
+  // Fast path: backends that support bulk import (e.g. local) write once.
+  if (backend.bulkSave) {
+    onProgress?.({ done: 0, total: items.length, failed: 0 });
+    const saved = await backend.bulkSave(items.map(toInput));
+    const result = { done: items.length, total: items.length, failed: items.length - saved };
+    onProgress?.(result);
+    return result;
+  }
+
+  // Fallback: one at a time.
   let done = 0;
   let failed = 0;
   for (const item of items) {
     try {
-      const domain = safeDomain(item.url);
-      await saveBookmark({
-        url: item.url,
-        title: item.title,
-        tags: item.tags ?? [],
-        collection,
-        domain,
-        type: inferType(item.url),
-        favicon: faviconFor(domain),
-      });
+      await saveBookmark(toInput(item));
     } catch {
       failed++;
     }

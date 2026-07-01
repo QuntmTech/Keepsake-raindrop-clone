@@ -9,6 +9,7 @@ import {
   type VaultStats,
 } from '../types';
 import { faviconFor, inferType, parseTags, safeDomain, SORT_FILTER, escFilter } from '../util';
+import { HOSTED_PB_URL } from '../config';
 import {
   type AuthUser,
   type Backend,
@@ -20,15 +21,49 @@ import {
 // PocketBase-backed implementation. Kept behind the same Backend interface so
 // the UI doesn't change when you switch to it. See pocketbase/schema.md.
 
-const PB_URL = import.meta.env.WXT_PB_URL ?? 'http://127.0.0.1:8090';
+// The server URL is configurable at runtime (Settings → Storage) so users can
+// paste their PocketHost/self-hosted URL without rebuilding the extension.
+const pbUrlStore = storage.defineItem<string>('sync:pb_url', {
+  fallback: HOSTED_PB_URL,
+});
 const authMirror = storage.defineItem<string | null>('local:pb_auth', { fallback: null });
+
+export async function getPbUrl(): Promise<string> {
+  return (await pbUrlStore.getValue()) || '';
+}
+export async function setPbUrl(url: string): Promise<void> {
+  // Normalize: trim and strip a trailing slash.
+  await pbUrlStore.setValue(url.trim().replace(/\/+$/, ''));
+}
+
+// Translate PocketBase auth errors into clear, user-facing messages.
+function authError(e: unknown, kind: 'login' | 'signup'): string {
+  const status = (e as { status?: number })?.status;
+  if (status === 429) return 'Too many attempts — wait a few seconds and try again.';
+  if (!status) return 'Can’t reach the server — check your connection and try again.';
+  if (kind === 'login' && (status === 400 || status === 401 || status === 403))
+    return 'Wrong email or password.';
+  if (kind === 'signup' && status === 400)
+    return 'Could not sign up — that email may already be in use, or the password is too short.';
+  return (e as { message?: string })?.message || 'Something went wrong.';
+}
 
 export class PocketBaseBackend implements Backend {
   readonly kind = 'pocketbase' as const;
-  private pb = new PocketBase(PB_URL);
+  private pb = new PocketBase('http://127.0.0.1:8090');
+  private url = '';
   private wired = false;
 
   async init(): Promise<void> {
+    // Never fall back to localhost in a hosted build — use the baked-in server.
+    this.url = (await pbUrlStore.getValue()) || HOSTED_PB_URL || 'http://127.0.0.1:8090';
+    this.pb = new PocketBase(this.url);
+    // CRITICAL: the SDK auto-cancels duplicate in-flight requests by default,
+    // which makes concurrent list/search calls (collections + bookmarks +
+    // counts on open) reject as "autocancelled" and show up empty until a later
+    // request lands. Turn it off so every request completes.
+    this.pb.autoCancellation(false);
+
     const saved = await authMirror.getValue();
     if (saved) {
       try {
@@ -47,26 +82,53 @@ export class PocketBaseBackend implements Backend {
             : null,
         );
       });
+      // Sync auth across contexts (log in via popup -> content script sees it).
+      authMirror.watch((saved) => {
+        if (!saved) {
+          this.pb.authStore.clear();
+          return;
+        }
+        try {
+          const parsed = JSON.parse(saved);
+          if (parsed.token !== this.pb.authStore.token) {
+            this.pb.authStore.save(parsed.token, parsed.record);
+          }
+        } catch {
+          /* ignore */
+        }
+      });
     }
   }
 
   private toUser(): AuthUser | null {
-    const r = this.pb.authStore.record as { id: string; email?: string; name?: string } | null;
-    return r ? { id: r.id, email: r.email ?? '', name: r.name } : null;
+    const r = this.pb.authStore.record as
+      | { id: string; email?: string; name?: string; plan?: string }
+      | null;
+    if (!r) return null;
+    const plan = r.plan === 'owner' || r.plan === 'pro' ? r.plan : 'free';
+    return { id: r.id, email: r.email ?? '', name: r.name, plan };
   }
 
   async login(email: string, password: string): Promise<AuthUser> {
-    await this.pb.collection('users').authWithPassword(email, password);
+    try {
+      await this.pb.collection('users').authWithPassword(email, password);
+    } catch (e) {
+      throw new Error(authError(e, 'login'));
+    }
     return this.toUser()!;
   }
 
   async signup(email: string, password: string, name?: string): Promise<AuthUser> {
-    await this.pb.collection('users').create({
-      email,
-      password,
-      passwordConfirm: password,
-      name: name || email.split('@')[0],
-    });
+    try {
+      await this.pb.collection('users').create({
+        email,
+        password,
+        passwordConfirm: password,
+        name: name || email.split('@')[0],
+      });
+    } catch (e) {
+      throw new Error(authError(e, 'signup'));
+    }
     return this.login(email, password);
   }
 
@@ -89,7 +151,7 @@ export class PocketBaseBackend implements Backend {
   }
 
   fileUrl(record: { id: string; collectionId: string }, filename: string): string {
-    return `${PB_URL}/api/files/${record.collectionId}/${record.id}/${filename}`;
+    return `${this.url}/api/files/${record.collectionId}/${record.id}/${filename}`;
   }
 
   private normalize = (rec: any): Bookmark => ({
@@ -98,6 +160,7 @@ export class PocketBaseBackend implements Backend {
     title: rec.title,
     description: rec.description || undefined,
     summary: rec.summary || undefined,
+    content: rec.content || undefined,
     note: rec.note || undefined,
     tags: parseTags(rec.tags),
     aiTags: parseTags(rec.aiTags),
@@ -108,6 +171,8 @@ export class PocketBaseBackend implements Backend {
     domain: rec.domain || safeDomain(rec.url),
     type: (rec.type as BookmarkType) || inferType(rec.url),
     favorite: Boolean(rec.favorite),
+    pinned: Boolean(rec.pinned),
+    sort: typeof rec.sort === 'number' ? rec.sort : undefined,
     readingTime: typeof rec.readingTime === 'number' ? rec.readingTime : undefined,
     broken: Boolean(rec.broken),
     lastVisited: rec.lastVisited || undefined,
@@ -124,6 +189,7 @@ export class PocketBaseBackend implements Backend {
     form.set('title', input.title || input.url);
     form.set('description', input.description ?? '');
     form.set('summary', input.summary ?? '');
+    form.set('content', input.content ?? '');
     form.set('note', input.note ?? '');
     form.set('tags', JSON.stringify(input.tags ?? []));
     form.set('aiTags', JSON.stringify(input.aiTags ?? []));
@@ -131,6 +197,8 @@ export class PocketBaseBackend implements Backend {
     form.set('domain', domain);
     form.set('type', input.type ?? inferType(input.url));
     form.set('favorite', String(Boolean(input.favorite)));
+    form.set('pinned', String(Boolean(input.pinned)));
+    if (typeof input.sort === 'number') form.set('sort', String(input.sort));
     if (input.cover) form.set('cover', input.cover);
     if (input.favicon) form.set('favicon', input.favicon);
     if (typeof input.readingTime === 'number') form.set('readingTime', String(input.readingTime));
@@ -141,7 +209,13 @@ export class PocketBaseBackend implements Backend {
   }
 
   async updateBookmark(id: string, patch: Partial<Bookmark>): Promise<Bookmark> {
-    const body: Record<string, unknown> = { ...patch };
+    const body: Record<string, unknown> = {};
+    // CRITICAL: JSON.stringify drops undefined values, so "clear this field"
+    // (e.g. remove from a collection => collection: undefined) would silently
+    // never save. Convert explicit undefined to '' so PocketBase clears it.
+    for (const [k, v] of Object.entries(patch)) {
+      body[k] = v === undefined ? '' : v;
+    }
     if (patch.tags) body.tags = JSON.stringify(patch.tags);
     if (patch.aiTags) body.aiTags = JSON.stringify(patch.aiTags);
     const rec = await this.pb.collection('bookmarks').update(id, body);

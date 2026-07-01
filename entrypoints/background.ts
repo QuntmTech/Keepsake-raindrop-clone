@@ -167,6 +167,7 @@ async function saveTab(tab: chrome.tabs.Tab, collection?: string) {
     title: meta?.title || tab.title || tab.url,
     description: meta?.description,
     summary,
+    content: meta?.text,
     tags,
     aiTags,
     collection: collection ?? settings.defaultCollection,

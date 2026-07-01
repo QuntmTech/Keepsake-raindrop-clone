@@ -4,6 +4,7 @@ import {
   type Collection,
   type Highlight,
   type HighlightColor,
+  type Plan,
   type SortMode,
   type TextQuoteAnchor,
   type VaultStats,
@@ -14,6 +15,7 @@ export interface SaveBookmarkInput {
   title: string;
   description?: string;
   summary?: string;
+  content?: string;
   note?: string;
   tags?: string[];
   aiTags?: string[];
@@ -23,6 +25,8 @@ export interface SaveBookmarkInput {
   domain?: string;
   type?: BookmarkType;
   favorite?: boolean;
+  pinned?: boolean;
+  sort?: number;
   readingTime?: number;
   screenshotBlob?: Blob;
 }
@@ -51,6 +55,7 @@ export interface AuthUser {
   id: string;
   email: string;
   name?: string;
+  plan: Plan;
 }
 
 // Every data backend (local chrome.storage, PocketBase, …) implements this.
@@ -68,6 +73,10 @@ export interface Backend {
 
   // bookmarks
   saveBookmark(input: SaveBookmarkInput): Promise<Bookmark>;
+  // Optional: notify when the vault changes (any context) so open UIs refresh live.
+  watch?(cb: () => void): () => void;
+  // Optional fast path for bulk imports (single write where possible). Returns count saved.
+  bulkSave?(inputs: SaveBookmarkInput[]): Promise<number>;
   updateBookmark(id: string, patch: Partial<Bookmark>): Promise<Bookmark>;
   deleteBookmark(id: string): Promise<void>;
   searchBookmarks(query: string, opts?: SearchOpts): Promise<Bookmark[]>;

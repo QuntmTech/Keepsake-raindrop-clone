@@ -74,3 +74,18 @@ export async function deleteCollection(id: string): Promise<void> {
 export async function countByCollection(): Promise<Record<string, number>> {
   return (await getBackend()).countByCollection();
 }
+
+// Subscribe to vault changes (saves/edits/deletes from any context) so open
+// surfaces refresh live. Returns an unsubscribe function.
+export function watchVault(cb: () => void): () => void {
+  let unsub = () => {};
+  let cancelled = false;
+  getBackend().then((b) => {
+    if (cancelled) return;
+    unsub = b.watch?.(cb) ?? (() => {});
+  });
+  return () => {
+    cancelled = true;
+    unsub();
+  };
+}

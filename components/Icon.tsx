@@ -6,7 +6,7 @@ export type IconName =
   | 'grid' | 'list' | 'masonry' | 'sparkles' | 'folder' | 'tag' | 'external'
   | 'chevron' | 'close' | 'check' | 'highlight' | 'sun' | 'moon' | 'command'
   | 'video' | 'image' | 'pdf' | 'repo' | 'doc' | 'link' | 'logout' | 'import'
-  | 'edit' | 'inbox';
+  | 'edit' | 'inbox' | 'copy';
 
 const paths: Record<IconName, string> = {
   bookmark: 'M6 4h12v16l-6-4-6 4z',
@@ -15,7 +15,7 @@ const paths: Record<IconName, string> = {
   star: 'M12 3l2.9 6 6.6.9-4.8 4.6 1.1 6.5L12 18.8 6.2 21l1.1-6.5L2.5 9.9 9 9z',
   'star-fill': 'M12 3l2.9 6 6.6.9-4.8 4.6 1.1 6.5L12 18.8 6.2 21l1.1-6.5L2.5 9.9 9 9z',
   trash: 'M4 7h16M9 7V4h6v3M6 7l1 13h10l1-13',
-  settings: 'M12 9a3 3 0 1 0 0 6 3 3 0 0 0 0-6zM19.4 13a7.9 7.9 0 0 0 0-2l2-1.5-2-3.5-2.3 1a8 8 0 0 0-1.7-1l-.3-2.5h-4l-.3 2.5a8 8 0 0 0-1.7 1l-2.3-1-2 3.5L4.6 11a7.9 7.9 0 0 0 0 2l-2 1.5 2 3.5 2.3-1a8 8 0 0 0 1.7 1l.3 2.5h4l.3-2.5a8 8 0 0 0 1.7-1l2.3 1 2-3.5z',
+  settings: 'M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z M15 12a3 3 0 1 1-6 0 3 3 0 0 1 6 0z',
   grid: 'M4 4h7v7H4zM13 4h7v7h-7zM4 13h7v7H4zM13 13h7v7h-7z',
   list: 'M8 6h13M8 12h13M8 18h13M3 6h.01M3 12h.01M3 18h.01',
   masonry: 'M4 4h7v10H4zM13 4h7v6h-7M4 16h7v4H4M13 12h7v8h-7z',
@@ -40,6 +40,7 @@ const paths: Record<IconName, string> = {
   import: 'M12 3v12M8 11l4 4 4-4M4 17v2a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-2',
   edit: 'M12 20h9M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4z',
   inbox: 'M4 13l2-9h12l2 9M4 13v6a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-6M4 13h5l1 2h4l1-2h5',
+  copy: 'M9 9h10v10H9zM5 15H4a1 1 0 0 1-1-1V4a1 1 0 0 1 1-1h10a1 1 0 0 1 1 1v1',
 };
 
 export function Icon({

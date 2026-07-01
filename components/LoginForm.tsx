@@ -1,5 +1,6 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { Icon } from './Icon';
+import { getBackendMode, setBackendMode, HOSTED, type BackendMode } from '@/lib/backend';
 
 interface Props {
   onLogin: (email: string, password: string) => Promise<void>;
@@ -13,6 +14,11 @@ export function LoginForm({ onLogin, onSignup, compact }: Props) {
   const [password, setPassword] = useState('');
   const [error, setError] = useState('');
   const [busy, setBusy] = useState(false);
+  const [backend, setBackend] = useState<BackendMode>('local');
+
+  useEffect(() => {
+    getBackendMode().then(setBackend);
+  }, []);
 
   async function submit() {
     if (!email || !password) {
@@ -81,6 +87,22 @@ export function LoginForm({ onLogin, onSignup, compact }: Props) {
             ? "Don't have an account? Sign up"
             : 'Already have an account? Sign in'}
         </button>
+      )}
+
+      {!HOSTED && backend === 'pocketbase' && (
+        <div className="mt-2 rounded-lg border border-line bg-surface-sunken p-2.5 text-xs text-ink-soft">
+          You're connected to a <b>PocketBase server</b>. If you can't sign in (no server set up),
+          switch back to on-device storage:
+          <button
+            className="mt-1.5 w-full rounded-md bg-ink/5 py-1.5 font-medium text-brand hover:bg-ink/10"
+            onClick={async () => {
+              await setBackendMode('local');
+              location.reload();
+            }}
+          >
+            Use on-device storage
+          </button>
+        </div>
       )}
     </div>
   );
