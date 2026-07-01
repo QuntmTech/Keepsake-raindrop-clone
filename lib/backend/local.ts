@@ -190,6 +190,7 @@ export class LocalBackend implements Backend {
       type: input.type ?? inferType(input.url),
       favorite: Boolean(input.favorite),
       pinned: Boolean(input.pinned),
+      homeOnly: Boolean(input.homeOnly),
       sort: input.sort,
       readingTime: input.readingTime,
       user: uid,

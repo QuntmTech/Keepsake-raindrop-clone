@@ -1,25 +1,38 @@
 import { getBackend } from './backend';
 import { type Bookmark } from './types';
 import { type SaveBookmarkInput, type SearchOpts } from './backend/types';
+import { applyHomeOverlay, forgetHomeOverlay, saveHomeBookmark, updateHomeBookmark } from './home';
 
 // Facade over the active backend. Components import from here regardless of
 // whether data lives in chrome.storage (local) or PocketBase.
 
 export type { SaveBookmarkInput, SearchOpts };
 
+// Home app tiles (added from the catalog, `homeOnly`) live in the same store
+// but are NOT library bookmarks: hide them from library views by default.
+// Home passes homeTiles: 'include'; explicit collection views keep them so a
+// cluster collection isn't an empty folder in the dashboard.
+export interface LibrarySearchOpts extends SearchOpts {
+  homeTiles?: 'include' | 'exclude';
+}
+
 // Re-export pure helpers so existing imports (`@/lib/bookmarks`) keep working.
 export { safeDomain, inferType, faviconFor } from './util';
 
+// Writes go through the Home-field verifiers (lib/home.ts): if the server
+// schema drops pinned/sort/homeOnly, they land in the overlay instead of
+// vanishing. Saves without those fields behave exactly as before.
 export async function saveBookmark(input: SaveBookmarkInput): Promise<Bookmark> {
-  return (await getBackend()).saveBookmark(input);
+  return saveHomeBookmark(input);
 }
 
 export async function updateBookmark(id: string, patch: Partial<Bookmark>): Promise<Bookmark> {
-  return (await getBackend()).updateBookmark(id, patch);
+  return updateHomeBookmark(id, patch);
 }
 
 export async function deleteBookmark(id: string): Promise<void> {
-  return (await getBackend()).deleteBookmark(id);
+  await (await getBackend()).deleteBookmark(id);
+  await forgetHomeOverlay(id);
 }
 
 export async function toggleFavorite(id: string, favorite: boolean): Promise<Bookmark> {
@@ -30,8 +43,12 @@ export async function markVisited(id: string): Promise<void> {
   return (await getBackend()).markVisited(id);
 }
 
-export async function searchBookmarks(query: string, opts: SearchOpts = {}): Promise<Bookmark[]> {
-  return (await getBackend()).searchBookmarks(query, opts);
+export async function searchBookmarks(query: string, opts: LibrarySearchOpts = {}): Promise<Bookmark[]> {
+  const { homeTiles, ...backendOpts } = opts;
+  const items = await (await getBackend()).searchBookmarks(query, backendOpts);
+  const merged = await applyHomeOverlay(items);
+  if (homeTiles === 'include' || backendOpts.collection) return merged;
+  return merged.filter((b) => !b.homeOnly);
 }
 
 export async function recentBookmarks(limit = 12): Promise<Bookmark[]> {
@@ -39,7 +56,9 @@ export async function recentBookmarks(limit = 12): Promise<Bookmark[]> {
 }
 
 export async function findByUrl(url: string): Promise<Bookmark | null> {
-  return (await getBackend()).findByUrl(url);
+  const bm = await (await getBackend()).findByUrl(url);
+  if (!bm) return null;
+  return (await applyHomeOverlay([bm]))[0];
 }
 
 export async function getAllTags(): Promise<{ tag: string; count: number }[]> {

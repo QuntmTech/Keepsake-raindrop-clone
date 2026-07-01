@@ -101,7 +101,7 @@ export default function App() {
       uidRef.current = (await currentUser())?.id ?? null;
       const snap = await readSnapshot(uidRef.current);
       if (snap) {
-        setItems(snap.bookmarks);
+        setItems(snap.bookmarks.filter((b) => !b.homeOnly));
         setLoading(false);
       }
     })();

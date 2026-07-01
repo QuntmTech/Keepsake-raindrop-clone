@@ -172,6 +172,7 @@ export class PocketBaseBackend implements Backend {
     type: (rec.type as BookmarkType) || inferType(rec.url),
     favorite: Boolean(rec.favorite),
     pinned: Boolean(rec.pinned),
+    homeOnly: Boolean(rec.homeOnly),
     sort: typeof rec.sort === 'number' ? rec.sort : undefined,
     readingTime: typeof rec.readingTime === 'number' ? rec.readingTime : undefined,
     broken: Boolean(rec.broken),
@@ -198,6 +199,7 @@ export class PocketBaseBackend implements Backend {
     form.set('type', input.type ?? inferType(input.url));
     form.set('favorite', String(Boolean(input.favorite)));
     form.set('pinned', String(Boolean(input.pinned)));
+    form.set('homeOnly', String(Boolean(input.homeOnly)));
     if (typeof input.sort === 'number') form.set('sort', String(input.sort));
     if (input.cover) form.set('cover', input.cover);
     if (input.favicon) form.set('favicon', input.favicon);

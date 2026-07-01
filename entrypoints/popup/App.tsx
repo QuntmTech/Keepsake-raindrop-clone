@@ -9,6 +9,7 @@ import { SettingsPanel } from '@/components/SettingsPanel';
 import { BookmarkGrid } from '@/components/BookmarkGrid';
 import { HighlightsView } from '@/components/HighlightsView';
 import { CollectionSidebar, type LibraryFilter } from '@/components/CollectionSidebar';
+import { CaptureMenu } from '@/components/CaptureMenu';
 import { Icon } from '@/components/Icon';
 import { useToast } from '@/components/Toast';
 import { send } from '@/lib/messaging';
@@ -103,7 +104,8 @@ function Vault() {
       uidRef.current = (await currentUser())?.id ?? null;
       const snap = await readSnapshot(uidRef.current);
       if (snap) {
-        setItems(snap.bookmarks);
+        // The snapshot may include Home-only app tiles — never paint those in the library.
+        setItems(snap.bookmarks.filter((b) => !b.homeOnly));
         setLoading(false);
       }
     })();
@@ -203,6 +205,7 @@ function Vault() {
                 <span className="flex-1 text-sm font-semibold">{right === 'save' ? 'Save page' : 'Settings'}</span>
               </>
             )}
+            <CaptureMenu buttonClass="btn-ghost px-2 py-1.5 text-xs" />
             <button
               className={`btn-ghost px-2 py-1.5 ${right === 'settings' ? 'text-brand' : ''}`}
               onClick={() => setRight((r) => (r === 'settings' ? 'list' : 'settings'))}

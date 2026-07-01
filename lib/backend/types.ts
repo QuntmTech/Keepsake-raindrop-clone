@@ -26,6 +26,7 @@ export interface SaveBookmarkInput {
   type?: BookmarkType;
   favorite?: boolean;
   pinned?: boolean;
+  homeOnly?: boolean;
   sort?: number;
   readingTime?: number;
   screenshotBlob?: Blob;

@@ -45,6 +45,7 @@
       { "id": "bm_type", "name": "type", "type": "text", "required": false, "system": false, "hidden": false, "presentable": false, "min": 0, "max": 0, "pattern": "" },
       { "id": "bm_favorite", "name": "favorite", "type": "bool", "required": false, "system": false, "hidden": false, "presentable": false },
       { "id": "bm_pinned", "name": "pinned", "type": "bool", "required": false, "system": false, "hidden": false, "presentable": false },
+      { "id": "bm_homeonly", "name": "homeOnly", "type": "bool", "required": false, "system": false, "hidden": false, "presentable": false },
       { "id": "bm_sort", "name": "sort", "type": "number", "required": false, "system": false, "hidden": false, "presentable": false, "onlyInt": false },
       { "id": "bm_reading", "name": "readingTime", "type": "number", "required": false, "system": false, "hidden": false, "presentable": false, "onlyInt": false },
       { "id": "bm_lastvisited", "name": "lastVisited", "type": "date", "required": false, "system": false, "hidden": false, "presentable": false, "min": "", "max": "" },

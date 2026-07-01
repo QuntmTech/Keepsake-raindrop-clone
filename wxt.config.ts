@@ -23,6 +23,11 @@ export default defineConfig({
       'contextMenus', // right-click "Save to Keepsake"
       'sidePanel', // the side-panel UI surface
       'scripting', // inject metadata extractor + highlight logic
+      'downloads', // save screenshots + recordings to Downloads/Keepsake
+      'offscreen', // MV3 recorder document (recording survives popup close)
+      'tabCapture', // "record this tab" stream ids
+      'desktopCapture', // screen/window picker for recording
+      'notifications', // surface async capture failures after the popup closed
     ],
 
     // <all_urls>: content script (highlights) + captureVisibleTab + metadata extraction.

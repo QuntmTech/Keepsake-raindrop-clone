@@ -6,7 +6,7 @@ export type IconName =
   | 'grid' | 'list' | 'masonry' | 'sparkles' | 'folder' | 'tag' | 'external'
   | 'chevron' | 'close' | 'check' | 'highlight' | 'sun' | 'moon' | 'command'
   | 'video' | 'image' | 'pdf' | 'repo' | 'doc' | 'link' | 'logout' | 'import'
-  | 'edit' | 'inbox' | 'copy';
+  | 'edit' | 'inbox' | 'copy' | 'grip' | 'camera' | 'record' | 'monitor' | 'mic';
 
 const paths: Record<IconName, string> = {
   bookmark: 'M6 4h12v16l-6-4-6 4z',
@@ -41,6 +41,11 @@ const paths: Record<IconName, string> = {
   edit: 'M12 20h9M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4z',
   inbox: 'M4 13l2-9h12l2 9M4 13v6a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-6M4 13h5l1 2h4l1-2h5',
   copy: 'M9 9h10v10H9zM5 15H4a1 1 0 0 1-1-1V4a1 1 0 0 1 1-1h10a1 1 0 0 1 1 1v1',
+  grip: 'M9 6h.01M9 12h.01M9 18h.01M15 6h.01M15 12h.01M15 18h.01',
+  camera: 'M3 8a2 2 0 0 1 2-2h2l2-2h6l2 2h2a2 2 0 0 1 2 2v10a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2zM12 17a4 4 0 1 0 0-8 4 4 0 0 0 0 8z',
+  record: 'M12 3a9 9 0 1 0 0 18 9 9 0 0 0 0-18zM12 8a4 4 0 1 1 0 8 4 4 0 0 1 0-8z',
+  monitor: 'M3 5h18v11H3zM8 21h8M12 16v5',
+  mic: 'M12 3a3 3 0 0 1 3 3v5a3 3 0 0 1-6 0V6a3 3 0 0 1 3-3zM5 11a7 7 0 0 0 14 0M12 18v3M8 21h8',
 };
 
 export function Icon({

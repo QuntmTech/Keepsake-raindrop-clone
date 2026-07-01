@@ -33,6 +33,7 @@ export interface Bookmark {
   type: BookmarkType;
   favorite?: boolean;
   pinned?: boolean;          // shown on the Home screen (curated — separate from the library)
+  homeOnly?: boolean;        // a Home app tile (from the catalog) — hidden from library views
   sort?: number;             // manual order for Home tiles / lists
   readingTime?: number;      // minutes
   broken?: boolean;          // link-checker flagged it as dead

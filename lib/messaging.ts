@@ -4,6 +4,7 @@
 
 import { type HighlightColor } from './types';
 import { type PageMeta } from './metadata';
+import { type CaptureMessage } from './capture';
 
 export type Message =
   | { type: 'SAVE_CURRENT_PAGE'; collection?: string }
@@ -14,7 +15,8 @@ export type Message =
   | { type: 'OPEN_QUICKBAR' } // background -> content: pop the quick-save folder picker
   | { type: 'CREATE_HIGHLIGHT'; url: string; text: string; color: HighlightColor; anchor?: string }
   | { type: 'FLUSH_QUEUE' }
-  | { type: 'PING' };
+  | { type: 'PING' }
+  | CaptureMessage; // screenshots + screen recording (see lib/capture.ts)
 
 export interface ScreenshotResult {
   dataUrl: string;

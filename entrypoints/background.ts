@@ -5,6 +5,13 @@ import { enqueueSave, flushQueue } from '@/lib/queue';
 import { aiAvailable, getAiSettings, suggestTags, summarize, type PageContext } from '@/lib/ai';
 import { type Message, type ScreenshotResult, type MetaResult, dataUrlToBlob } from '@/lib/messaging';
 import { extractPageMeta, type PageMeta } from '@/lib/metadata';
+import { captureFullPageScript } from '@/lib/fullpage';
+import {
+  IDLE_RECORDING_STATE,
+  recordingStateStore,
+  screenshotFilename,
+  type RecordOptions,
+} from '@/lib/capture';
 import { inferType, safeDomain } from '@/lib/util';
 import { type UiSurface } from '@/lib/types';
 
@@ -99,9 +106,154 @@ async function handleMessage(msg: Message): Promise<unknown> {
       return { ok: true, flushed: n };
     }
 
+    // ---- capture: screenshots + screen recording (ported from CaptureCraft) ----
+
+    case 'KS_CAPTURE_VISIBLE': {
+      const dataUrl = await browser.tabs.captureVisibleTab(undefined as any, { format: 'png' });
+      await browser.downloads.download({ url: dataUrl, filename: screenshotFilename('visible') });
+      return { ok: true };
+    }
+
+    // One tile for the injected full-page script. Chrome caps captureVisibleTab
+    // at ~2 calls/second — pace ourselves so a long page never hits the quota.
+    case 'KS_CAPTURE_VIEWPORT': {
+      await tileGate();
+      const dataUrl = await browser.tabs.captureVisibleTab(undefined as any, { format: 'png' });
+      return { dataUrl };
+    }
+
+    case 'KS_CAPTURE_FULL': {
+      const [tab] = await browser.tabs.query({ active: true, currentWindow: true });
+      if (!tab?.id) return { ok: false, error: 'No active tab' };
+      // Ack immediately so the popup can close — the capture keeps running.
+      captureFullPage(tab.id).catch((e) => notify('Full-page capture failed', String((e as Error)?.message ?? e)));
+      return { ok: true };
+    }
+
+    case 'KS_START_RECORDING':
+      await startRecording(msg.options);
+      return { ok: true };
+
+    case 'KS_STOP_RECORDING':
+      await browser.runtime.sendMessage({ target: 'ks-offscreen', type: 'OFFSCREEN_STOP' });
+      return { ok: true };
+
+    case 'KS_GET_RECORDING_STATE':
+      return await verifiedRecordingState();
+
+    // Offscreen finished: the blob: URL it minted stays valid while the
+    // offscreen document is alive, so download it before closing anything.
+    case 'KS_RECORDING_READY': {
+      await recordingStateStore.setValue(IDLE_RECORDING_STATE);
+      await browser.action.setBadgeText({ text: '' });
+      try {
+        await browser.downloads.download({ url: msg.url, filename: msg.filename });
+        return { ok: true };
+      } catch {
+        return { ok: false }; // offscreen falls back to an in-document anchor download
+      }
+    }
+
+    case 'KS_RECORDING_ERROR': {
+      await recordingStateStore.setValue(IDLE_RECORDING_STATE);
+      await browser.action.setBadgeText({ text: '' });
+      notify('Recording failed', msg.error);
+      return { ok: true };
+    }
+
     default:
       return { ok: false, error: 'unknown message' };
   }
+}
+
+// ---- capture plumbing ----
+
+// Minimum spacing between captureVisibleTab calls (Chrome quota ≈ 2/sec).
+let lastTileAt = 0;
+async function tileGate(): Promise<void> {
+  const MIN_GAP = 600;
+  const wait = lastTileAt + MIN_GAP - Date.now();
+  if (wait > 0) await new Promise((r) => setTimeout(r, wait));
+  lastTileAt = Date.now();
+}
+
+async function captureFullPage(tabId: number): Promise<void> {
+  const [res] = await browser.scripting.executeScript({
+    target: { tabId },
+    func: captureFullPageScript,
+  });
+  const dataUrl = res?.result as string | null;
+  if (!dataUrl) throw new Error('Capture returned nothing');
+  const filename = screenshotFilename('full').replace(/\.png$/, dataUrl.startsWith('data:image/jpeg') ? '.jpg' : '.png');
+  await browser.downloads.download({ url: dataUrl, filename });
+}
+
+async function ensureOffscreenDocument(): Promise<void> {
+  // getContexts (not an in-memory flag): survives service-worker restarts.
+  const contexts = await (browser.runtime as any).getContexts({ contextTypes: ['OFFSCREEN_DOCUMENT'] });
+  if (contexts.length > 0) return;
+  await (browser as any).offscreen.createDocument({
+    url: browser.runtime.getURL('/offscreen.html'),
+    reasons: ['USER_MEDIA', 'DISPLAY_MEDIA'],
+    justification: 'Recording the screen/tab so the capture survives the popup closing',
+  });
+}
+
+async function startRecording(options: RecordOptions): Promise<void> {
+  const state = await verifiedRecordingState();
+  if (state.isRecording) throw new Error('Already recording');
+  const [tab] = await browser.tabs.query({ active: true, currentWindow: true });
+  if (!tab?.id) throw new Error('No active tab');
+
+  await ensureOffscreenDocument();
+
+  let streamId: string;
+  if (options.mode === 'tab') {
+    streamId = await new Promise<string>((resolve, reject) => {
+      browser.tabCapture.getMediaStreamId({ targetTabId: tab.id }, (id: string) => {
+        if (id) resolve(id);
+        else reject(new Error(browser.runtime.lastError?.message || 'Could not capture this tab'));
+      });
+    });
+  } else {
+    // Chrome's picker: user chooses a screen or a window (audio = system audio).
+    streamId = await new Promise<string>((resolve, reject) => {
+      browser.desktopCapture.chooseDesktopMedia(['screen', 'window', 'audio'] as any, tab as any, (id: string) => {
+        if (id) resolve(id);
+        else reject(new Error('Capture was cancelled'));
+      });
+    });
+  }
+
+  await browser.runtime.sendMessage({ target: 'ks-offscreen', type: 'OFFSCREEN_START', streamId, options });
+  await recordingStateStore.setValue({
+    isRecording: true,
+    mode: options.mode,
+    startedAt: Date.now(),
+    tabId: tab.id,
+  });
+  await browser.action.setBadgeText({ text: 'REC' });
+  await browser.action.setBadgeBackgroundColor({ color: '#dc2626' });
+}
+
+// Storage says "recording", but is the offscreen recorder actually alive?
+// (It dies on browser restart; don't show a stuck REC state forever.)
+async function verifiedRecordingState() {
+  const state = await recordingStateStore.getValue();
+  if (!state.isRecording) return state;
+  const contexts = await (browser.runtime as any).getContexts({ contextTypes: ['OFFSCREEN_DOCUMENT'] });
+  if (contexts.length === 0) {
+    await recordingStateStore.setValue(IDLE_RECORDING_STATE);
+    await browser.action.setBadgeText({ text: '' });
+    return IDLE_RECORDING_STATE;
+  }
+  return state;
+}
+
+function notify(title: string, message: string) {
+  browser.notifications
+    ?.create({ type: 'basic', iconUrl: browser.runtime.getURL('/icon/128.png'), title, message })
+    .catch(() => {});
 }
 
 async function captureVisibleTab(): Promise<string> {
