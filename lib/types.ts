@@ -84,22 +84,28 @@ export type Accent = 'ocean' | 'violet' | 'emerald' | 'sunset' | 'rose' | 'slate
 
 // AI provider config. The key lives in chrome.storage.local (never synced,
 // never leaves the device except in calls to the model API).
+export type LlmProvider = 'anthropic' | 'openai' | 'google';
+
 export interface AiSettings {
   enabled: boolean;
+  provider: LlmProvider;     // which provider the BYOK key belongs to
   apiKey: string;
   autoTag: boolean;          // suggest tags on save
   autoSummarize: boolean;    // generate a TL;DR on save
   autoCollection: boolean;   // suggest a collection on save
-  fastModel: string;         // tagging/summarizing (cheap + quick)
+  autoFile: boolean;         // zero-organization auto-filing on save
+  fastModel: string;         // tagging/summarizing/filing (cheap + quick)
   smartModel: string;        // "ask your library" Q&A
 }
 
 export const DEFAULT_AI_SETTINGS: AiSettings = {
   enabled: false,
+  provider: 'anthropic',
   apiKey: '',
   autoTag: true,
   autoSummarize: true,
   autoCollection: false,
+  autoFile: true,
   fastModel: 'claude-haiku-4-5',
   smartModel: 'claude-opus-4-8',
 };
@@ -121,6 +127,9 @@ export interface Settings {
   wallpaper: string; // Home background: '' | preset key | 'url:<image>'
   searchEngine: 'google' | 'duckduckgo' | 'bing' | 'brave' | 'ecosia'; // Home web search
   defaultCollection?: string; // collection id new saves drop into
+  // Ambient Recall — matching runs 100% locally; nothing leaves the device.
+  recallEnabled: boolean;     // opt-in: surface related saves while browsing
+  recallBlocklist: string[];  // domains never matched (banking etc.)
 }
 
 export const DEFAULT_SETTINGS: Settings = {
@@ -137,6 +146,8 @@ export const DEFAULT_SETTINGS: Settings = {
   newTabMode: 'home',
   wallpaper: '',
   searchEngine: 'google',
+  recallEnabled: false,
+  recallBlocklist: [],
 };
 
 // Aggregate stats for the dashboard header.

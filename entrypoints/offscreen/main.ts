@@ -6,6 +6,73 @@
 // blob: URL string can — and it stays valid while this document lives.
 
 import { recordingFilename, type OffscreenCommand, type RecordOptions } from '@/lib/capture';
+import { db } from '@/lib/save';
+
+// ── Local embedding engine (Phase 1) ────────────────────────────────────────
+// all-MiniLM-L6-v2 via transformers.js: 384-dim sentence vectors, fully local.
+// The model stays loaded in this document's memory; weights are cached by the
+// Cache API after the first download so it fetches once. Lazy: nothing loads
+// until the first embed job arrives.
+
+type FeaturePipeline = (texts: string[], opts: { pooling: 'mean'; normalize: boolean }) => Promise<{
+  tolist(): number[][];
+}>;
+
+let embedderPromise: Promise<FeaturePipeline> | null = null;
+
+function getEmbedder(): Promise<FeaturePipeline> {
+  if (!embedderPromise) {
+    embedderPromise = (async () => {
+      const { pipeline, env } = await import('@xenova/transformers');
+      env.allowLocalModels = false; // fetch from the HF hub (cached after first run)
+      env.useBrowserCache = true;
+      const pipe = await pipeline('feature-extraction', 'Xenova/all-MiniLM-L6-v2');
+      return ((texts, opts) => pipe(texts, opts)) as FeaturePipeline;
+    })();
+    embedderPromise.catch(() => {
+      embedderPromise = null; // allow a retry after a failed model download
+    });
+  }
+  return embedderPromise;
+}
+
+async function embed(texts: string[]): Promise<number[][]> {
+  const pipe = await getEmbedder();
+  const out = await pipe(
+    texts.map((t) => t.slice(0, 2000)),
+    { pooling: 'mean', normalize: true },
+  );
+  return out.tolist();
+}
+
+// Cosine over unit vectors = dot product.
+function dot(a: number[], b: number[]): number {
+  let s = 0;
+  const n = Math.min(a.length, b.length);
+  for (let i = 0; i < n; i++) s += a[i] * b[i];
+  return s;
+}
+
+// Semantic match: embed the query, scan the library's vectors straight from
+// IndexedDB (same origin as every other extension context). Local-only.
+async function matchLibrary(
+  text: string,
+  threshold: number,
+  limit: number,
+  excludeCanonical?: string,
+): Promise<Array<{ id: string; score: number }>> {
+  const [q] = await embed([text]);
+  const rows = await db.saves.toArray();
+  const scored: Array<{ id: string; score: number }> = [];
+  for (const s of rows) {
+    if (!s.ai.embedding || s.ai.embedding.length === 0) continue;
+    if (excludeCanonical && s.canonicalUrl === excludeCanonical) continue;
+    const score = dot(q, s.ai.embedding);
+    if (score >= threshold) scored.push({ id: s.id, score });
+  }
+  scored.sort((a, b) => b.score - a.score);
+  return scored.slice(0, limit);
+}
 
 let mediaStream: MediaStream | null = null; // raw capture stream
 let microphoneStream: MediaStream | null = null;
@@ -27,6 +94,14 @@ chrome.runtime.onMessage.addListener((msg: OffscreenCommand, _sender, sendRespon
       case 'OFFSCREEN_STOP':
         await stopRecording();
         return { ok: true };
+      case 'OFFSCREEN_EMBED' as never: {
+        const m = msg as unknown as { texts: string[] };
+        return { ok: true, vectors: await embed(m.texts) };
+      }
+      case 'OFFSCREEN_MATCH' as never: {
+        const m = msg as unknown as { text: string; threshold: number; limit: number; excludeCanonical?: string };
+        return { ok: true, matches: await matchLibrary(m.text, m.threshold, m.limit, m.excludeCanonical) };
+      }
       default:
         return { ok: false };
     }

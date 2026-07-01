@@ -2,7 +2,6 @@ import { getBackend } from '@/lib/backend';
 import { getSettings, watchSettings } from '@/lib/settings';
 import { saveBookmark } from '@/lib/bookmarks';
 import { enqueueSave, flushQueue } from '@/lib/queue';
-import { aiAvailable, getAiSettings, suggestTags, summarize, type PageContext } from '@/lib/ai';
 import { type Message, type ScreenshotResult, type MetaResult, dataUrlToBlob } from '@/lib/messaging';
 import { extractPageMeta, type PageMeta } from '@/lib/metadata';
 import { captureFullPageScript } from '@/lib/fullpage';
@@ -17,6 +16,9 @@ import { type UiSurface } from '@/lib/types';
 import { migrateToSaves } from '@/lib/save';
 import { saveCaptureToLibrary } from '@/lib/captureSave';
 import { searchBookmarks } from '@/lib/bookmarks';
+import { agoLabel, autofileSave, findDuplicate, undoFiling, type FiledResult } from '@/lib/autofile';
+import { processQueueTick, scheduleQueue, QUEUE_ALARM } from '@/lib/aiQueue';
+import { storage } from 'wxt/utils/storage';
 
 // The background "service worker" is event-driven and can be killed at any time by Chrome.
 // Never rely on long-lived in-memory state here — read from storage when you need it.
@@ -27,6 +29,7 @@ export default defineBackground(() => {
     const settings = await getSettings();
     await applyActionBehavior(settings.primarySurface);
     await flushQueue().catch(() => {});
+    scheduleQueue();
     await runMigration();
   });
 
@@ -34,7 +37,29 @@ export default defineBackground(() => {
     const settings = await getSettings();
     await applyActionBehavior(settings.primarySurface);
     await flushQueue().catch(() => {});
+    scheduleQueue();
     await runMigration();
+  });
+
+  // Batch AI queue: embeds + files anything the instant save path missed.
+  browser.alarms?.onAlarm.addListener((alarm) => {
+    if (alarm.name === QUEUE_ALARM) processQueueTick().catch(() => {});
+  });
+
+  // "Filed: …" notification actions (buttons: Undo / View).
+  browser.notifications?.onButtonClicked.addListener(async (notifId, buttonIndex) => {
+    const map = await filedNotifs.getValue();
+    const saveId = map[notifId];
+    if (!saveId) return;
+    if (buttonIndex === 0) {
+      await undoFiling(saveId).catch(() => {});
+      notify('Moved to Inbox', 'The save was un-filed. It stays tagged and searchable.');
+    } else {
+      await openDashboard();
+    }
+    browser.notifications?.clear(notifId).catch(() => {});
+    delete map[notifId];
+    await filedNotifs.setValue(map);
   });
 
   // Re-apply icon behavior whenever the user changes the primary surface.
@@ -109,6 +134,15 @@ async function handleMessage(msg: Message): Promise<unknown> {
     case 'FLUSH_QUEUE': {
       const n = await flushQueue();
       return { ok: true, flushed: n };
+    }
+
+    // Popup/dialog saves hand the AI pass to the background (it owns the
+    // offscreen embedder and survives the popup closing).
+    case 'KS_AUTOFILE' as never: {
+      const m = msg as unknown as { id: string; tabId?: number };
+      const result = await autofileSave(m.id, { tabId: m.tabId }).catch(() => null);
+      if (result) await announceFiling(result);
+      return { ok: true, result };
     }
 
     // ---- capture: screenshots + screen recording (ported from CaptureCraft) ----
@@ -324,11 +358,24 @@ async function extractMeta(tabId?: number): Promise<PageMeta | null> {
   }
 }
 
+// Map of "Filed: …" notification id → save id (session-scoped; survives SW restarts).
+const filedNotifs = storage.defineItem<Record<string, string>>('session:filed_notifs', { fallback: {} });
+
 // Full save pipeline used by the context menu + keyboard shortcut.
+// Phase 1 UX: dedupe → INSTANT save → background AI pass (extract/embed/file)
+// → "Filed: …" notification with Undo. The user never waits on AI.
 async function saveTab(tab: chrome.tabs.Tab, collection?: string) {
   if (!tab.url) return;
   await getBackend();
   const settings = await getSettings();
+
+  // Dedupe by canonical URL — surface the existing save instead of duplicating.
+  const dup = await findDuplicate(tab.url).catch(() => undefined);
+  if (dup) {
+    await flash('∃', '#6366f1');
+    notify('Already saved', `You saved this ${agoLabel(dup.timestamps.createdAt)}. Open the dashboard to view it.`);
+    return;
+  }
 
   const meta = settings.enableMetadata ? await extractMeta(tab.id) : null;
 
@@ -341,32 +388,11 @@ async function saveTab(tab: chrome.tabs.Tab, collection?: string) {
     }
   }
 
-  let tags: string[] = [];
-  let aiTags: string[] = [];
-  let summary: string | undefined;
-  if (await aiAvailable()) {
-    const ai = await getAiSettings();
-    const ctx: PageContext = {
-      title: meta?.title || tab.title || tab.url,
-      url: tab.url,
-      description: meta?.description,
-      text: meta?.text,
-    };
-    if (ai.autoTag) {
-      aiTags = await suggestTags(ctx).catch(() => []);
-      tags = aiTags;
-    }
-    if (ai.autoSummarize) summary = await summarize(ctx).catch(() => undefined);
-  }
-
   const input = {
     url: tab.url,
     title: meta?.title || tab.title || tab.url,
     description: meta?.description,
-    summary,
     content: meta?.text,
-    tags,
-    aiTags,
     collection: collection ?? settings.defaultCollection,
     cover: meta?.cover,
     favicon: meta?.favicon,
@@ -376,12 +402,39 @@ async function saveTab(tab: chrome.tabs.Tab, collection?: string) {
     screenshotBlob,
   };
 
+  let saved;
   try {
-    await saveBookmark(input);
+    saved = await saveBookmark(input);
     await flash('✓', '#16a34a');
   } catch {
     await enqueueSave(input);
     await flash('…', '#f59e0b'); // queued offline
+    return;
+  }
+
+  // Background AI pass — extract, embed locally, auto-file. Awaited so the
+  // service worker stays alive, but the save above already succeeded.
+  const result = await autofileSave(saved.id, { tabId: tab.id }).catch(() => null);
+  if (result) await announceFiling(result);
+}
+
+async function announceFiling(result: FiledResult) {
+  if (result.status === 'unprocessed' || result.status === 'kept') return;
+  const where = result.collectionName ?? 'Inbox';
+  const tags = result.tags.filter((t) => t !== 'unprocessed').slice(0, 4).join(', ');
+  const id = await browser.notifications
+    ?.create(`ks-filed-${result.saveId}-${Date.now()}`, {
+      type: 'basic',
+      iconUrl: browser.runtime.getURL('/icon/128.png'),
+      title: result.status === 'inbox' ? 'Saved to Inbox' : `Filed: ${where}`,
+      message: tags ? `Tags: ${tags}` : 'Saved to your library',
+      buttons: [{ title: 'Undo (move to Inbox)' }, { title: 'View' }],
+    })
+    .catch(() => null);
+  if (id) {
+    const map = await filedNotifs.getValue();
+    map[id] = result.saveId;
+    await filedNotifs.setValue(map);
   }
 }
 

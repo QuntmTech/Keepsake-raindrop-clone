@@ -171,8 +171,12 @@ export function SaveForm({ onSaved }: { onSaved?: () => void }) {
       };
 
       try {
-        await saveBookmark(input);
-        toast('Saved to your vault', 'success');
+        const bm = await saveBookmark(input);
+        toast(collection ? 'Saved to your vault' : 'Saved — filing with AI…', 'success');
+        // AI pass runs in the background so it survives the popup closing.
+        // A user-picked collection is respected; otherwise AI files it.
+        const [tab] = await browser.tabs.query({ active: true, currentWindow: true }).catch(() => [null] as any);
+        browser.runtime.sendMessage({ type: 'KS_AUTOFILE', id: bm.id, tabId: tab?.id }).catch(() => {});
       } catch {
         // Offline / server down — keep it so nothing is lost.
         await enqueueSave(input);

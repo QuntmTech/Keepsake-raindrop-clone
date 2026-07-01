@@ -24,11 +24,21 @@ export default defineConfig({
       'sidePanel', // the side-panel UI surface
       'scripting', // inject metadata extractor + highlight logic
       'downloads', // save screenshots + recordings to Downloads/Keepsake
-      'offscreen', // MV3 recorder document (recording survives popup close)
+      'offscreen', // MV3 recorder + local AI model host (survives popup close)
       'tabCapture', // "record this tab" stream ids
       'desktopCapture', // screen/window picker for recording
-      'notifications', // surface async capture failures after the popup closed
+      'notifications', // capture failures + "Filed:" toasts + watch alerts
+      'alarms', // AI batch queue + Living Bookmarks watch scheduler
     ],
+
+    // Full-fidelity MHTML page snapshots are invasive → opt-in only.
+    optional_permissions: ['pageCapture'],
+
+    // transformers.js runs the local embedding model as WASM inside the
+    // offscreen document — MV3 requires the wasm-unsafe-eval opt-in.
+    content_security_policy: {
+      extension_pages: "script-src 'self' 'wasm-unsafe-eval'; object-src 'self';",
+    },
 
     // <all_urls>: content script (highlights) + captureVisibleTab + metadata extraction.
     // api.anthropic.com: optional AI features (auto-tag, summarize, ask-your-library).
