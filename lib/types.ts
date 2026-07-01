@@ -117,6 +117,7 @@ export interface Settings {
   sort: SortMode;
   newTabMode: 'home' | 'minimal'; // Keepsake Home new-tab: full or search-only
   wallpaper: string; // Home background: '' | preset key | 'url:<image>'
+  searchEngine: 'google' | 'duckduckgo' | 'bing' | 'brave' | 'ecosia'; // Home web search
   defaultCollection?: string; // collection id new saves drop into
 }
 
@@ -133,6 +134,7 @@ export const DEFAULT_SETTINGS: Settings = {
   sort: 'newest',
   newTabMode: 'home',
   wallpaper: '',
+  searchEngine: 'google',
 };
 
 // Aggregate stats for the dashboard header.

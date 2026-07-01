@@ -6,7 +6,7 @@ export type IconName =
   | 'grid' | 'list' | 'masonry' | 'sparkles' | 'folder' | 'tag' | 'external'
   | 'chevron' | 'close' | 'check' | 'highlight' | 'sun' | 'moon' | 'command'
   | 'video' | 'image' | 'pdf' | 'repo' | 'doc' | 'link' | 'logout' | 'import'
-  | 'edit' | 'inbox';
+  | 'edit' | 'inbox' | 'copy';
 
 const paths: Record<IconName, string> = {
   bookmark: 'M6 4h12v16l-6-4-6 4z',
@@ -40,6 +40,7 @@ const paths: Record<IconName, string> = {
   import: 'M12 3v12M8 11l4 4 4-4M4 17v2a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-2',
   edit: 'M12 20h9M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4z',
   inbox: 'M4 13l2-9h12l2 9M4 13v6a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-6M4 13h5l1 2h4l1-2h5',
+  copy: 'M9 9h10v10H9zM5 15H4a1 1 0 0 1-1-1V4a1 1 0 0 1 1-1h10a1 1 0 0 1 1 1v1',
 };
 
 export function Icon({

@@ -13,7 +13,7 @@ import { getBackendMode, setBackendMode, HOSTED, type BackendMode } from '@/lib/
 import { getPbUrl, setPbUrl } from '@/lib/backend/pocketbase';
 import { clearLocalData } from '@/lib/backend/local';
 import { parseNetscapeHtml, parseKeepsakeJson, importItems, exportJson } from '@/lib/importer';
-import { searchBookmarks } from '@/lib/bookmarks';
+import { searchBookmarks, deleteBookmark } from '@/lib/bookmarks';
 
 // All of Keepsake's settings in one component, used by the full-page options
 // screen AND inside the popup / side panel (compact mode) — so you never have
@@ -31,6 +31,7 @@ export function SettingsPanel({ compact = false }: { compact?: boolean }) {
   const [pbBusy, setPbBusy] = useState(false);
   const [testing, setTesting] = useState(false);
   const [importing, setImporting] = useState<string | null>(null);
+  const [deduping, setDeduping] = useState(false);
   const fileRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
@@ -132,6 +133,37 @@ export function SettingsPanel({ compact = false }: { compact?: boolean }) {
     a.remove();
     URL.revokeObjectURL(url);
     toast(`Exported ${all.length} bookmarks`, 'success');
+  }
+
+  async function findDuplicates() {
+    setDeduping(true);
+    try {
+      const all = await searchBookmarks('', { perPage: 9999 }); // newest-first
+      const seen = new Set<string>();
+      const dupes: string[] = [];
+      for (const b of all) {
+        const key = b.url.replace(/\/+$/, '').toLowerCase();
+        if (seen.has(key)) dupes.push(b.id);
+        else seen.add(key);
+      }
+      if (!dupes.length) {
+        toast('No duplicate links found', 'info');
+        return;
+      }
+      if (!confirm(`Remove ${dupes.length} duplicate bookmark(s)? The most recent copy of each link is kept.`)) return;
+      let removed = 0;
+      for (const id of dupes) {
+        try {
+          await deleteBookmark(id);
+          removed++;
+        } catch {
+          /* ignore */
+        }
+      }
+      toast(`Removed ${removed} duplicate${removed === 1 ? '' : 's'}`, 'success');
+    } finally {
+      setDeduping(false);
+    }
   }
 
   async function wipeLocal() {
@@ -302,6 +334,15 @@ export function SettingsPanel({ compact = false }: { compact?: boolean }) {
           <option value="minimal">Minimal (clock + search only)</option>
         </select>
 
+        <label className="mt-3 block text-xs font-medium text-ink-soft">Home search engine</label>
+        <select className="input mt-1" value={settings.searchEngine} onChange={(e) => update({ searchEngine: e.target.value as typeof settings.searchEngine })}>
+          <option value="google">Google</option>
+          <option value="duckduckgo">DuckDuckGo</option>
+          <option value="bing">Bing</option>
+          <option value="brave">Brave</option>
+          <option value="ecosia">Ecosia</option>
+        </select>
+
         <div className="mt-3 flex gap-3">
           <div className="flex-1">
             <label className="block text-xs font-medium text-ink-soft">Default layout</label>
@@ -334,6 +375,12 @@ export function SettingsPanel({ compact = false }: { compact?: boolean }) {
             <Icon name="external" size={15} /> Export JSON
           </button>
         </div>
+      </Section>
+
+      <Section title="Tools" compact={compact} hint="Tidy up your vault.">
+        <button className="btn-outline" onClick={findDuplicates} disabled={!authed || deduping}>
+          <Icon name="copy" size={15} /> {deduping ? 'Scanning…' : 'Find & remove duplicate links'}
+        </button>
       </Section>
 
       {backend === 'local' && authed && (

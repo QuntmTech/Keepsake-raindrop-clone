@@ -1,3 +1,4 @@
+import { useState } from 'react';
 import { type Bookmark, type BookmarkType, type ViewMode } from '@/lib/types';
 import { markVisited } from '@/lib/bookmarks';
 import { Icon, type IconName } from './Icon';
@@ -23,9 +24,16 @@ interface Props {
 }
 
 export function BookmarkCard({ bookmark, layout = 'grid', onDelete, onToggleFavorite, onEdit, onRead }: Props) {
+  const [copied, setCopied] = useState(false);
   const open = () => {
     markVisited(bookmark.id);
     window.open(bookmark.url, '_blank', 'noreferrer');
+  };
+  const copyLink = () => {
+    navigator.clipboard?.writeText(bookmark.url).then(() => {
+      setCopied(true);
+      setTimeout(() => setCopied(false), 1200);
+    });
   };
 
   // Drag a card onto a collection in the sidebar to file it there.
@@ -55,6 +63,16 @@ export function BookmarkCard({ bookmark, layout = 'grid', onDelete, onToggleFavo
 
   const Actions = () => (
     <div className="flex items-center gap-0.5">
+      <button
+        className={`rounded-md p-1.5 opacity-0 transition hover:bg-surface-sunken group-hover:opacity-100 ${copied ? 'text-emerald-500' : 'text-ink-faint hover:text-ink'}`}
+        onClick={(e) => {
+          e.stopPropagation();
+          copyLink();
+        }}
+        title={copied ? 'Copied!' : 'Copy link'}
+      >
+        <Icon name={copied ? 'check' : 'copy'} size={15} />
+      </button>
       {onRead && bookmark.content && (
         <button
           className="rounded-md p-1.5 text-ink-faint opacity-0 transition hover:bg-surface-sunken hover:text-ink group-hover:opacity-100"

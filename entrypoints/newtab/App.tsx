@@ -14,6 +14,7 @@ import { useToast } from '@/components/Toast';
 import { searchBookmarks, updateBookmark, deleteBookmark, getAllTags, markVisited, watchVault } from '@/lib/bookmarks';
 import { parseNetscapeHtml, parseKeepsakeJson, importItems } from '@/lib/importer';
 import { WALLPAPERS, wallpaperCss } from '@/lib/wallpaper';
+import { SEARCH_ENGINES, searchUrl } from '@/lib/search';
 import { type Bookmark, type Collection } from '@/lib/types';
 
 const TILE_MIME = 'application/x-keepsake-tile';
@@ -130,7 +131,7 @@ export default function App() {
     window.location.href = b.url;
   };
   const webSearch = () => {
-    window.location.href = `https://www.google.com/search?q=${encodeURIComponent(query)}`;
+    window.location.href = searchUrl(settings.searchEngine, query);
   };
 
   // Drop a tile into a section, optionally before a specific tile; reindex order.
@@ -395,9 +396,21 @@ export default function App() {
               if (e.key === 'Enter' && query.trim() && (!results || results.length === 0)) webSearch();
             }}
           />
+          <select
+            className="cursor-pointer bg-transparent text-xs text-ink-faint outline-none"
+            value={settings.searchEngine}
+            onChange={(e) => update({ searchEngine: e.target.value as typeof settings.searchEngine })}
+            title="Web search engine"
+          >
+            {SEARCH_ENGINES.map((s) => (
+              <option key={s.key} value={s.key}>
+                {s.label}
+              </option>
+            ))}
+          </select>
           {query && (
             <button className="text-xs text-ink-faint hover:text-brand" onClick={webSearch}>
-              Web ↗
+              Search ↗
             </button>
           )}
         </div>
