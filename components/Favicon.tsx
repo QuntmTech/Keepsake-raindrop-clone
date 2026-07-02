@@ -47,8 +47,11 @@ export function Favicon({
       alt=""
       width={size}
       height={size}
+      // Native <img> drag would hijack the tile's own drag-and-drop (you'd grab
+      // the favicon, not the tile/folder). Keep the drag on the tile container.
+      draggable={false}
       className={`rounded-sm ${className}`}
-      style={{ width: size, height: size }}
+      style={{ width: size, height: size, WebkitUserDrag: 'none' } as React.CSSProperties}
       onError={() => setFailed(true)}
     />
   );
