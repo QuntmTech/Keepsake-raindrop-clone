@@ -13,18 +13,23 @@ interface Props {
   defaultCollection?: string;
   favorite?: boolean;
   pinned?: boolean; // adding from the Home screen pins the link there
+  // Home context: added links are launcher tiles by default (hidden from the
+  // bookmark library), matching the app catalog. The dialog offers an opt-in
+  // to also keep it in the library.
+  homeContext?: boolean;
   onClose: () => void;
   onAdded: () => void;
 }
 
 // Add a bookmark by URL from the dashboard (no active tab needed).
-export function AddDialog({ collections, allTags, defaultCollection, favorite, pinned, onClose, onAdded }: Props) {
+export function AddDialog({ collections, allTags, defaultCollection, favorite, pinned, homeContext, onClose, onAdded }: Props) {
   const { toast } = useToast();
   const [url, setUrl] = useState('');
   const [title, setTitle] = useState('');
   const [favicon, setFavicon] = useState('');
   const [tags, setTags] = useState<string[]>([]);
   const [collection, setCollection] = useState(defaultCollection ?? '');
+  const [alsoLibrary, setAlsoLibrary] = useState(false); // Home add → also keep in library?
   const [busy, setBusy] = useState(false);
   useEscape(onClose);
 
@@ -35,6 +40,9 @@ export function AddDialog({ collections, allTags, defaultCollection, favorite, p
     setBusy(true);
     try {
       const domain = safeDomain(clean);
+      // From Home, a link is a launcher tile (homeOnly) unless the user opts to
+      // also keep it in the library.
+      const homeOnly = Boolean(homeContext) && !alsoLibrary;
       await saveBookmark({
         url: clean,
         title: title.trim() || domain || clean,
@@ -42,11 +50,12 @@ export function AddDialog({ collections, allTags, defaultCollection, favorite, p
         collection: collection || undefined,
         favorite,
         pinned,
+        homeOnly,
         domain,
         type: inferType(clean),
         favicon: favicon.trim() || faviconFor(domain),
       });
-      toast('Added to your vault', 'success');
+      toast(homeContext ? 'Added to Home' : 'Added to your vault', 'success');
       onAdded();
       onClose();
     } catch {
@@ -97,6 +106,12 @@ export function AddDialog({ collections, allTags, defaultCollection, favorite, p
               </option>
             ))}
           </select>
+          {homeContext && (
+            <label className="flex cursor-pointer items-center gap-2 text-xs text-ink-soft">
+              <input type="checkbox" checked={alsoLibrary} onChange={(e) => setAlsoLibrary(e.target.checked)} />
+              Also keep this in my bookmark library (otherwise it lives only on Home)
+            </label>
+          )}
         </div>
         <div className="flex justify-end gap-2 border-t border-line p-3">
           <button className="btn-ghost" onClick={onClose}>

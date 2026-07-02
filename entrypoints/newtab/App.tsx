@@ -35,6 +35,13 @@ type GridEntry =
   | { key: string; kind: 'tile'; b: Bookmark }
   | { key: string; kind: 'folder'; col: Collection; items: Bookmark[] };
 
+// Which side of a tile the cursor is on — drives the "drop to the left / right"
+// insertion line and where the item actually lands.
+function pointerSide(e: React.DragEvent, el: HTMLElement): 'before' | 'after' {
+  const r = el.getBoundingClientRect();
+  return e.clientX < r.left + r.width / 2 ? 'before' : 'after';
+}
+
 // Keepsake Home — an Atlas-style launcher: one compact icon grid. Loose apps
 // are single tiles; collections are folder tiles that open a popup. Drag to
 // rearrange, drop a tile onto a folder to file it, search your vault on top.
@@ -50,8 +57,17 @@ export default function App() {
   const [results, setResults] = useState<Bookmark[] | null>(null);
   const [all, setAll] = useState<Bookmark[]>([]);
   const [dropKey, setDropKey] = useState<string | null>(null);
+  // Insertion indicator: which entry the cursor is near and on which side, so a
+  // thin line shows exactly where the dragged item will land (left or right).
+  const [dropPos, setDropPos] = useState<{ key: string; side: 'before' | 'after' } | null>(null);
   const [draggingTile, setDraggingTile] = useState<string | null>(null);
   const [draggingFolder, setDraggingFolder] = useState<string | null>(null);
+  const clearDrag = () => {
+    setDraggingTile(null);
+    setDraggingFolder(null);
+    setDropKey(null);
+    setDropPos(null);
+  };
   const [addTo, setAddTo] = useState<{ collection?: string } | null>(null);
   const [editing, setEditing] = useState<Bookmark | null>(null);
   const [renaming, setRenaming] = useState<string | null>(null);
@@ -214,12 +230,15 @@ export default function App() {
 
   // Drop a tile into a container ('loose' grid or a collection id), optionally
   // before a specific tile. Paints the result immediately, then persists.
-  async function dropTile(bmId: string, target: string, beforeId?: string) {
+  async function dropTile(bmId: string, target: string, anchorId?: string, side: 'before' | 'after' = 'before') {
     const container = target === 'loose' ? looseTiles : folderItems(target);
     const bySort = new Map(container.map((b) => [b.id, b.sort]));
     const list = container.map((b) => b.id).filter((id) => id !== bmId);
-    let at = beforeId ? list.indexOf(beforeId) : list.length;
-    if (at < 0) at = list.length;
+    let at = list.length;
+    if (anchorId) {
+      const i = list.indexOf(anchorId);
+      at = i < 0 ? list.length : side === 'after' ? i + 1 : i;
+    }
     list.splice(at, 0, bmId);
     // Filing into a folder sets the collection; dropping on the grid clears it.
     // The favorite flag is left alone — it only matters in the dashboard now.
@@ -253,11 +272,14 @@ export default function App() {
   // Free-form reposition: move any grid entry (app tile OR folder) before
   // another entry, or to the end. The layout persists on this device
   // immediately; server sort fields get the combined order as best effort.
-  async function dropEntry(dragKey: string, beforeKey?: string) {
-    if (dragKey === beforeKey) return;
+  async function dropEntry(dragKey: string, anchorKey?: string, side: 'before' | 'after' = 'before') {
+    if (dragKey === anchorKey) return;
     const keys = gridEntries.map((e) => e.key).filter((k) => k !== dragKey);
-    let at = beforeKey ? keys.indexOf(beforeKey) : keys.length;
-    if (at < 0) at = keys.length;
+    let at = keys.length;
+    if (anchorKey) {
+      const i = keys.indexOf(anchorKey);
+      at = i < 0 ? keys.length : side === 'after' ? i + 1 : i;
+    }
     keys.splice(at, 0, dragKey);
     setLayout(keys); // instant paint
     layoutStore.setValue(keys).catch(() => {});
@@ -290,6 +312,27 @@ export default function App() {
       );
     } catch {
       /* layout is already safe locally */
+    }
+    reloadAll();
+    c.refresh();
+  }
+
+  // Pull an app out of its collection back onto the main grid. Explicit button
+  // in the folder popup (dragging out works too, but this is unmissable).
+  async function moveOutOfFolder(b: Bookmark) {
+    const col = b.collection || '';
+    const wasLast = folderItems(col).length <= 1;
+    setAll((cur) => cur.map((x) => (x.id === b.id ? { ...x, collection: undefined, pinned: true } : x)));
+    const keys = gridEntries.map((e) => e.key).filter((k) => k !== `b:${b.id}`);
+    keys.push(`b:${b.id}`); // land at the end of the grid
+    setLayout(keys);
+    layoutStore.setValue(keys).catch(() => {});
+    if (wasLast) setOpenFolder(null);
+    try {
+      await updateBookmark(b.id, { collection: undefined, pinned: true });
+      toast(`Moved ${b.title} out to Home`, 'success');
+    } catch {
+      toast('Could not move it out — check your connection', 'error');
     }
     reloadAll();
     c.refresh();
@@ -399,7 +442,9 @@ export default function App() {
   // remount every tile (killing drag state and flashing icons on each
   // clock tick / keystroke).
   const renderTile = (b: Bookmark, container: string, statik?: boolean) => {
-    const dk = `tile:${container}:${b.id}`;
+    const key = container === 'loose' ? `b:${b.id}` : `tile:${container}:${b.id}`;
+    const inFolder = container !== 'loose' && container !== 'results';
+    const showLine = dropPos?.key === key;
     return (
       <div
         key={b.id}
@@ -414,48 +459,64 @@ export default function App() {
           e.dataTransfer.effectAllowed = 'move';
           setDraggingTile(b.id);
         }}
-        onDragEnd={() => {
-          setDraggingTile(null);
-          setDropKey(null);
-        }}
+        onDragEnd={clearDrag}
         onDragOver={(e) => {
           const t = e.dataTransfer.types;
-          // On the main grid a tile is also a drop target for FOLDERS, so a
-          // folder can be placed anywhere between single apps.
+          // A tile accepts other tiles anywhere; on the main grid it also
+          // accepts folders (so a folder can sit between single apps).
           if (statik || (!t.includes(TILE_MIME) && !(container === 'loose' && t.includes(FOLDER_MIME)))) return;
           e.preventDefault();
           e.stopPropagation();
           e.dataTransfer.dropEffect = 'move';
-          setDropKey(dk);
+          setDropKey(null);
+          setDropPos({ key, side: pointerSide(e, e.currentTarget) });
         }}
-        onDragLeave={() => setDropKey((k) => (k === dk ? null : k))}
+        onDragLeave={() => setDropPos((p) => (p?.key === key ? null : p))}
         onDrop={(e) => {
           if (statik) return;
           e.preventDefault();
           e.stopPropagation();
-          setDropKey(null);
+          const side = pointerSide(e, e.currentTarget);
+          clearDrag();
           const fid = e.dataTransfer.getData(FOLDER_MIME);
           if (fid && container === 'loose') {
-            dropEntry(`c:${fid}`, `b:${b.id}`);
+            dropEntry(`c:${fid}`, `b:${b.id}`, side);
             return;
           }
           const id = e.dataTransfer.getData(TILE_MIME);
           if (!id || id === b.id) return;
-          // Grid drops reposition in the free-form layout; drops inside a
-          // folder popup reorder within that folder.
-          if (container === 'loose') dropEntry(`b:${id}`, `b:${b.id}`);
-          else dropTile(id, container, b.id);
+          // Grid drops reposition in the free-form layout; folder-popup drops
+          // reorder within that folder.
+          if (container === 'loose') dropEntry(`b:${id}`, `b:${b.id}`, side);
+          else dropTile(id, container, b.id, side);
         }}
         title={b.title}
       >
+        {showLine && (
+          <span
+            className={`pointer-events-none absolute inset-y-2 z-20 w-[3px] rounded-full bg-brand ${
+              dropPos!.side === 'before' ? '-left-[7px]' : '-right-[7px]'
+            }`}
+          />
+        )}
         <div
-          className={`grid h-16 w-16 place-items-center overflow-hidden rounded-2xl border transition group-hover:-translate-y-0.5 group-hover:shadow-float ${
-            dropKey === dk ? 'border-brand ring-2 ring-brand' : iconCls
-          }`}
+          className={`grid h-16 w-16 place-items-center overflow-hidden rounded-2xl border transition group-hover:-translate-y-0.5 group-hover:shadow-float ${iconCls}`}
         >
           <Favicon src={b.favicon} size={34} label={b.title} />
         </div>
         <div className="absolute -right-1 -top-1 z-10 flex gap-0.5 opacity-0 transition group-hover:opacity-100">
+          {inFolder && (
+            <button
+              className="grid h-5 w-5 place-items-center rounded-full border border-line bg-surface text-ink-faint shadow-card hover:text-brand"
+              onClick={(e) => {
+                e.stopPropagation();
+                moveOutOfFolder(b);
+              }}
+              title="Move out to Home"
+            >
+              <Icon name="external" size={10} />
+            </button>
+          )}
           <button
             className="grid h-5 w-5 place-items-center rounded-full border border-line bg-surface text-ink-faint shadow-card hover:text-brand"
             onClick={(e) => {
@@ -485,7 +546,9 @@ export default function App() {
   // A folder tile: mini 2×2 icon preview. Click opens the folder popup;
   // drop a tile on it to file the tile into the collection.
   const renderFolder = (col: Collection, items: Bookmark[]) => {
+    const key = `c:${col.id}`;
     const dk = `folder:${col.id}`;
+    const showLine = dropPos?.key === key;
     return (
       <div
         key={col.id}
@@ -500,33 +563,49 @@ export default function App() {
           e.dataTransfer.effectAllowed = 'move';
           setDraggingFolder(col.id);
         }}
-        onDragEnd={() => {
-          setDraggingFolder(null);
-          setDropKey(null);
-        }}
+        onDragEnd={clearDrag}
         onDragOver={(e) => {
           const t = e.dataTransfer.types;
           if (!t.includes(TILE_MIME) && !t.includes(FOLDER_MIME)) return;
           e.preventDefault();
           e.stopPropagation();
           e.dataTransfer.dropEffect = 'move';
-          setDropKey(dk);
+          if (t.includes(FOLDER_MIME)) {
+            // Reordering one folder past another — show the insertion line.
+            setDropKey(null);
+            setDropPos({ key, side: pointerSide(e, e.currentTarget) });
+          } else {
+            // An app being dropped INTO this folder — highlight the whole tile.
+            setDropPos(null);
+            setDropKey(dk);
+          }
         }}
-        onDragLeave={() => setDropKey((k) => (k === dk ? null : k))}
+        onDragLeave={() => {
+          setDropKey((k) => (k === dk ? null : k));
+          setDropPos((p) => (p?.key === key ? null : p));
+        }}
         onDrop={(e) => {
           e.preventDefault();
           e.stopPropagation();
-          setDropKey(null);
+          const side = pointerSide(e, e.currentTarget);
+          clearDrag();
           const fid = e.dataTransfer.getData(FOLDER_MIME);
           if (fid) {
-            if (fid !== col.id) dropEntry(`c:${fid}`, `c:${col.id}`);
+            if (fid !== col.id) dropEntry(`c:${fid}`, `c:${col.id}`, side);
             return;
           }
           const id = e.dataTransfer.getData(TILE_MIME);
-          if (id) dropTile(id, col.id);
+          if (id) dropTile(id, col.id); // file the app into this folder
         }}
         title={`${col.name} — ${items.length} app${items.length === 1 ? '' : 's'} · drag to move, drop apps here to file them`}
       >
+        {showLine && (
+          <span
+            className={`pointer-events-none absolute inset-y-2 z-20 w-[3px] rounded-full bg-brand ${
+              dropPos!.side === 'before' ? '-left-[7px]' : '-right-[7px]'
+            }`}
+          />
+        )}
         <div
           className={`grid h-16 w-16 grid-cols-2 content-center justify-items-center gap-1 rounded-2xl border p-2 transition group-hover:-translate-y-0.5 group-hover:shadow-float ${
             dropKey === dk ? 'border-brand ring-2 ring-brand' : iconCls
@@ -714,7 +793,7 @@ export default function App() {
             onDragLeave={() => setDropKey((k) => (k === 'grid' ? null : k))}
             onDrop={(e) => {
               e.preventDefault();
-              setDropKey(null);
+              clearDrag();
               const fid = e.dataTransfer.getData(FOLDER_MIME);
               if (fid) {
                 dropEntry(`c:${fid}`); // to the end
@@ -833,12 +912,12 @@ export default function App() {
                 onDragLeave={() => setDropKey((k) => (k === 'folder-out' ? null : k))}
                 onDrop={(e) => {
                   e.preventDefault();
-                  setDropKey(null);
+                  clearDrag();
                   const id = e.dataTransfer.getData(TILE_MIME);
                   if (id) dropEntry(`b:${id}`); // becomes a loose tile at the end of the grid
                 }}
               >
-                Drop here to move out of this folder
+                ⤴ Drop here to move out of this folder — or use the ↗ button on any app
               </div>
             )}
           </div>
@@ -851,6 +930,7 @@ export default function App() {
           allTags={allTags}
           defaultCollection={addTo.collection}
           pinned
+          homeContext
           onClose={() => setAddTo(null)}
           onAdded={() => {
             reloadAll();

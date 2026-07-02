@@ -1,7 +1,11 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
+import { storage } from 'wxt/utils/storage';
 import { type Collection } from '@/lib/types';
 import { Icon, type IconName } from './Icon';
 import { ACCENTS } from '@/lib/theme';
+
+// Whether the Collections list in the sidebar is collapsed (persisted per device).
+const collapsedStore = storage.defineItem<boolean>('local:sidebar_collections_collapsed', { fallback: false });
 
 export type LibraryFilter =
   | { kind: 'all' }
@@ -55,6 +59,16 @@ export function CollectionSidebar({
   const [editName, setEditName] = useState('');
   const [editColor, setEditColor] = useState(ACCENTS[1].swatch);
   const [dropKey, setDropKey] = useState<string | null>(null);
+  const [collapsed, setCollapsed] = useState(false);
+  useEffect(() => {
+    collapsedStore.getValue().then(setCollapsed);
+  }, []);
+  const toggleCollapsed = () =>
+    setCollapsed((v) => {
+      const next = !v;
+      collapsedStore.setValue(next);
+      return next;
+    });
 
   async function create() {
     if (!newName.trim()) return;
@@ -154,13 +168,25 @@ export function CollectionSidebar({
       <SmartItem icon="inbox" label="Unsorted" active={selected.kind === 'untagged'} onClick={() => onSelect({ kind: 'untagged' })} />
 
       <div className="mb-1 mt-4 flex items-center justify-between px-2">
-        <span className="text-[11px] font-semibold uppercase tracking-wide text-ink-faint">Collections</span>
+        <button
+          className="flex items-center gap-1 text-[11px] font-semibold uppercase tracking-wide text-ink-faint hover:text-ink"
+          onClick={toggleCollapsed}
+          title={collapsed ? 'Show collections' : 'Hide collections'}
+        >
+          <Icon name="chevron" size={12} className={`transition-transform ${collapsed ? '' : 'rotate-90'}`} />
+          Collections
+          {collapsed && collections.length > 0 && (
+            <span className="ml-1 rounded-full bg-surface-sunken px-1.5 text-[10px] normal-case text-ink-faint">
+              {collections.length}
+            </span>
+          )}
+        </button>
         <button className="rounded p-0.5 text-ink-faint hover:text-brand" onClick={() => setAdding((a) => !a)} title="New collection">
           <Icon name="plus" size={15} />
         </button>
       </div>
 
-      {adding && (
+      {!collapsed && adding && (
         <div className="mb-1 flex flex-col gap-1.5 rounded-lg border border-line bg-surface-raised p-2">
           <input
             className="input py-1.5 text-sm"
@@ -187,7 +213,7 @@ export function CollectionSidebar({
         </div>
       )}
 
-      {collections.map((c) => {
+      {!collapsed && collections.map((c) => {
         const active = selected.kind === 'collection' && selected.id === c.id;
         const isDrop = dropKey === c.id;
         if (editing === c.id) {
@@ -264,12 +290,14 @@ export function CollectionSidebar({
       })}
 
       {/* Prominent create button (besides the small + in the header) */}
-      <button
-        className="mt-1.5 flex items-center justify-center gap-1.5 rounded-lg border border-dashed border-line px-2 py-2 text-xs font-medium text-ink-faint transition hover:border-brand/50 hover:text-brand"
-        onClick={() => setAdding(true)}
-      >
-        <Icon name="plus" size={14} /> New collection
-      </button>
+      {!collapsed && (
+        <button
+          className="mt-1.5 flex items-center justify-center gap-1.5 rounded-lg border border-dashed border-line px-2 py-2 text-xs font-medium text-ink-faint transition hover:border-brand/50 hover:text-brand"
+          onClick={() => setAdding(true)}
+        >
+          <Icon name="plus" size={14} /> New collection
+        </button>
+      )}
 
       {tags.length > 0 && (
         <>
