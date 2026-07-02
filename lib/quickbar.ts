@@ -50,12 +50,15 @@ export async function mountQuickBar(): Promise<QuickBarApi | null> {
   style.textContent = `
     :host { all: initial; }
     .rail { position: fixed; right: 0; z-index: 2147483000;
-      display: flex; flex-direction: column; align-items: center; gap: 2px;
-      padding: 6px 4px; background: rgba(24,26,32,.92); backdrop-filter: blur(8px);
-      border-radius: 14px 0 0 14px; box-shadow: 0 6px 24px rgba(0,0,0,.3);
+      display: flex; flex-direction: column; align-items: center; gap: 3px;
+      padding: 7px 5px; background: linear-gradient(180deg, rgba(32,34,44,.94), rgba(18,20,27,.96));
+      backdrop-filter: blur(12px) saturate(1.3); -webkit-backdrop-filter: blur(12px) saturate(1.3);
+      border: 1px solid rgba(255,255,255,.09); border-right: none;
+      border-radius: 16px 0 0 16px;
+      box-shadow: 0 10px 32px rgba(0,0,0,.35), 0 2px 8px rgba(0,0,0,.25), inset 0 1px 0 rgba(255,255,255,.06);
       font-family: ui-sans-serif, system-ui, sans-serif; transition: opacity .2s, transform .15s;
-      opacity: .55; }
-    .rail:hover { opacity: 1; }
+      opacity: .6; }
+    .rail:hover { opacity: 1; transform: translateX(-1px); }
     .grip { color: rgba(255,255,255,.4); cursor: grab; padding: 2px 0; touch-action: none; }
     .grip:active { cursor: grabbing; }
     .hide { width: 38px; height: 22px; display: grid; place-items: center; color: rgba(255,255,255,.35);
@@ -76,13 +79,16 @@ export async function mountQuickBar(): Promise<QuickBarApi | null> {
     .tab svg { flex: none; }
     .tab .tabmark { display: none; }
     .tab:hover .tabmark { display: inline-grid; place-items: center; color: ${accent}; }
-    .btn { width: 38px; height: 38px; display: grid; place-items: center; color: #fff;
-      background: transparent; border: none; border-radius: 10px; cursor: pointer;
-      transition: background .12s, transform .12s; }
-    .btn:hover { background: rgba(255,255,255,.12); }
+    .btn { width: 38px; height: 38px; display: grid; place-items: center; color: rgba(255,255,255,.9);
+      background: transparent; border: none; border-radius: 11px; cursor: pointer;
+      transition: background .12s, transform .12s, color .12s, box-shadow .12s; }
+    .btn:hover { background: rgba(255,255,255,.12); color: #fff; transform: scale(1.06); }
     .btn:active { transform: scale(.92); }
-    .btn.save { color: #fff; position: relative; }
-    .btn.ok { color: #34d399; }
+    .btn.save { position: relative; color: #fff;
+      background: linear-gradient(135deg, ${accent}, ${accent}dd);
+      box-shadow: 0 3px 10px ${accent}55; }
+    .btn.save:hover { filter: brightness(1.12); transform: scale(1.06); }
+    .btn.ok { color: #34d399; background: rgba(52,211,153,.15); box-shadow: none; }
     .badge { position: absolute; top: 5px; right: 5px; width: 8px; height: 8px;
       border-radius: 50%; background: #34d399; box-shadow: 0 0 0 2px rgba(24,26,32,.92); }
     .pop { position: fixed; z-index: 2147483001; width: 230px; max-height: 60vh; overflow:auto;

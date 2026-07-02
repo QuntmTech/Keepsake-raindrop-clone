@@ -124,10 +124,13 @@ export default function App() {
     return () => clearTimeout(id);
   }, [query, authed]);
 
-  // Escape closes the folder popup first, then any open pickers.
+  // Escape closes any open Home popover (folder popup, wallpaper picker).
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') setOpenFolder(null);
+      if (e.key === 'Escape') {
+        setOpenFolder(null);
+        setWallOpen(false);
+      }
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);

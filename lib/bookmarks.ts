@@ -2,7 +2,20 @@ import { getBackend } from './backend';
 import { type Bookmark } from './types';
 import { type SaveBookmarkInput, type SearchOpts } from './backend/types';
 import { applyHomeOverlay, forgetHomeOverlay, saveHomeBookmark, updateHomeBookmark } from './home';
-import { deleteSave, upsertSidecar } from './save';
+
+// The Save sidecar (IndexedDB via Dexie) must ONLY load in extension-origin
+// contexts. This facade is also bundled into the content script (Quick Bar /
+// highlights run inside web pages), where IndexedDB belongs to the PAGE's
+// origin — loading Dexie there would write sidecar rows into the wrong
+// database and drag a heavy dependency into every page. Content-script saves
+// go through the background (SAVE_CURRENT_PAGE), which owns the sidecar.
+const IN_EXTENSION_CONTEXT =
+  typeof location !== 'undefined' && location.protocol === 'chrome-extension:';
+
+async function sidecar(): Promise<typeof import('./save') | null> {
+  if (!IN_EXTENSION_CONTEXT) return null;
+  return import('./save');
+}
 
 // Facade over the active backend. Components import from here regardless of
 // whether data lives in chrome.storage (local) or PocketBase.
@@ -28,20 +41,23 @@ export async function saveBookmark(input: SaveBookmarkInput): Promise<Bookmark> 
   // Sidecar: mirror into the IndexedDB Save store (the AI-native layer).
   // Awaited so callers (auto-file, popup close) can rely on the row existing;
   // a sidecar failure still never fails the user's save.
-  await upsertSidecar(bm).catch(() => {});
+  const sc = await sidecar();
+  if (sc) await sc.upsertSidecar(bm).catch(() => {});
   return bm;
 }
 
 export async function updateBookmark(id: string, patch: Partial<Bookmark>): Promise<Bookmark> {
   const bm = await updateHomeBookmark(id, patch);
-  await upsertSidecar(bm).catch(() => {});
+  const sc = await sidecar();
+  if (sc) await sc.upsertSidecar(bm).catch(() => {});
   return bm;
 }
 
 export async function deleteBookmark(id: string): Promise<void> {
   await (await getBackend()).deleteBookmark(id);
   await forgetHomeOverlay(id);
-  deleteSave(id).catch(() => {});
+  const sc = await sidecar();
+  if (sc) sc.deleteSave(id).catch(() => {});
 }
 
 export async function toggleFavorite(id: string, favorite: boolean): Promise<Bookmark> {
@@ -81,7 +97,19 @@ export async function getAllTags(): Promise<{ tag: string; count: number }[]> {
 }
 
 export async function vaultStats() {
-  return (await getBackend()).vaultStats();
+  const stats = await (await getBackend()).vaultStats();
+  // Home launcher tiles are hidden from library views — the "All bookmarks"
+  // count must match what those views actually show.
+  const sc = await sidecar();
+  if (sc) {
+    try {
+      const tiles = await sc.db.saves.filter((s) => Boolean(s.organization.homeOnly)).count();
+      stats.total = Math.max(0, stats.total - tiles);
+    } catch {
+      /* raw count is still useful */
+    }
+  }
+  return stats;
 }
 
 export async function listCollections() {

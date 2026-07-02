@@ -389,7 +389,7 @@ export function SettingsPanel({ compact = false }: { compact?: boolean }) {
 
         <label className="mt-3 block text-xs font-medium text-ink-soft">New-tab Home page</label>
         <select className="input mt-1" value={settings.newTabMode} onChange={(e) => update({ newTabMode: e.target.value as 'home' | 'minimal' })}>
-          <option value="home">Full home (favorites, collections, recent)</option>
+          <option value="home">Full home (app tiles + folders)</option>
           <option value="minimal">Minimal (clock + search only)</option>
         </select>
 
@@ -424,7 +424,7 @@ export function SettingsPanel({ compact = false }: { compact?: boolean }) {
         </div>
       </Section>
 
-      <Section title="Import & export" compact={compact} hint="Import a browser/raindrop.io bookmarks HTML file or a Keepsake JSON export.">
+      <Section title="Import & export" compact={compact} hint="One-click import from Chrome/Firefox (bookmarks HTML), Raindrop (CSV or HTML), Pocket (CSV), or a Keepsake JSON export. Imports are deduped and queued for AI filing.">
         <div className="flex flex-wrap items-center gap-2">
           <input ref={fileRef} type="file" accept=".html,.json,.csv" className="hidden" onChange={onFile} />
           <button className="btn-outline" onClick={() => fileRef.current?.click()} disabled={!authed || !!importing}>
@@ -471,6 +471,9 @@ function Toggle({ label, checked, onChange }: { label: string; checked: boolean;
       <span>{label}</span>
       <button
         type="button"
+        role="switch"
+        aria-checked={checked}
+        aria-label={label}
         onClick={() => onChange(!checked)}
         className={`relative h-5 w-9 shrink-0 rounded-full transition ${checked ? 'bg-brand' : 'bg-line'}`}
       >
