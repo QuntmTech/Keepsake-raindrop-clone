@@ -279,6 +279,21 @@ async function handleMessage(msg: Message): Promise<unknown> {
       return { ok: true };
     }
 
+    // Copy-to-clipboard variants: return the PNG data URL to the caller (a
+    // document with clipboard access) instead of downloading it here.
+    case 'KS_GRAB_VISIBLE': {
+      const dataUrl = await browser.tabs.captureVisibleTab(undefined as any, { format: 'png' });
+      return { ok: true, dataUrl };
+    }
+
+    case 'KS_GRAB_FULL': {
+      const [tab] = await browser.tabs.query({ active: true, currentWindow: true });
+      if (!tab?.id) return { ok: false, error: 'No active tab' };
+      const dataUrl = await grabFullPageDataUrl(tab.id);
+      if (!dataUrl) return { ok: false, error: 'Capture returned nothing' };
+      return { ok: true, dataUrl };
+    }
+
     case 'KS_START_RECORDING':
       await startRecording(msg.options);
       return { ok: true };
@@ -358,12 +373,17 @@ async function tileGate(): Promise<void> {
   lastTileAt = Date.now();
 }
 
-async function captureFullPage(tabId: number): Promise<void> {
+// Run the scroll-and-stitch capture and return the stitched image data URL.
+async function grabFullPageDataUrl(tabId: number): Promise<string | null> {
   const [res] = await browser.scripting.executeScript({
     target: { tabId },
     func: captureFullPageScript,
   });
-  const dataUrl = res?.result as string | null;
+  return (res?.result as string | null) ?? null;
+}
+
+async function captureFullPage(tabId: number): Promise<void> {
+  const dataUrl = await grabFullPageDataUrl(tabId);
   if (!dataUrl) throw new Error('Capture returned nothing');
   const filename = screenshotFilename('full').replace(/\.png$/, dataUrl.startsWith('data:image/jpeg') ? '.jpg' : '.png');
   await browser.downloads.download({ url: dataUrl, filename });

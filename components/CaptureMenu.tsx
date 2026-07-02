@@ -14,6 +14,7 @@ export function CaptureMenu({ buttonClass = 'btn-ghost px-2.5 text-sm' }: { butt
   const [systemAudio, setSystemAudio] = useState(true);
   const [rec, setRec] = useState<RecordingState>(IDLE_RECORDING_STATE);
   const [elapsed, setElapsed] = useState('');
+  const [shotMode, setShotMode] = useState<'download' | 'copy'>('download');
   const busyRef = useRef(false);
 
   // Live recording state: initial fetch (verified against the offscreen doc)
@@ -48,8 +49,24 @@ export function CaptureMenu({ buttonClass = 'btn-ghost px-2.5 text-sm' }: { butt
     }
   }
 
+  // Copy a PNG data URL to the clipboard from this document (the background
+  // worker has no clipboard). Works because the page is focused — the user
+  // just clicked this menu.
+  async function copyToClipboard(dataUrl: string) {
+    const blob = await (await fetch(dataUrl)).blob();
+    await navigator.clipboard.write([new ClipboardItem({ [blob.type || 'image/png']: blob })]);
+  }
+
   const shotVisible = () =>
     run(async () => {
+      if (shotMode === 'copy') {
+        const r = await send<{ ok: boolean; error?: string; dataUrl?: string }>({ type: 'KS_GRAB_VISIBLE' });
+        if (!r?.ok || !r.dataUrl) throw new Error(r?.error || 'Could not capture');
+        await copyToClipboard(r.dataUrl);
+        setOpen(false);
+        toast('Screenshot copied to clipboard', 'success');
+        return;
+      }
       setOpen(false);
       const r = await send<{ ok: boolean; error?: string }>({ type: 'KS_CAPTURE_VISIBLE' });
       if (!r?.ok) throw new Error(r?.error || 'Could not capture');
@@ -58,6 +75,15 @@ export function CaptureMenu({ buttonClass = 'btn-ghost px-2.5 text-sm' }: { butt
 
   const shotFull = () =>
     run(async () => {
+      if (shotMode === 'copy') {
+        toast('Capturing the full page…', 'info');
+        const r = await send<{ ok: boolean; error?: string; dataUrl?: string }>({ type: 'KS_GRAB_FULL' });
+        if (!r?.ok || !r.dataUrl) throw new Error(r?.error || 'Could not capture');
+        await copyToClipboard(r.dataUrl);
+        setOpen(false);
+        toast('Full page copied to clipboard', 'success');
+        return;
+      }
       setOpen(false);
       const r = await send<{ ok: boolean; error?: string }>({ type: 'KS_CAPTURE_FULL' });
       if (!r?.ok) throw new Error(r?.error || 'Could not capture');
@@ -117,12 +143,30 @@ export function CaptureMenu({ buttonClass = 'btn-ghost px-2.5 text-sm' }: { butt
               </button>
             ) : (
               <>
-                <p className="px-2.5 pb-1 pt-1.5 text-[11px] font-semibold uppercase tracking-wide text-ink-faint">Screenshot</p>
+                <div className="flex items-center justify-between px-2.5 pb-1 pt-1.5">
+                  <p className="text-[11px] font-semibold uppercase tracking-wide text-ink-faint">Screenshot</p>
+                  <div className="flex rounded-md border border-line p-0.5 text-[11px]">
+                    <button
+                      className={`rounded px-1.5 py-0.5 ${shotMode === 'download' ? 'bg-brand text-white' : 'text-ink-faint hover:text-ink'}`}
+                      onClick={() => setShotMode('download')}
+                      title="Save the screenshot to your Downloads folder"
+                    >
+                      Download
+                    </button>
+                    <button
+                      className={`rounded px-1.5 py-0.5 ${shotMode === 'copy' ? 'bg-brand text-white' : 'text-ink-faint hover:text-ink'}`}
+                      onClick={() => setShotMode('copy')}
+                      title="Copy the screenshot to your clipboard"
+                    >
+                      Copy
+                    </button>
+                  </div>
+                </div>
                 <button className={item} onClick={shotVisible}>
-                  <Icon name="camera" size={16} /> Visible area
+                  <Icon name={shotMode === 'copy' ? 'copy' : 'camera'} size={16} /> Visible area
                 </button>
                 <button className={item} onClick={shotFull}>
-                  <Icon name="image" size={16} /> Full page (scrolls &amp; stitches)
+                  <Icon name={shotMode === 'copy' ? 'copy' : 'image'} size={16} /> Full page (scrolls &amp; stitches)
                 </button>
                 <p className="px-2.5 pb-1 pt-2 text-[11px] font-semibold uppercase tracking-wide text-ink-faint">Record</p>
                 <button className={item} onClick={() => record('tab')}>
