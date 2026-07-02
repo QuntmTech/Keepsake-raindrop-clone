@@ -21,13 +21,20 @@ import { processQueueTick, scheduleQueue, QUEUE_ALARM } from '@/lib/aiQueue';
 import { matchPage, recallAllowed, type RecallResult } from '@/lib/recall';
 import { ensureOffscreen } from '@/lib/embedder';
 import { checkOnVisit, scheduleWatchAlarm, startWatch, stopWatch, watchTick, WATCH_ALARM, type WatchConfig } from '@/lib/watch';
+import { onboardingStage } from '@/lib/onboarding';
 import { storage } from 'wxt/utils/storage';
 
 // The background "service worker" is event-driven and can be killed at any time by Chrome.
 // Never rely on long-lived in-memory state here — read from storage when you need it.
 
 export default defineBackground(() => {
-  browser.runtime.onInstalled.addListener(async () => {
+  browser.runtime.onInstalled.addListener(async (details) => {
+    // First-ever install: open Home with the sign-up form + guided tour queued.
+    // Updates/reloads never touch the stage, so existing users aren't nagged.
+    if (details.reason === 'install') {
+      await onboardingStage.setValue('fresh').catch(() => {});
+      browser.tabs.create({ url: browser.runtime.getURL('/newtab.html') }).catch(() => {});
+    }
     await ensureContextMenu();
     const settings = await getSettings();
     await applyActionBehavior(settings.primarySurface);

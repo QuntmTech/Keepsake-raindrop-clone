@@ -20,6 +20,8 @@ import { detectAndParse, importWithAi } from '@/lib/importer';
 import { WALLPAPERS, COLOR_SWATCHES, wallpaperCss, colorLuminance, wallpaperUpload, imageFileToDataUrl } from '@/lib/wallpaper';
 import { SEARCH_ENGINES, searchUrl } from '@/lib/search';
 import { normUrl } from '@/lib/apps';
+import { onboardingStage } from '@/lib/onboarding';
+import { Tour, type TourStep } from '@/components/Tour';
 import { type Bookmark, type Collection } from '@/lib/types';
 
 const TILE_MIME = 'application/x-keepsake-tile';
@@ -30,6 +32,43 @@ const seenHelp = storage.defineItem<boolean>('local:seen_home_help', { fallback:
 // device so a drag always sticks (server sort fields are written too, as the
 // best-effort cross-device copy).
 const layoutStore = storage.defineItem<string[]>('local:home_layout', { fallback: [] });
+
+// First-run guided tour of Home (runs right after the account is created).
+const HOME_TOUR: TourStep[] = [
+  {
+    title: 'Welcome to Keepsake! 🎉',
+    body: 'This is your new Home — a fast launcher for the sites you actually use, backed by a full bookmark library. Here’s a 30-second look around.',
+  },
+  {
+    target: '[data-tour="add-apps"]',
+    title: 'Add your apps',
+    body: 'One click adds popular apps to your Home — or add any custom link. You can also add a whole category (Social, Dev, News…) as a folder.',
+  },
+  {
+    target: '[data-tour="grid"]',
+    title: 'Your launcher grid',
+    body: 'Apps live here as tiles; collections show as folders that open with a click. Drag tiles to rearrange, drop one onto a folder to file it, and drag folders around too.',
+  },
+  {
+    target: '[data-tour="search"]',
+    title: 'Search everything',
+    body: 'Type to instantly search everything you’ve saved. Nothing saved matches? Press Enter and the same box searches the web.',
+  },
+  {
+    target: '[data-tour="capture"]',
+    title: 'Capture anything',
+    body: 'Screenshots (visible area or full page) and screen recordings — download them or copy straight to your clipboard.',
+  },
+  {
+    target: '[data-tour="wallpaper"]',
+    title: 'Make it yours',
+    body: 'Pick a gradient, a solid color, or upload your own background image.',
+  },
+  {
+    title: 'One last thing 📌',
+    body: 'Pin Keepsake to your toolbar (puzzle icon → pin) and click it on any page to save it. The dropdown holds your full library — we’ll show you around it the first time you open it.',
+  },
+];
 
 type GridEntry =
   | { key: string; kind: 'tile'; b: Bookmark }
@@ -73,6 +112,8 @@ export default function App() {
   const [renaming, setRenaming] = useState<string | null>(null);
   const [openFolder, setOpenFolder] = useState<string | null>(null);
   const [help, setHelp] = useState(false);
+  const [tour, setTour] = useState(false);
+  const [freshInstall, setFreshInstall] = useState(false);
   const [catalogOpen, setCatalogOpen] = useState(false);
   const [allTags, setAllTags] = useState<string[]>([]);
   const [uploadedWall, setUploadedWall] = useState('');
@@ -139,16 +180,36 @@ export default function App() {
     syncHomeOverlay().then(reloadAll).catch(() => {});
   }, [authed, reloadAll]);
 
-  // Show the setup guide once.
+  // Fresh install → the sign-up form comes pre-selected on the login screen.
+  useEffect(() => {
+    onboardingStage.getValue().then((s) => setFreshInstall(s === 'fresh'));
+  }, [authed]);
+
+  // First run after sign-up → guided tour. Otherwise show the setup guide once.
   useEffect(() => {
     if (!authed) return;
-    seenHelp.getValue().then((seen) => {
+    (async () => {
+      const stage = await onboardingStage.getValue();
+      if (stage === 'fresh') {
+        // The tour replaces the one-time help dialog (still reachable via "?").
+        await seenHelp.setValue(true);
+        setTour(true);
+        return;
+      }
+      const seen = await seenHelp.getValue();
       if (!seen) {
         setHelp(true);
         seenHelp.setValue(true);
       }
-    });
+    })();
   }, [authed]);
+
+  const finishTour = useCallback(() => {
+    setTour(false);
+    setFreshInstall(false);
+    // Next stop: the extension dropdown shows its own mini-tour on first open.
+    onboardingStage.setValue('home-done').catch(() => {});
+  }, []);
   useEffect(() => {
     if (!authed) return;
     const unVault = watchVault(() => {
@@ -442,7 +503,7 @@ export default function App() {
     return (
       <div className="grid min-h-screen place-items-center bg-surface-sunken">
         <div className="card w-full max-w-sm">
-          <LoginForm onLogin={login} onSignup={signup} />
+          <LoginForm onLogin={login} onSignup={signup} defaultMode={freshInstall ? 'signup' : 'login'} />
         </div>
       </div>
     );
@@ -682,15 +743,17 @@ export default function App() {
         <span className={`text-base font-semibold ${onDark ? 'text-white drop-shadow' : ''}`}>Keepsake</span>
         <div className="ml-auto flex items-center gap-1.5">
           <input ref={fileRef} type="file" accept=".html,.json,.csv" className="hidden" onChange={onFile} />
-          <button className="btn-primary px-3 py-1.5 text-sm" onClick={() => setCatalogOpen(true)} title="Add apps to your Home">
+          <button data-tour="add-apps" className="btn-primary px-3 py-1.5 text-sm" onClick={() => setCatalogOpen(true)} title="Add apps to your Home">
             <Icon name="plus" size={15} /> Add apps
           </button>
-          <CaptureMenu buttonClass={`btn-ghost px-2.5 text-sm ${onDark ? 'text-white/80 hover:text-white hover:bg-white/10' : ''}`} />
+          <div data-tour="capture">
+            <CaptureMenu buttonClass={`btn-ghost px-2.5 text-sm ${onDark ? 'text-white/80 hover:text-white hover:bg-white/10' : ''}`} />
+          </div>
           <button className={`btn-ghost px-2.5 text-sm ${onDark ? 'text-white/80 hover:text-white hover:bg-white/10' : ''}`} onClick={() => fileRef.current?.click()} title="Import links">
             <Icon name="import" size={17} /> Import
           </button>
           <div className="relative">
-            <button className={headBtn} onClick={() => setWallOpen((o) => !o)} title="Wallpaper">
+            <button data-tour="wallpaper" className={headBtn} onClick={() => setWallOpen((o) => !o)} title="Wallpaper">
               <Icon name="image" size={18} />
             </button>
             {wallOpen && (
@@ -802,7 +865,7 @@ export default function App() {
           </p>
         </div>
 
-        <div className={`mx-auto mt-6 flex max-w-xl items-center gap-2 rounded-2xl border px-4 py-3 focus-within:border-brand/50 ${panelCls}`}>
+        <div data-tour="search" className={`mx-auto mt-6 flex max-w-xl items-center gap-2 rounded-2xl border px-4 py-3 focus-within:border-brand/50 ${panelCls}`}>
           <Icon name="search" size={20} className="text-ink-faint" />
           <input
             className="flex-1 bg-transparent text-base outline-none placeholder:text-ink-faint"
@@ -849,7 +912,7 @@ export default function App() {
           </div>
         ) : pinnedItems.length === 0 ? (
           /* Curated-Home bootstrap: nothing pinned yet */
-          <div className={`mx-auto mt-10 max-w-lg rounded-2xl border p-8 text-center ${panelCls}`}>
+          <div data-tour="grid" className={`mx-auto mt-10 max-w-lg rounded-2xl border p-8 text-center ${panelCls}`}>
             <span className="mx-auto mb-3 grid h-12 w-12 place-items-center rounded-2xl bg-brand/10 text-brand">
               <Icon name="star" size={24} />
             </span>
@@ -873,6 +936,7 @@ export default function App() {
         ) : minimal ? null : (
           /* The launcher grid: single apps first, then folders, then Add. */
           <div
+            data-tour="grid"
             className={`mt-12 flex flex-wrap items-start justify-center gap-x-2 gap-y-6 rounded-3xl p-3 transition ${
               dropKey === 'grid' ? 'outline-dashed outline-2 outline-brand/50' : ''
             }`}
@@ -1058,6 +1122,7 @@ export default function App() {
         />
       )}
       {help && <HelpDialog onClose={() => setHelp(false)} />}
+      {tour && <Tour steps={HOME_TOUR} onDone={finishTour} />}
       </div>
     </div>
   );

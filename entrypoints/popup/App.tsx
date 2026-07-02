@@ -24,19 +24,55 @@ import {
   watchVault,
 } from '@/lib/bookmarks';
 import { EditDialog } from '@/components/EditDialog';
+import { onboardingStage } from '@/lib/onboarding';
+import { Tour, type TourStep } from '@/components/Tour';
 import { type Bookmark, type VaultStats } from '@/lib/types';
 
 type RightView = 'list' | 'save' | 'settings';
+
+// Coach-mark tour of the dropdown — shown once, the first time it opens after
+// the Home tour finished.
+const POPUP_TOUR: TourStep[] = [
+  {
+    title: 'Your library lives here',
+    body: 'This dropdown is your full bookmark vault — everything you save, on any page, one click from the toolbar.',
+  },
+  {
+    target: '[data-tour="pop-sidebar"]',
+    title: 'Collections & filters',
+    body: 'Browse by collection, favorites, highlights, or tag. Drag a bookmark onto a collection to file it. Folders that only live on your Home stay out of here.',
+  },
+  {
+    target: '[data-tour="pop-save"]',
+    title: 'Save the page you’re on',
+    body: 'Hit Save (or press Ctrl+Shift+S anywhere) and Keepsake grabs the title, icon, and preview — AI can even file and tag it for you.',
+  },
+  {
+    target: '[data-tour="pop-capture"]',
+    title: 'Screenshots & recordings',
+    body: 'Capture the visible area or the full page, or record your tab or screen — saved to Downloads or copied to your clipboard.',
+  },
+  {
+    target: '[data-tour="pop-expand"]',
+    title: 'Room to spread out',
+    body: 'The full-screen dashboard has the same library with more space — plus import, settings, and stats. That’s the tour. Happy keeping! 🎉',
+  },
+];
 
 // The popup is a compact two-pane mini-dashboard: collections on the left,
 // your bookmarks on the right, quick-save and settings without leaving the
 // dropdown. Full-screen is one click away when you want room to spread out.
 export default function App() {
   const { ready, authed, login, signup } = useAuth();
+  const [freshInstall, setFreshInstall] = useState(false);
 
   useEffect(() => {
     if (authed) send({ type: 'FLUSH_QUEUE' }).catch(() => {});
   }, [authed]);
+  // Fresh install → the sign-up form comes pre-selected.
+  useEffect(() => {
+    onboardingStage.getValue().then((s) => setFreshInstall(s === 'fresh'));
+  }, []);
 
   if (!ready)
     return (
@@ -47,7 +83,7 @@ export default function App() {
   if (!authed)
     return (
       <Frame narrow>
-        <LoginForm onLogin={login} onSignup={signup} compact />
+        <LoginForm onLogin={login} onSignup={signup} compact defaultMode={freshInstall ? 'signup' : 'login'} />
       </Frame>
     );
   return <Vault />;
@@ -65,7 +101,19 @@ function Vault() {
   const [right, setRight] = useState<RightView>('list');
   const [editing, setEditing] = useState<Bookmark | null>(null);
   const [homeOnlyCols, setHomeOnlyCols] = useState<string[]>([]);
+  const [tour, setTour] = useState(false);
   const uidRef = useRef<string | null>(null);
+
+  // First open after the Home tour → walk through the dropdown once.
+  useEffect(() => {
+    onboardingStage.getValue().then((s) => {
+      if (s === 'home-done') setTour(true);
+    });
+  }, []);
+  const finishTour = useCallback(() => {
+    setTour(false);
+    onboardingStage.setValue('complete').catch(() => {});
+  }, []);
 
   // Stale-while-revalidate: don't flash a skeleton while refreshing in the
   // background — only show "loading" on the very first paint.
@@ -182,6 +230,7 @@ function Vault() {
           onMove={move}
           onReorder={c.reorder}
           hideCollectionIds={homeOnlyCols}
+          dataTour="pop-sidebar"
         />
 
         <div className="flex min-w-0 flex-1 flex-col">
@@ -197,7 +246,7 @@ function Vault() {
                     onChange={(e) => setQuery(e.target.value)}
                   />
                 </div>
-                <button className="btn-primary px-2.5 py-1.5 text-xs" onClick={() => setRight('save')}>
+                <button data-tour="pop-save" className="btn-primary px-2.5 py-1.5 text-xs" onClick={() => setRight('save')}>
                   <Icon name="plus" size={15} /> Save
                 </button>
               </>
@@ -209,7 +258,9 @@ function Vault() {
                 <span className="flex-1 text-sm font-semibold">{right === 'save' ? 'Save page' : 'Settings'}</span>
               </>
             )}
-            <CaptureMenu buttonClass="btn-ghost px-2 py-1.5 text-xs" />
+            <div data-tour="pop-capture">
+              <CaptureMenu buttonClass="btn-ghost px-2 py-1.5 text-xs" />
+            </div>
             <button
               className={`btn-ghost px-2 py-1.5 ${right === 'settings' ? 'text-brand' : ''}`}
               onClick={() => setRight((r) => (r === 'settings' ? 'list' : 'settings'))}
@@ -217,7 +268,12 @@ function Vault() {
             >
               <Icon name="settings" size={16} />
             </button>
-            <button className="btn-ghost px-2 py-1.5" onClick={() => send({ type: 'OPEN_DASHBOARD' })} title="Open full screen">
+            <button
+              data-tour="pop-expand"
+              className="btn-ghost px-2 py-1.5"
+              onClick={() => send({ type: 'OPEN_DASHBOARD' })}
+              title="Open full screen"
+            >
               <Icon name="external" size={16} />
             </button>
           </header>
@@ -265,6 +321,7 @@ function Vault() {
           }}
         />
       )}
+      {tour && <Tour steps={POPUP_TOUR} onDone={finishTour} />}
     </Frame>
   );
 }

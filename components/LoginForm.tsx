@@ -6,10 +6,19 @@ interface Props {
   onLogin: (email: string, password: string) => Promise<void>;
   onSignup?: (email: string, password: string, name?: string) => Promise<void>;
   compact?: boolean;
+  // Fresh installs land on sign-up; everyone else defaults to sign-in.
+  defaultMode?: 'login' | 'signup';
 }
 
-export function LoginForm({ onLogin, onSignup, compact }: Props) {
-  const [mode, setMode] = useState<'login' | 'signup'>('login');
+export function LoginForm({ onLogin, onSignup, compact, defaultMode }: Props) {
+  const [mode, setMode] = useState<'login' | 'signup'>(defaultMode ?? 'login');
+
+  // The default can arrive async (onboarding stage is read from storage after
+  // this form mounts) — follow it until the user picks a mode themselves.
+  const [touched, setTouched] = useState(false);
+  useEffect(() => {
+    if (defaultMode && !touched) setMode(defaultMode);
+  }, [defaultMode, touched]);
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [error, setError] = useState('');
@@ -79,6 +88,7 @@ export function LoginForm({ onLogin, onSignup, compact }: Props) {
         <button
           className="text-xs text-ink-faint transition hover:text-brand"
           onClick={() => {
+            setTouched(true);
             setMode((m) => (m === 'login' ? 'signup' : 'login'));
             setError('');
           }}

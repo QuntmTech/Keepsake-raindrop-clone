@@ -35,6 +35,8 @@ interface Props {
   // the library sidebar).
   hideCollectionIds?: string[];
   compact?: boolean;
+  // Anchor for the first-run guided tour (data-tour attribute on the root).
+  dataTour?: string;
 }
 
 const COL_MIME = 'application/x-keepsake-collection';
@@ -55,6 +57,7 @@ export function CollectionSidebar({
   onReorder,
   hideCollectionIds,
   compact,
+  dataTour,
 }: Props) {
   // Drop Home-only launcher folders from the library sidebar.
   const hidden = new Set(hideCollectionIds ?? []);
@@ -157,6 +160,7 @@ export function CollectionSidebar({
 
   return (
     <aside
+      data-tour={dataTour}
       className={`flex h-full shrink-0 flex-col gap-1 overflow-y-auto border-r border-line bg-surface py-3 ${
         compact ? 'w-44 px-2' : 'w-60 px-3 py-4'
       }`}
