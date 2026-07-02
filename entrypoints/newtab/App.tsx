@@ -529,7 +529,9 @@ export default function App() {
           />
         )}
         <div
-          className={`grid h-16 w-16 place-items-center overflow-hidden rounded-2xl border transition group-hover:-translate-y-0.5 group-hover:shadow-float ${iconCls}`}
+          className={`grid h-16 w-16 place-items-center overflow-hidden rounded-2xl border transition group-hover:-translate-y-0.5 group-hover:shadow-float ${
+            inFolder ? 'border-line bg-surface-raised shadow-card' : iconCls
+          }`}
         >
           <Favicon src={b.favicon} size={34} label={b.title} />
         </div>
@@ -567,7 +569,13 @@ export default function App() {
             <Icon name="close" size={10} />
           </button>
         </div>
-        <span className={`line-clamp-1 max-w-[92px] text-center text-[11px] leading-tight ${labelCls}`}>{b.title}</span>
+        <span
+          className={`line-clamp-1 max-w-[92px] text-center text-[11px] leading-tight ${
+            inFolder ? 'text-ink-soft' : labelCls
+          }`}
+        >
+          {b.title}
+        </span>
       </div>
     );
   };
