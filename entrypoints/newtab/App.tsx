@@ -17,7 +17,7 @@ import { useToast } from '@/components/Toast';
 import { searchBookmarks, updateBookmark, updateCollection, deleteBookmark, getAllTags, markVisited, watchVault } from '@/lib/bookmarks';
 import { syncHomeOverlay, watchHomeOverlay } from '@/lib/home';
 import { detectAndParse, importWithAi } from '@/lib/importer';
-import { WALLPAPERS, wallpaperCss } from '@/lib/wallpaper';
+import { WALLPAPERS, COLOR_SWATCHES, wallpaperCss, colorLuminance, wallpaperUpload, imageFileToDataUrl } from '@/lib/wallpaper';
 import { SEARCH_ENGINES, searchUrl } from '@/lib/search';
 import { normUrl } from '@/lib/apps';
 import { type Bookmark, type Collection } from '@/lib/types';
@@ -75,8 +75,32 @@ export default function App() {
   const [help, setHelp] = useState(false);
   const [catalogOpen, setCatalogOpen] = useState(false);
   const [allTags, setAllTags] = useState<string[]>([]);
+  const [uploadedWall, setUploadedWall] = useState('');
   const fileRef = useRef<HTMLInputElement>(null);
+  const wallFileRef = useRef<HTMLInputElement>(null);
   const uidRef = useRef<string | null>(null);
+
+  // Load + track the uploaded background image (stored locally, not synced).
+  useEffect(() => {
+    wallpaperUpload.getValue().then(setUploadedWall);
+    return wallpaperUpload.watch((v) => setUploadedWall(v ?? ''));
+  }, []);
+
+  async function onWallpaperFile(e: React.ChangeEvent<HTMLInputElement>) {
+    const file = e.target.files?.[0];
+    if (file) {
+      try {
+        const dataUrl = await imageFileToDataUrl(file);
+        await wallpaperUpload.setValue(dataUrl);
+        await update({ wallpaper: 'upload' });
+        toast('Background updated', 'success');
+      } catch {
+        toast('Could not read that image', 'error');
+      }
+    }
+    if (wallFileRef.current) wallFileRef.current.value = '';
+    setWallOpen(false);
+  }
 
   const reloadAll = useCallback(() => {
     // Keep current links on screen if the request is slow/fails — never blank out.
@@ -424,8 +448,13 @@ export default function App() {
     );
 
   const minimal = settings.newTabMode === 'minimal';
-  const wall = wallpaperCss(settings.wallpaper);
+  const wall = wallpaperCss(settings.wallpaper, uploadedWall);
   const onWall = Boolean(wall);
+  // A solid LIGHT color needs dark text; images and dark gradients need light
+  // text (and a subtle dark overlay for contrast).
+  const isColor = settings.wallpaper.startsWith('color:');
+  const lightColor = isColor && colorLuminance(settings.wallpaper.slice(6)) > 0.6;
+  const onDark = onWall && !lightColor; // use light text
   // Panels: solid cards normally, frosted glass over a wallpaper.
   const panelCls = onWall
     ? 'border-white/15 bg-surface-raised/90 backdrop-blur-md'
@@ -433,7 +462,7 @@ export default function App() {
   const iconCls = onWall
     ? 'border-white/20 bg-surface-raised/95 backdrop-blur-md'
     : 'border-line bg-surface-raised shadow-card';
-  const labelCls = onWall ? 'text-white/90 drop-shadow' : 'text-ink-soft';
+  const labelCls = onDark ? 'text-white/90 drop-shadow' : 'text-ink-soft';
 
   // A single app tile: icon square + label, Atlas-sized. `statik` disables
   // drag & drop (used in search results, where reordering has no meaning).
@@ -629,27 +658,27 @@ export default function App() {
       }
     : null;
 
-  const headBtn = `btn-ghost px-2 ${onWall ? 'text-white/80 hover:text-white hover:bg-white/10' : ''}`;
+  const headBtn = `btn-ghost px-2 ${onDark ? 'text-white/80 hover:text-white hover:bg-white/10' : ''}`;
 
   return (
     <div
       className={`relative min-h-screen text-ink ${onWall ? '' : 'bg-surface-sunken'}`}
       style={onWall ? { background: wall, backgroundAttachment: 'fixed' } : undefined}
     >
-      {onWall && <div className="pointer-events-none fixed inset-0 bg-black/35" />}
+      {onDark && !isColor && <div className="pointer-events-none fixed inset-0 bg-black/35" />}
       <div className="relative">
       <header className="flex items-center gap-2 px-6 py-4">
         <span className="grid h-8 w-8 place-items-center rounded-lg bg-brand text-white">
           <Icon name="bookmark" size={17} fill />
         </span>
-        <span className={`text-base font-semibold ${onWall ? 'text-white drop-shadow' : ''}`}>Keepsake</span>
+        <span className={`text-base font-semibold ${onDark ? 'text-white drop-shadow' : ''}`}>Keepsake</span>
         <div className="ml-auto flex items-center gap-1.5">
           <input ref={fileRef} type="file" accept=".html,.json,.csv" className="hidden" onChange={onFile} />
           <button className="btn-primary px-3 py-1.5 text-sm" onClick={() => setCatalogOpen(true)} title="Add apps to your Home">
             <Icon name="plus" size={15} /> Add apps
           </button>
-          <CaptureMenu buttonClass={`btn-ghost px-2.5 text-sm ${onWall ? 'text-white/80 hover:text-white hover:bg-white/10' : ''}`} />
-          <button className={`btn-ghost px-2.5 text-sm ${onWall ? 'text-white/80 hover:text-white hover:bg-white/10' : ''}`} onClick={() => fileRef.current?.click()} title="Import links">
+          <CaptureMenu buttonClass={`btn-ghost px-2.5 text-sm ${onDark ? 'text-white/80 hover:text-white hover:bg-white/10' : ''}`} />
+          <button className={`btn-ghost px-2.5 text-sm ${onDark ? 'text-white/80 hover:text-white hover:bg-white/10' : ''}`} onClick={() => fileRef.current?.click()} title="Import links">
             <Icon name="import" size={17} /> Import
           </button>
           <div className="relative">
@@ -659,22 +688,68 @@ export default function App() {
             {wallOpen && (
               <>
                 <div className="fixed inset-0 z-10" onClick={() => setWallOpen(false)} />
-                <div className="absolute right-0 top-10 z-20 w-60 rounded-xl border border-line bg-surface-raised p-3 shadow-float">
-                  <p className="mb-2 text-xs font-semibold text-ink-soft">Wallpaper</p>
+                <div className="absolute right-0 top-10 z-20 max-h-[80vh] w-64 overflow-y-auto rounded-xl border border-line bg-surface-raised p-3 shadow-float">
+                  <p className="mb-2 text-xs font-semibold uppercase tracking-wide text-ink-faint">Gradients</p>
                   <div className="grid grid-cols-4 gap-2">
                     {WALLPAPERS.map((w) => (
                       <button
                         key={w.key}
-                        className={`h-10 rounded-lg border ${settings.wallpaper === w.key ? 'border-brand ring-2 ring-brand' : 'border-line'}`}
+                        className={`h-10 rounded-lg border transition hover:scale-105 ${
+                          settings.wallpaper === w.key ? 'border-brand ring-2 ring-brand' : 'border-line'
+                        }`}
                         style={{ background: w.css || 'rgb(var(--surface-sunken))' }}
                         onClick={() => update({ wallpaper: w.key })}
                         title={w.label}
+                      >
+                        {w.key === '' && <span className="text-[9px] text-ink-faint">None</span>}
+                      </button>
+                    ))}
+                  </div>
+
+                  <p className="mb-2 mt-3 text-xs font-semibold uppercase tracking-wide text-ink-faint">Solid color</p>
+                  <div className="flex flex-wrap items-center gap-2">
+                    {COLOR_SWATCHES.map((hex) => (
+                      <button
+                        key={hex}
+                        className={`h-7 w-7 rounded-lg border transition hover:scale-110 ${
+                          settings.wallpaper === `color:${hex}` ? 'border-brand ring-2 ring-brand' : 'border-line'
+                        }`}
+                        style={{ background: hex }}
+                        onClick={() => update({ wallpaper: `color:${hex}` })}
+                        title={hex}
                       />
                     ))}
+                    <label
+                      className="grid h-7 w-7 cursor-pointer place-items-center rounded-lg border border-line text-ink-faint hover:text-brand"
+                      title="Pick any color"
+                    >
+                      <Icon name="plus" size={13} />
+                      <input
+                        type="color"
+                        className="sr-only"
+                        value={isColor ? settings.wallpaper.slice(6) : '#1e293b'}
+                        onChange={(e) => update({ wallpaper: `color:${e.target.value}` })}
+                      />
+                    </label>
+                  </div>
+
+                  <p className="mb-2 mt-3 text-xs font-semibold uppercase tracking-wide text-ink-faint">Your image</p>
+                  <input ref={wallFileRef} type="file" accept="image/*" className="hidden" onChange={onWallpaperFile} />
+                  <div className="flex items-center gap-2">
+                    <button className="btn-outline flex-1 text-xs" onClick={() => wallFileRef.current?.click()}>
+                      <Icon name="image" size={14} /> Upload image
+                    </button>
+                    {settings.wallpaper === 'upload' && uploadedWall && (
+                      <span
+                        className="h-8 w-8 shrink-0 rounded-lg border border-brand ring-2 ring-brand"
+                        style={{ background: `center / cover no-repeat url("${uploadedWall}")` }}
+                        title="Current upload"
+                      />
+                    )}
                   </div>
                   <input
                     className="input mt-2 text-xs"
-                    placeholder="Custom image URL…"
+                    placeholder="…or paste an image URL"
                     defaultValue={settings.wallpaper.startsWith('url:') ? settings.wallpaper.slice(4) : ''}
                     onKeyDown={(e) => {
                       if (e.key === 'Enter') {
@@ -684,6 +759,16 @@ export default function App() {
                       }
                     }}
                   />
+
+                  <button
+                    className="mt-3 w-full rounded-lg border border-line py-1.5 text-xs text-ink-soft hover:border-brand/50 hover:text-brand"
+                    onClick={() => {
+                      update({ wallpaper: '' });
+                      setWallOpen(false);
+                    }}
+                  >
+                    Reset to default
+                  </button>
                 </div>
               </>
             )}
@@ -702,8 +787,8 @@ export default function App() {
 
       <main className="mx-auto w-full max-w-6xl px-6 pb-24">
         <div className="mt-[4vh] text-center">
-          <p className={`text-5xl font-semibold tracking-tight ${onWall ? 'text-white drop-shadow-lg' : ''}`}>{time}</p>
-          <p className={`mt-2 text-lg ${onWall ? 'text-white/90 drop-shadow' : 'text-ink-soft'}`}>
+          <p className={`text-5xl font-semibold tracking-tight ${onDark ? 'text-white drop-shadow-lg' : ''}`}>{time}</p>
+          <p className={`mt-2 text-lg ${onDark ? 'text-white/90 drop-shadow' : 'text-ink-soft'}`}>
             {greeting}
             {name ? `, ${name}` : ''}.
           </p>
@@ -742,13 +827,13 @@ export default function App() {
 
         {results !== null ? (
           <div className="mt-10">
-            <h2 className={`mb-4 text-center text-xs font-semibold uppercase tracking-wide ${onWall ? 'text-white/80' : 'text-ink-faint'}`}>
+            <h2 className={`mb-4 text-center text-xs font-semibold uppercase tracking-wide ${onDark ? 'text-white/80' : 'text-ink-faint'}`}>
               Results for “{query}”
             </h2>
             <div className="flex flex-wrap items-start justify-center gap-x-2 gap-y-5">
               {results.map((b) => renderTile(b, 'results', true))}
               {results.length === 0 && (
-                <p className={`py-6 text-center text-sm ${onWall ? 'text-white/80' : 'text-ink-faint'}`}>
+                <p className={`py-6 text-center text-sm ${onDark ? 'text-white/80' : 'text-ink-faint'}`}>
                   Nothing saved — press Enter to search the web.
                 </p>
               )}
@@ -807,7 +892,7 @@ export default function App() {
             <div className="flex w-[92px] flex-col items-center gap-1.5">
               <button
                 className={`grid h-16 w-16 place-items-center rounded-2xl border border-dashed transition hover:-translate-y-0.5 hover:border-brand/60 hover:text-brand ${
-                  onWall ? 'border-white/40 text-white/80' : 'border-line text-ink-faint'
+                  onDark ? 'border-white/40 text-white/80' : 'border-line text-ink-faint'
                 }`}
                 onClick={() => setCatalogOpen(true)}
                 title="Add apps or a custom link"
