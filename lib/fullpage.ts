@@ -14,13 +14,17 @@ export function captureFullPageScript(): Promise<string> {
     try {
       const body = document.body;
       const html = document.documentElement;
-      const fullHeight = Math.max(body.scrollHeight, body.offsetHeight, html.clientHeight, html.scrollHeight, html.offsetHeight);
-      const fullWidth = Math.max(body.scrollWidth, body.offsetWidth, html.clientWidth, html.scrollWidth, html.offsetWidth);
+      // scrollWidth/Height and clientWidth/Height all EXCLUDE scrollbars, so
+      // page size, tile stepping, and tile cropping stay consistent — the
+      // window-wide captureVisibleTab shot includes the scrollbar, and without
+      // cropping it would smear a dark strip down the stitched edge.
+      const fullHeight = Math.max(html.scrollHeight, body?.scrollHeight ?? 0);
+      const fullWidth = Math.max(html.scrollWidth, body?.scrollWidth ?? 0);
 
       const originalScrollX = window.scrollX;
       const originalScrollY = window.scrollY;
-      const viewportWidth = window.innerWidth;
-      const viewportHeight = window.innerHeight;
+      const viewportWidth = html.clientWidth || window.innerWidth;
+      const viewportHeight = html.clientHeight || window.innerHeight;
 
       const cols = Math.ceil(fullWidth / viewportWidth);
       const rows = Math.ceil(fullHeight / viewportHeight);
@@ -71,12 +75,15 @@ export function captureFullPageScript(): Promise<string> {
       };
 
       // Sticky headers / fixed toolbars would repeat in every tile — hide them
-      // for the whole capture and restore afterwards.
+      // for the whole capture and restore afterwards. Descend into open shadow
+      // roots too: floating widgets (including Keepsake's own Quick Bar) mount
+      // their fixed elements inside a shadow root on a static host, where a
+      // plain body walk would never see them.
       const fixedEls: { el: HTMLElement; orig: string }[] = [];
       let stopBar: HTMLElement | null = null;
-      const hideFixedElements = () => {
-        const walker = document.createTreeWalker(document.body || document.documentElement, NodeFilter.SHOW_ELEMENT);
-        let el = walker.currentNode as HTMLElement | null;
+      const hideFixedIn = (root: Node) => {
+        const walker = document.createTreeWalker(root, NodeFilter.SHOW_ELEMENT);
+        let el = walker.nextNode() as HTMLElement | null;
         while (el) {
           if (!(stopBar && (el === stopBar || stopBar.contains(el)))) {
             const style = getComputedStyle(el);
@@ -84,10 +91,14 @@ export function captureFullPageScript(): Promise<string> {
               fixedEls.push({ el, orig: el.style.cssText });
               el.style.setProperty('visibility', 'hidden', 'important');
             }
+            if (el.shadowRoot) hideFixedIn(el.shadowRoot);
           }
           el = walker.nextNode() as HTMLElement | null;
         }
       };
+      // Walk from <html>, not <body>: overlay widgets (Keepsake's Quick Bar
+      // included) often mount their host as a direct child of the html element.
+      const hideFixedElements = () => hideFixedIn(document.documentElement);
       const restoreFixedElements = () => {
         for (const { el, orig } of fixedEls) el.style.cssText = orig;
         fixedEls.length = 0;
@@ -128,16 +139,31 @@ export function captureFullPageScript(): Promise<string> {
           }
         }
         if (!output || output === 'data:,' || output.length < 128 || totalPixels > 50000000) {
-          output = targetCanvas.toDataURL('image/jpeg', 0.95);
+          output = targetCanvas.toDataURL('image/jpeg', 0.97);
         }
         return output;
       };
 
       (async () => {
         let styleTag: HTMLStyleElement | null = null;
+        let freezeTag: HTMLStyleElement | null = null;
         try {
           let abortCapture = false;
           let maxCapturedY = 0;
+
+          // Sharpness guards: CSS smooth-scrolling makes scrollTo animate (tiles
+          // get captured mid-flight at the wrong offset → misaligned strips),
+          // and running animations/transitions ghost across tiles. Freeze both
+          // for the duration of the capture.
+          freezeTag = document.createElement('style');
+          freezeTag.textContent = `
+            html, body { scroll-behavior: auto !important; }
+            *, *::before, *::after {
+              animation-play-state: paused !important;
+              transition: none !important;
+            }
+          `;
+          document.head.appendChild(freezeTag);
 
           stopBar = document.createElement('div');
           stopBar.id = '__keepsake_capture_bar__';
@@ -187,7 +213,11 @@ export function captureFullPageScript(): Promise<string> {
             tempImg.onload = r;
             tempImg.src = firstData;
           });
-          const rawScale = tempImg.width / viewportWidth;
+          // The capture spans the whole window (scrollbar included) — scale off
+          // innerWidth, then crop every tile to the content area only.
+          const rawScale = tempImg.width / window.innerWidth;
+          const srcW = Math.min(tempImg.width, Math.round(viewportWidth * rawScale));
+          const srcH = Math.min(tempImg.height, Math.round(viewportHeight * rawScale));
           const maxScaleByDimension = Math.min(
             MAX_CANVAS_DIMENSION / (fullWidth * rawScale),
             MAX_CANVAS_DIMENSION / (fullHeight * rawScale),
@@ -200,14 +230,19 @@ export function captureFullPageScript(): Promise<string> {
           canvas.width = Math.max(1, Math.floor(fullWidth * exportScale));
           canvas.height = Math.max(1, Math.floor(fullHeight * exportScale));
           const ctx = canvas.getContext('2d')!;
-          ctx.imageSmoothingEnabled = false;
+          // 1:1 tiles must be copied exactly (no resample blur); but when a
+          // monster page forces a downscale, nearest-neighbor shreds text —
+          // use high-quality smoothing there instead.
+          const scaling = Math.abs(exportScale - rawScale) > 0.001;
+          ctx.imageSmoothingEnabled = scaling;
+          if (scaling) ctx.imageSmoothingQuality = 'high';
 
           ctx.drawImage(
             tempImg,
-            0, 0, tempImg.width, tempImg.height,
-            0, 0, Math.floor(tempImg.width * (exportScale / rawScale)), Math.floor(tempImg.height * (exportScale / rawScale)),
+            0, 0, srcW, srcH,
+            0, 0, Math.round(srcW * (exportScale / rawScale)), Math.round(srcH * (exportScale / rawScale)),
           );
-          maxCapturedY = Math.floor(viewportHeight * exportScale);
+          maxCapturedY = Math.round(viewportHeight * exportScale);
           tilesDone = 1;
           if (progressEl) progressEl.textContent = `Capturing tile ${tilesDone} / ${totalTiles}…`;
 
@@ -225,12 +260,16 @@ export function captureFullPageScript(): Promise<string> {
                 img.src = data;
               });
               // Use the real scroll position — the last row/column clamps at
-              // the page edge, so tiles there intentionally overlap.
-              const drawX = Math.max(0, Math.floor(window.scrollX * exportScale));
-              const drawY = Math.max(0, Math.floor(window.scrollY * exportScale));
-              const drawWidth = Math.max(1, Math.floor(img.width * (exportScale / rawScale)));
-              const drawHeight = Math.max(1, Math.floor(img.height * (exportScale / rawScale)));
-              ctx.drawImage(img, 0, 0, img.width, img.height, drawX, drawY, drawWidth, drawHeight);
+              // the page edge, so tiles there intentionally overlap. Round
+              // (don't floor) so fractional devicePixelRatios can't open 1px
+              // seams between tiles.
+              const drawX = Math.max(0, Math.round(window.scrollX * exportScale));
+              const drawY = Math.max(0, Math.round(window.scrollY * exportScale));
+              const sw = Math.min(img.width, srcW);
+              const sh = Math.min(img.height, srcH);
+              const drawWidth = Math.max(1, Math.round(sw * (exportScale / rawScale)));
+              const drawHeight = Math.max(1, Math.round(sh * (exportScale / rawScale)));
+              ctx.drawImage(img, 0, 0, sw, sh, drawX, drawY, drawWidth, drawHeight);
               maxCapturedY = Math.max(maxCapturedY, drawY + drawHeight);
               tilesDone++;
               if (progressEl) progressEl.textContent = `Capturing tile ${tilesDone} / ${totalTiles}…`;
@@ -251,6 +290,7 @@ export function captureFullPageScript(): Promise<string> {
           reject(error);
         } finally {
           restoreFixedElements();
+          if (freezeTag) freezeTag.remove();
           window.scrollTo(originalScrollX, originalScrollY);
           if (stopBar) stopBar.remove();
           stopBar = null;

@@ -13,7 +13,7 @@ import {
 } from '@/lib/capture';
 import { inferType, safeDomain } from '@/lib/util';
 import { type UiSurface } from '@/lib/types';
-import { migrateToSaves } from '@/lib/save';
+import { migrateToSaves, pruneStudioItems, stashStudioItem } from '@/lib/save';
 import { saveCaptureToLibrary } from '@/lib/captureSave';
 import { searchBookmarks, updateBookmark } from '@/lib/bookmarks';
 import { agoLabel, autofileSave, findDuplicate, undoFiling, type FiledResult } from '@/lib/autofile';
@@ -254,19 +254,19 @@ async function handleMessage(msg: Message): Promise<unknown> {
     }
 
     // ---- capture: screenshots + screen recording (ported from CaptureCraft) ----
+    // Every capture lands in the Capture Studio tab: edit/annotate screenshots,
+    // preview/trim recordings, then copy/download/save from there.
 
     case 'KS_CAPTURE_VISIBLE': {
       const dataUrl = await browser.tabs.captureVisibleTab(undefined as any, { format: 'png' });
-      const filename = screenshotFilename('visible');
-      await browser.downloads.download({ url: dataUrl, filename });
       const [tab] = await browser.tabs.query({ active: true, currentWindow: true });
-      saveCaptureToLibrary({
+      await openStudio({
         kind: 'screenshot',
         blob: dataUrlToBlob(dataUrl),
         pageUrl: tab?.url,
         pageTitle: tab?.title,
-        filename,
-      }).catch(() => {});
+        filename: screenshotFilename('visible'),
+      });
       return { ok: true };
     }
 
@@ -284,21 +284,6 @@ async function handleMessage(msg: Message): Promise<unknown> {
       // Ack immediately so the popup can close — the capture keeps running.
       captureFullPage(tab.id).catch((e) => notify('Full-page capture failed', String((e as Error)?.message ?? e)));
       return { ok: true };
-    }
-
-    // Copy-to-clipboard variants: return the PNG data URL to the caller (a
-    // document with clipboard access) instead of downloading it here.
-    case 'KS_GRAB_VISIBLE': {
-      const dataUrl = await browser.tabs.captureVisibleTab(undefined as any, { format: 'png' });
-      return { ok: true, dataUrl };
-    }
-
-    case 'KS_GRAB_FULL': {
-      const [tab] = await browser.tabs.query({ active: true, currentWindow: true });
-      if (!tab?.id) return { ok: false, error: 'No active tab' };
-      const dataUrl = await grabFullPageDataUrl(tab.id);
-      if (!dataUrl) return { ok: false, error: 'Capture returned nothing' };
-      return { ok: true, dataUrl };
     }
 
     case 'KS_START_RECORDING':
@@ -322,32 +307,32 @@ async function handleMessage(msg: Message): Promise<unknown> {
       return await verifiedRecordingState();
 
     // Offscreen finished: the blob: URL it minted stays valid while the
-    // offscreen document is alive, so download it before closing anything.
+    // offscreen document is alive, so pull the bytes before closing anything.
     case 'KS_RECORDING_READY': {
       const prior = await recordingStateStore.getValue();
       await recordingStateStore.setValue(IDLE_RECORDING_STATE);
       await browser.action.setBadgeText({ text: '' });
-      // The blob: URL resolves same-origin while the offscreen document lives —
-      // pull the bytes now so the recording also lands in the library.
       try {
         const blob = await (await fetch(msg.url)).blob();
         const tab = prior.tabId ? await browser.tabs.get(prior.tabId).catch(() => null) : null;
-        saveCaptureToLibrary({
+        await openStudio({
           kind: 'recording',
           blob,
-          pageUrl: tab?.url,
-          pageTitle: tab?.title,
+          pageUrl: tab?.url ?? undefined,
+          pageTitle: tab?.title ?? undefined,
           filename: msg.filename,
           durationMs: msg.durationMs,
-        }).catch(() => {});
-      } catch {
-        /* library copy is best-effort — the download below still happens */
-      }
-      try {
-        await browser.downloads.download({ url: msg.url, filename: msg.filename });
+        });
         return { ok: true };
       } catch {
-        return { ok: false }; // offscreen falls back to an in-document anchor download
+        // Couldn't park the recording for the studio — fall back to a plain
+        // download so the bytes are never lost.
+        try {
+          await browser.downloads.download({ url: msg.url, filename: msg.filename });
+          return { ok: true };
+        } catch {
+          return { ok: false }; // offscreen falls back to an in-document anchor download
+        }
       }
     }
 
@@ -367,6 +352,7 @@ async function handleMessage(msg: Message): Promise<unknown> {
 // legacy chrome.storage stores get a one-time versioned backup first).
 async function runMigration() {
   await migrateToSaves(() => searchBookmarks('', { perPage: 2000, homeTiles: 'include' })).catch(() => 0);
+  await pruneStudioItems().catch(() => {});
 }
 
 // ---- capture plumbing ----
@@ -393,15 +379,29 @@ async function captureFullPage(tabId: number): Promise<void> {
   const dataUrl = await grabFullPageDataUrl(tabId);
   if (!dataUrl) throw new Error('Capture returned nothing');
   const filename = screenshotFilename('full').replace(/\.png$/, dataUrl.startsWith('data:image/jpeg') ? '.jpg' : '.png');
-  await browser.downloads.download({ url: dataUrl, filename });
   const tab = await browser.tabs.get(tabId).catch(() => null);
-  saveCaptureToLibrary({
+  await openStudio({
     kind: 'screenshot',
     blob: dataUrlToBlob(dataUrl),
-    pageUrl: tab?.url,
-    pageTitle: tab?.title,
+    pageUrl: tab?.url ?? undefined,
+    pageTitle: tab?.title ?? undefined,
     filename,
-  }).catch(() => {});
+  });
+}
+
+// Park a fresh capture in IndexedDB (it also lands in the library right away),
+// then open the Capture Studio tab on it for editing/preview.
+async function openStudio(opts: {
+  kind: 'screenshot' | 'recording';
+  blob: Blob;
+  pageUrl?: string;
+  pageTitle?: string;
+  filename: string;
+  durationMs?: number;
+}): Promise<void> {
+  const saveId = await saveCaptureToLibrary(opts).catch(() => undefined);
+  const id = await stashStudioItem({ ...opts, saveId });
+  await browser.tabs.create({ url: browser.runtime.getURL('/studio.html') + `#${id}` });
 }
 
 // Offscreen creation is shared with the embedder/watcher: lib/embedder.ts
@@ -426,15 +426,26 @@ async function startRecording(options: RecordOptions): Promise<void> {
     });
   } else {
     // Chrome's picker: user chooses a screen or a window (audio = system audio).
+    // NO target tab here: a tab-scoped streamId can only be consumed by that
+    // tab, but our consumer is the offscreen recorder — omitting the tab keys
+    // the stream to the extension itself (getUserMedia in offscreen works).
     streamId = await new Promise<string>((resolve, reject) => {
-      browser.desktopCapture.chooseDesktopMedia(['screen', 'window', 'audio'] as any, tab as any, (id: string) => {
+      browser.desktopCapture.chooseDesktopMedia(['screen', 'window', 'audio'] as any, (id: string) => {
         if (id) resolve(id);
         else reject(new Error('Capture was cancelled'));
       });
     });
   }
 
-  await browser.runtime.sendMessage({ target: 'ks-offscreen', type: 'OFFSCREEN_START', streamId, options });
+  // The offscreen recorder can fail to start (bad streamId, no encoder…) —
+  // surface that instead of pretending the recording is running.
+  const started = (await browser.runtime.sendMessage({
+    target: 'ks-offscreen',
+    type: 'OFFSCREEN_START',
+    streamId,
+    options,
+  })) as { ok?: boolean; error?: string } | null;
+  if (!started?.ok) throw new Error(started?.error || 'The recorder could not start');
   await recordingStateStore.setValue({
     isRecording: true,
     mode: options.mode,

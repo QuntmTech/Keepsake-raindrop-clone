@@ -13,7 +13,7 @@ export async function saveCaptureToLibrary(opts: {
   pageTitle?: string;
   filename: string;
   durationMs?: number;
-}): Promise<void> {
+}): Promise<string> {
   const when = new Date().toLocaleString();
   const label = opts.kind === 'screenshot' ? 'Screenshot' : 'Recording';
   const title = `${label} — ${opts.pageTitle || when}`;
@@ -50,4 +50,5 @@ export async function saveCaptureToLibrary(opts: {
     if (opts.kind === 'screenshot') s.content.ocrText = null;
     else s.content.transcript = null;
   });
+  return saveId;
 }

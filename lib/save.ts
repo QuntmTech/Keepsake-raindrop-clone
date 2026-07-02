@@ -87,6 +87,22 @@ interface MetaRow {
   value: unknown;
 }
 
+// A fresh capture parked for the Capture Studio (editor) tab. The blob lives
+// here so the studio can be a plain page load — no message-size limits, and
+// the capture survives even if the tab never opens. Rows are pruned after a
+// week so recordings don't pile up.
+export interface StudioItem {
+  id: string;
+  kind: 'screenshot' | 'recording';
+  blob: Blob;
+  pageUrl?: string;
+  pageTitle?: string;
+  filename: string;
+  durationMs?: number;
+  saveId?: string; // library Save this capture was auto-filed into
+  createdAt: string;
+}
+
 // ── Canonical URLs ───────────────────────────────────────────────────────────
 // Dedupe + exact-match recall both key on this: lowercase host minus www,
 // path minus trailing slash, tracking params and fragments stripped.
@@ -113,6 +129,7 @@ class KeepsakeDB extends Dexie {
   saves!: Table<Save, string>;
   blobs!: Table<SaveBlob, string>;
   meta!: Table<MetaRow, string>;
+  studio!: Table<StudioItem, string>;
 
   constructor() {
     super('keepsake');
@@ -120,6 +137,10 @@ class KeepsakeDB extends Dexie {
       saves: 'id, canonicalUrl, domain, type, monitoring.enabled, monitoring.nextCheckAt, ai.processedAt',
       blobs: 'id, saveId, kind',
       meta: 'key',
+    });
+    // v2: parked captures for the Capture Studio editor tab.
+    this.version(2).stores({
+      studio: 'id, createdAt',
     });
   }
 }
@@ -191,6 +212,29 @@ export async function putBlob(saveId: string, kind: SaveBlob['kind'], blob: Blob
   const id = `${saveId}:${kind}`;
   await db.blobs.put({ id, saveId, kind, mime: blob.type, size: blob.size, blob, createdAt: nowIso() });
   return id;
+}
+
+// ── Capture Studio handoff ───────────────────────────────────────────────────
+
+export async function stashStudioItem(item: Omit<StudioItem, 'id' | 'createdAt'>): Promise<string> {
+  const id = genId();
+  await db.studio.put({ ...item, id, createdAt: nowIso() });
+  return id;
+}
+
+export async function getStudioItem(id: string): Promise<StudioItem | undefined> {
+  return db.studio.get(id);
+}
+
+export async function updateStudioItem(id: string, patch: Partial<StudioItem>): Promise<void> {
+  await db.studio.update(id, patch);
+}
+
+// Captures parked for the studio are working copies — drop anything older
+// than a week (recordings are large; this table must not grow unbounded).
+export async function pruneStudioItems(): Promise<void> {
+  const cutoff = new Date(Date.now() - 7 * 24 * 3600_000).toISOString();
+  await db.studio.where('createdAt').below(cutoff).delete().catch(() => {});
 }
 
 

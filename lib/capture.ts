@@ -34,10 +34,8 @@ export const recordingStateStore = storage.defineItem<RecordingState>('local:rec
 
 // UI/background messages (added to the main Message union in lib/messaging.ts).
 export type CaptureMessage =
-  | { type: 'KS_CAPTURE_VISIBLE' } // screenshot the active tab's viewport -> download
-  | { type: 'KS_CAPTURE_FULL' } // full-page scroll-and-stitch screenshot -> download
-  | { type: 'KS_GRAB_VISIBLE' } // visible-area screenshot -> return dataURL (for copy)
-  | { type: 'KS_GRAB_FULL' } // full-page screenshot -> return dataURL (for copy)
+  | { type: 'KS_CAPTURE_VISIBLE' } // screenshot the active tab's viewport -> Capture Studio
+  | { type: 'KS_CAPTURE_FULL' } // full-page scroll-and-stitch screenshot -> Capture Studio
   | { type: 'KS_CAPTURE_VIEWPORT' } // one tile for the full-page script (content -> background)
   | { type: 'KS_START_RECORDING'; options: RecordOptions }
   | { type: 'KS_STOP_RECORDING' }
