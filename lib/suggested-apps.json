@@ -1,69 +1,368 @@
 [
-  { "category": "Main / Everyday", "name": "Gmail", "url": "https://mail.google.com", "icon": "https://www.google.com/s2/favicons?domain=mail.google.com&sz=128" },
-  { "category": "Main / Everyday", "name": "Google Search", "url": "https://www.google.com", "icon": "https://www.google.com/s2/favicons?domain=www.google.com&sz=128" },
-  { "category": "Main / Everyday", "name": "Amazon Shopping", "url": "https://www.amazon.com", "icon": "https://www.google.com/s2/favicons?domain=www.amazon.com&sz=128" },
-  { "category": "Main / Everyday", "name": "YouTube", "url": "https://www.youtube.com", "icon": "https://www.google.com/s2/favicons?domain=www.youtube.com&sz=128" },
-  { "category": "Main / Everyday", "name": "Yahoo Mail", "url": "https://mail.yahoo.com", "icon": "https://www.google.com/s2/favicons?domain=mail.yahoo.com&sz=128" },
-
-  { "category": "Guns", "name": "Palmetto State Armory", "url": "https://palmettostatearmory.com", "icon": "https://www.google.com/s2/favicons?domain=palmettostatearmory.com&sz=128" },
-  { "category": "Guns", "name": "Ammunitiontogo", "url": "https://www.ammunitiontogo.com", "icon": "https://www.google.com/s2/favicons?domain=www.ammunitiontogo.com&sz=128" },
-  { "category": "Guns", "name": "Grabagun", "url": "https://grabagun.com", "icon": "https://www.google.com/s2/favicons?domain=grabagun.com&sz=128" },
-  { "category": "Guns", "name": "Gun.Deals", "url": "https://gun.deals", "icon": "https://www.google.com/s2/favicons?domain=gun.deals&sz=128" },
-  { "category": "Guns", "name": "Gunbroker", "url": "https://www.gunbroker.com", "icon": "https://www.google.com/s2/favicons?domain=www.gunbroker.com&sz=128" },
-  { "category": "Guns", "name": "Primaryarms", "url": "https://www.primaryarms.com", "icon": "https://www.google.com/s2/favicons?domain=www.primaryarms.com&sz=128" },
-
-  { "category": "Daily Essentials", "name": "Google Drive", "url": "https://drive.google.com", "icon": "https://www.google.com/s2/favicons?domain=drive.google.com&sz=128" },
-  { "category": "Daily Essentials", "name": "Dropbox", "url": "https://www.dropbox.com", "icon": "https://www.google.com/s2/favicons?domain=www.dropbox.com&sz=128" },
-  { "category": "Daily Essentials", "name": "Porkbun", "url": "https://porkbun.com", "icon": "https://www.google.com/s2/favicons?domain=porkbun.com&sz=128" },
-  { "category": "Daily Essentials", "name": "Dynadot", "url": "https://www.dynadot.com", "icon": "https://www.google.com/s2/favicons?domain=www.dynadot.com&sz=128" },
-  { "category": "Daily Essentials", "name": "godaddy", "url": "https://www.godaddy.com", "icon": "https://www.google.com/s2/favicons?domain=www.godaddy.com&sz=128" },
-  { "category": "Daily Essentials", "name": "Atom.com", "url": "https://www.atom.com", "icon": "https://www.google.com/s2/favicons?domain=www.atom.com&sz=128" },
-
-  { "category": "Development", "name": "Supabase", "url": "https://supabase.com", "icon": "https://www.google.com/s2/favicons?domain=supabase.com&sz=128" },
-  { "category": "Development", "name": "Vercel Drop", "url": "https://vercel.com/drop", "icon": "https://www.google.com/s2/favicons?domain=vercel.com&sz=128" },
-  { "category": "Development", "name": "Rork", "url": "https://rork.com", "icon": "https://www.google.com/s2/favicons?domain=rork.com&sz=128" },
-  { "category": "Development", "name": "Lovable", "url": "https://lovable.dev", "icon": "https://www.google.com/s2/favicons?domain=lovable.dev&sz=128" },
-  { "category": "Development", "name": "Anything", "url": "https://www.createanything.com", "icon": "https://www.google.com/s2/favicons?domain=www.createanything.com&sz=128" },
-  { "category": "Development", "name": "Vercel", "url": "https://vercel.com", "icon": "https://www.google.com/s2/favicons?domain=vercel.com&sz=128" },
-
-  { "category": "Deals / General Shopping", "name": "Woot", "url": "https://www.woot.com", "icon": "https://www.google.com/s2/favicons?domain=www.woot.com&sz=128" },
-  { "category": "Deals / General Shopping", "name": "Slickdeals", "url": "https://slickdeals.net", "icon": "https://www.google.com/s2/favicons?domain=slickdeals.net&sz=128" },
-  { "category": "Deals / General Shopping", "name": "Dealseek", "url": "https://dealseek.com", "icon": "https://www.google.com/s2/favicons?domain=dealseek.com&sz=128" },
-  { "category": "Deals / General Shopping", "name": "DealNews", "url": "https://www.dealnews.com", "icon": "https://www.google.com/s2/favicons?domain=www.dealnews.com&sz=128" },
-  { "category": "Deals / General Shopping", "name": "Koupon", "url": "https://www.koupon.ai", "icon": "https://www.google.com/s2/favicons?domain=www.koupon.ai&sz=128" },
-  { "category": "Deals / General Shopping", "name": "Instacart", "url": "https://www.instacart.com", "icon": "https://www.google.com/s2/favicons?domain=www.instacart.com&sz=128" },
-  { "category": "Deals / General Shopping", "name": "Bensbargains", "url": "https://bensbargains.com", "icon": "https://www.google.com/s2/favicons?domain=bensbargains.com&sz=128" },
-
-  { "category": "Crypto", "name": "Coinglass", "url": "https://www.coinglass.com", "icon": "https://www.google.com/s2/favicons?domain=www.coinglass.com&sz=128" },
-  { "category": "Crypto", "name": "CoinEx", "url": "https://www.coinex.com", "icon": "https://www.google.com/s2/favicons?domain=www.coinex.com&sz=128" },
-  { "category": "Crypto", "name": "Coinbase", "url": "https://www.coinbase.com", "icon": "https://www.google.com/s2/favicons?domain=www.coinbase.com&sz=128" },
-  { "category": "Crypto", "name": "CoinGecko", "url": "https://www.coingecko.com", "icon": "https://www.google.com/s2/favicons?domain=www.coingecko.com&sz=128" },
-  { "category": "Crypto", "name": "Live Coin Watch", "url": "https://www.livecoinwatch.com", "icon": "https://www.google.com/s2/favicons?domain=www.livecoinwatch.com&sz=128" },
-  { "category": "Crypto", "name": "Coin Market Manager", "url": "https://coinmarketman.com", "icon": "https://www.google.com/s2/favicons?domain=coinmarketman.com&sz=128" },
-  { "category": "Crypto", "name": "CoinCarp", "url": "https://www.coincarp.com", "icon": "https://www.google.com/s2/favicons?domain=www.coincarp.com&sz=128" },
-  { "category": "Crypto", "name": "Coin Stats", "url": "https://coinstats.app", "icon": "https://www.google.com/s2/favicons?domain=coinstats.app&sz=128" },
-  { "category": "Crypto", "name": "Coin Wallet", "url": "https://coin.space", "icon": "https://www.google.com/s2/favicons?domain=coin.space&sz=128" },
-  { "category": "Crypto", "name": "CoinMarketCap", "url": "https://coinmarketcap.com", "icon": "https://www.google.com/s2/favicons?domain=coinmarketcap.com&sz=128" },
-  { "category": "Crypto", "name": "Polymarket", "url": "https://polymarket.com", "icon": "https://www.google.com/s2/favicons?domain=polymarket.com&sz=128" },
-
-  { "category": "AI", "name": "ChatGPT", "url": "https://chatgpt.com", "icon": "https://www.google.com/s2/favicons?domain=chatgpt.com&sz=128" },
-  { "category": "AI", "name": "OpenRouter", "url": "https://openrouter.ai", "icon": "https://www.google.com/s2/favicons?domain=openrouter.ai&sz=128" },
-  { "category": "AI", "name": "Claude", "url": "https://claude.ai", "icon": "https://www.google.com/s2/favicons?domain=claude.ai&sz=128" },
-  { "category": "AI", "name": "Google Gemini", "url": "https://gemini.google.com", "icon": "https://www.google.com/s2/favicons?domain=gemini.google.com&sz=128" },
-  { "category": "AI", "name": "Grok", "url": "https://grok.com", "icon": "https://www.google.com/s2/favicons?domain=grok.com&sz=128" },
-  { "category": "AI", "name": "Venice AI", "url": "https://venice.ai", "icon": "https://www.google.com/s2/favicons?domain=venice.ai&sz=128" },
-  { "category": "AI", "name": "DeepSeek", "url": "https://chat.deepseek.com", "icon": "https://www.google.com/s2/favicons?domain=chat.deepseek.com&sz=128" },
-  { "category": "AI", "name": "Lovable.dev", "url": "https://lovable.dev", "icon": "https://www.google.com/s2/favicons?domain=lovable.dev&sz=128" },
-  { "category": "AI", "name": "Google NotebookLM", "url": "https://notebooklm.google.com", "icon": "https://www.google.com/s2/favicons?domain=notebooklm.google.com&sz=128" },
-  { "category": "AI", "name": "Kimi", "url": "https://www.kimi.com", "icon": "https://www.google.com/s2/favicons?domain=www.kimi.com&sz=128" },
-  { "category": "AI", "name": "OpenAI Playground", "url": "https://platform.openai.com/playground", "icon": "https://www.google.com/s2/favicons?domain=platform.openai.com&sz=128" },
-  { "category": "AI", "name": "Grok AI Image Generator", "url": "https://grokaiimagegenerator.net", "icon": "https://www.google.com/s2/favicons?domain=grokaiimagegenerator.net&sz=128" },
-  { "category": "AI", "name": "Meta AI", "url": "https://www.meta.ai", "icon": "https://www.google.com/s2/favicons?domain=www.meta.ai&sz=128" },
-
-  { "category": "Social Media", "name": "Instagram", "url": "https://www.instagram.com", "icon": "https://www.google.com/s2/favicons?domain=www.instagram.com&sz=128" },
-  { "category": "Social Media", "name": "X", "url": "https://x.com", "icon": "https://www.google.com/s2/favicons?domain=x.com&sz=128" },
-  { "category": "Social Media", "name": "Threads", "url": "https://www.threads.com", "icon": "https://www.google.com/s2/favicons?domain=www.threads.com&sz=128" },
-  { "category": "Social Media", "name": "TikTok", "url": "https://www.tiktok.com", "icon": "https://www.google.com/s2/favicons?domain=www.tiktok.com&sz=128" },
-  { "category": "Social Media", "name": "Reddit", "url": "https://www.reddit.com", "icon": "https://www.google.com/s2/favicons?domain=www.reddit.com&sz=128" },
-  { "category": "Social Media", "name": "Facebook", "url": "https://www.facebook.com", "icon": "https://www.google.com/s2/favicons?domain=www.facebook.com&sz=128" }
+  {
+    "category": "Main / Everyday",
+    "name": "Gmail",
+    "url": "https://mail.google.com",
+    "icon": "https://www.google.com/s2/favicons?domain=mail.google.com&sz=128"
+  },
+  {
+    "category": "Main / Everyday",
+    "name": "Google Search",
+    "url": "https://www.google.com",
+    "icon": "https://www.google.com/s2/favicons?domain=www.google.com&sz=128"
+  },
+  {
+    "category": "Main / Everyday",
+    "name": "Amazon Shopping",
+    "url": "https://www.amazon.com",
+    "icon": "https://www.google.com/s2/favicons?domain=www.amazon.com&sz=128"
+  },
+  {
+    "category": "Main / Everyday",
+    "name": "YouTube",
+    "url": "https://www.youtube.com",
+    "icon": "https://www.google.com/s2/favicons?domain=www.youtube.com&sz=128"
+  },
+  {
+    "category": "Main / Everyday",
+    "name": "Yahoo Mail",
+    "url": "https://mail.yahoo.com",
+    "icon": "https://www.google.com/s2/favicons?domain=mail.yahoo.com&sz=128"
+  },
+  {
+    "category": "Guns",
+    "name": "Palmetto State Armory",
+    "url": "https://palmettostatearmory.com",
+    "icon": "https://www.google.com/s2/favicons?domain=palmettostatearmory.com&sz=128"
+  },
+  {
+    "category": "Guns",
+    "name": "Ammunitiontogo",
+    "url": "https://www.ammunitiontogo.com",
+    "icon": "https://www.google.com/s2/favicons?domain=www.ammunitiontogo.com&sz=128"
+  },
+  {
+    "category": "Guns",
+    "name": "Grabagun",
+    "url": "https://grabagun.com",
+    "icon": "https://www.google.com/s2/favicons?domain=grabagun.com&sz=128"
+  },
+  {
+    "category": "Guns",
+    "name": "Gun.Deals",
+    "url": "https://gun.deals",
+    "icon": "https://www.google.com/s2/favicons?domain=gun.deals&sz=128"
+  },
+  {
+    "category": "Guns",
+    "name": "Gunbroker",
+    "url": "https://www.gunbroker.com",
+    "icon": "https://www.google.com/s2/favicons?domain=www.gunbroker.com&sz=128"
+  },
+  {
+    "category": "Guns",
+    "name": "Primaryarms",
+    "url": "https://www.primaryarms.com",
+    "icon": "https://www.google.com/s2/favicons?domain=www.primaryarms.com&sz=128"
+  },
+  {
+    "category": "Daily Essentials",
+    "name": "Google Drive",
+    "url": "https://drive.google.com",
+    "icon": "https://www.google.com/s2/favicons?domain=drive.google.com&sz=128"
+  },
+  {
+    "category": "Daily Essentials",
+    "name": "Dropbox",
+    "url": "https://www.dropbox.com",
+    "icon": "https://www.google.com/s2/favicons?domain=www.dropbox.com&sz=128"
+  },
+  {
+    "category": "Daily Essentials",
+    "name": "Porkbun",
+    "url": "https://porkbun.com",
+    "icon": "https://www.google.com/s2/favicons?domain=porkbun.com&sz=128"
+  },
+  {
+    "category": "Daily Essentials",
+    "name": "Dynadot",
+    "url": "https://www.dynadot.com",
+    "icon": "https://www.google.com/s2/favicons?domain=www.dynadot.com&sz=128"
+  },
+  {
+    "category": "Daily Essentials",
+    "name": "godaddy",
+    "url": "https://www.godaddy.com",
+    "icon": "https://www.google.com/s2/favicons?domain=www.godaddy.com&sz=128"
+  },
+  {
+    "category": "Daily Essentials",
+    "name": "Atom.com",
+    "url": "https://www.atom.com",
+    "icon": "https://www.google.com/s2/favicons?domain=www.atom.com&sz=128"
+  },
+  {
+    "category": "Development",
+    "name": "GitHub",
+    "url": "https://github.com",
+    "icon": "https://www.google.com/s2/favicons?domain=github.com&sz=128"
+  },
+  {
+    "category": "Development",
+    "name": "Supabase",
+    "url": "https://supabase.com",
+    "icon": "https://www.google.com/s2/favicons?domain=supabase.com&sz=128"
+  },
+  {
+    "category": "Development",
+    "name": "Vercel Drop",
+    "url": "https://vercel.com/drop",
+    "icon": "https://www.google.com/s2/favicons?domain=vercel.com&sz=128"
+  },
+  {
+    "category": "Development",
+    "name": "Rork",
+    "url": "https://rork.com",
+    "icon": "https://www.google.com/s2/favicons?domain=rork.com&sz=128"
+  },
+  {
+    "category": "Development",
+    "name": "Lovable",
+    "url": "https://lovable.dev",
+    "icon": "https://www.google.com/s2/favicons?domain=lovable.dev&sz=128"
+  },
+  {
+    "category": "Development",
+    "name": "Anything",
+    "url": "https://www.createanything.com",
+    "icon": "https://www.google.com/s2/favicons?domain=www.createanything.com&sz=128"
+  },
+  {
+    "category": "Development",
+    "name": "Vercel",
+    "url": "https://vercel.com",
+    "icon": "https://www.google.com/s2/favicons?domain=vercel.com&sz=128"
+  },
+  {
+    "category": "Deals / General Shopping",
+    "name": "Woot",
+    "url": "https://www.woot.com",
+    "icon": "https://www.google.com/s2/favicons?domain=www.woot.com&sz=128"
+  },
+  {
+    "category": "Deals / General Shopping",
+    "name": "Slickdeals",
+    "url": "https://slickdeals.net",
+    "icon": "https://www.google.com/s2/favicons?domain=slickdeals.net&sz=128"
+  },
+  {
+    "category": "Deals / General Shopping",
+    "name": "Dealseek",
+    "url": "https://dealseek.com",
+    "icon": "https://www.google.com/s2/favicons?domain=dealseek.com&sz=128"
+  },
+  {
+    "category": "Deals / General Shopping",
+    "name": "DealNews",
+    "url": "https://www.dealnews.com",
+    "icon": "https://www.google.com/s2/favicons?domain=www.dealnews.com&sz=128"
+  },
+  {
+    "category": "Deals / General Shopping",
+    "name": "Koupon",
+    "url": "https://www.koupon.ai",
+    "icon": "https://www.google.com/s2/favicons?domain=www.koupon.ai&sz=128"
+  },
+  {
+    "category": "Deals / General Shopping",
+    "name": "Instacart",
+    "url": "https://www.instacart.com",
+    "icon": "https://www.google.com/s2/favicons?domain=www.instacart.com&sz=128"
+  },
+  {
+    "category": "Deals / General Shopping",
+    "name": "Bensbargains",
+    "url": "https://bensbargains.com",
+    "icon": "https://www.google.com/s2/favicons?domain=bensbargains.com&sz=128"
+  },
+  {
+    "category": "Crypto",
+    "name": "Coinglass",
+    "url": "https://www.coinglass.com",
+    "icon": "https://www.google.com/s2/favicons?domain=www.coinglass.com&sz=128"
+  },
+  {
+    "category": "Crypto",
+    "name": "CoinEx",
+    "url": "https://www.coinex.com",
+    "icon": "https://www.google.com/s2/favicons?domain=www.coinex.com&sz=128"
+  },
+  {
+    "category": "Crypto",
+    "name": "Coinbase",
+    "url": "https://www.coinbase.com",
+    "icon": "https://www.google.com/s2/favicons?domain=www.coinbase.com&sz=128"
+  },
+  {
+    "category": "Crypto",
+    "name": "CoinGecko",
+    "url": "https://www.coingecko.com",
+    "icon": "https://www.google.com/s2/favicons?domain=www.coingecko.com&sz=128"
+  },
+  {
+    "category": "Crypto",
+    "name": "Live Coin Watch",
+    "url": "https://www.livecoinwatch.com",
+    "icon": "https://www.google.com/s2/favicons?domain=www.livecoinwatch.com&sz=128"
+  },
+  {
+    "category": "Crypto",
+    "name": "Coin Market Manager",
+    "url": "https://coinmarketman.com",
+    "icon": "https://www.google.com/s2/favicons?domain=coinmarketman.com&sz=128"
+  },
+  {
+    "category": "Crypto",
+    "name": "CoinCarp",
+    "url": "https://www.coincarp.com",
+    "icon": "https://www.google.com/s2/favicons?domain=www.coincarp.com&sz=128"
+  },
+  {
+    "category": "Crypto",
+    "name": "Coin Stats",
+    "url": "https://coinstats.app",
+    "icon": "https://www.google.com/s2/favicons?domain=coinstats.app&sz=128"
+  },
+  {
+    "category": "Crypto",
+    "name": "Coin Wallet",
+    "url": "https://coin.space",
+    "icon": "https://www.google.com/s2/favicons?domain=coin.space&sz=128"
+  },
+  {
+    "category": "Crypto",
+    "name": "CoinMarketCap",
+    "url": "https://coinmarketcap.com",
+    "icon": "https://www.google.com/s2/favicons?domain=coinmarketcap.com&sz=128"
+  },
+  {
+    "category": "Crypto",
+    "name": "Polymarket",
+    "url": "https://polymarket.com",
+    "icon": "https://www.google.com/s2/favicons?domain=polymarket.com&sz=128"
+  },
+  {
+    "category": "AI",
+    "name": "ChatGPT",
+    "url": "https://chatgpt.com",
+    "icon": "https://www.google.com/s2/favicons?domain=chatgpt.com&sz=128"
+  },
+  {
+    "category": "AI",
+    "name": "OpenRouter",
+    "url": "https://openrouter.ai",
+    "icon": "https://www.google.com/s2/favicons?domain=openrouter.ai&sz=128"
+  },
+  {
+    "category": "AI",
+    "name": "Claude",
+    "url": "https://claude.ai",
+    "icon": "https://www.google.com/s2/favicons?domain=claude.ai&sz=128"
+  },
+  {
+    "category": "AI",
+    "name": "Google Gemini",
+    "url": "https://gemini.google.com",
+    "icon": "https://www.google.com/s2/favicons?domain=gemini.google.com&sz=128"
+  },
+  {
+    "category": "AI",
+    "name": "Grok",
+    "url": "https://grok.com",
+    "icon": "https://www.google.com/s2/favicons?domain=grok.com&sz=128"
+  },
+  {
+    "category": "AI",
+    "name": "Venice AI",
+    "url": "https://venice.ai",
+    "icon": "https://www.google.com/s2/favicons?domain=venice.ai&sz=128"
+  },
+  {
+    "category": "AI",
+    "name": "DeepSeek",
+    "url": "https://chat.deepseek.com",
+    "icon": "https://www.google.com/s2/favicons?domain=chat.deepseek.com&sz=128"
+  },
+  {
+    "category": "AI",
+    "name": "Lovable.dev",
+    "url": "https://lovable.dev",
+    "icon": "https://www.google.com/s2/favicons?domain=lovable.dev&sz=128"
+  },
+  {
+    "category": "AI",
+    "name": "Google NotebookLM",
+    "url": "https://notebooklm.google.com",
+    "icon": "https://www.google.com/s2/favicons?domain=notebooklm.google.com&sz=128"
+  },
+  {
+    "category": "AI",
+    "name": "Kimi",
+    "url": "https://www.kimi.com",
+    "icon": "https://www.google.com/s2/favicons?domain=www.kimi.com&sz=128"
+  },
+  {
+    "category": "AI",
+    "name": "OpenAI Playground",
+    "url": "https://platform.openai.com/playground",
+    "icon": "https://www.google.com/s2/favicons?domain=platform.openai.com&sz=128"
+  },
+  {
+    "category": "AI",
+    "name": "Grok AI Image Generator",
+    "url": "https://grokaiimagegenerator.net",
+    "icon": "https://www.google.com/s2/favicons?domain=grokaiimagegenerator.net&sz=128"
+  },
+  {
+    "category": "AI",
+    "name": "Meta AI",
+    "url": "https://www.meta.ai",
+    "icon": "https://www.google.com/s2/favicons?domain=www.meta.ai&sz=128"
+  },
+  {
+    "category": "Social Media",
+    "name": "Instagram",
+    "url": "https://www.instagram.com",
+    "icon": "https://www.google.com/s2/favicons?domain=www.instagram.com&sz=128"
+  },
+  {
+    "category": "Social Media",
+    "name": "X",
+    "url": "https://x.com",
+    "icon": "https://www.google.com/s2/favicons?domain=x.com&sz=128"
+  },
+  {
+    "category": "Social Media",
+    "name": "Threads",
+    "url": "https://www.threads.com",
+    "icon": "https://www.google.com/s2/favicons?domain=www.threads.com&sz=128"
+  },
+  {
+    "category": "Social Media",
+    "name": "TikTok",
+    "url": "https://www.tiktok.com",
+    "icon": "https://www.google.com/s2/favicons?domain=www.tiktok.com&sz=128"
+  },
+  {
+    "category": "Social Media",
+    "name": "Reddit",
+    "url": "https://www.reddit.com",
+    "icon": "https://www.google.com/s2/favicons?domain=www.reddit.com&sz=128"
+  },
+  {
+    "category": "Social Media",
+    "name": "Facebook",
+    "url": "https://www.facebook.com",
+    "icon": "https://www.google.com/s2/favicons?domain=www.facebook.com&sz=128"
+  }
 ]
