@@ -20,6 +20,7 @@ import {
   updateBookmark,
   getAllTags,
   vaultStats,
+  homeOnlyCollectionIds,
   watchVault,
 } from '@/lib/bookmarks';
 import { EditDialog } from '@/components/EditDialog';
@@ -63,6 +64,7 @@ function Vault() {
   const [tags, setTags] = useState<{ tag: string; count: number }[]>([]);
   const [right, setRight] = useState<RightView>('list');
   const [editing, setEditing] = useState<Bookmark | null>(null);
+  const [homeOnlyCols, setHomeOnlyCols] = useState<string[]>([]);
   const uidRef = useRef<string | null>(null);
 
   // Stale-while-revalidate: don't flash a skeleton while refreshing in the
@@ -90,9 +92,10 @@ function Vault() {
 
   const refreshMeta = useCallback(async () => {
     try {
-      const [s, t] = await Promise.all([vaultStats(), getAllTags()]);
+      const [s, t, hc] = await Promise.all([vaultStats(), getAllTags(), homeOnlyCollectionIds()]);
       setStats(s);
       setTags(t);
+      setHomeOnlyCols(hc);
     } catch {
       /* ignore */
     }
@@ -178,6 +181,7 @@ function Vault() {
           onRemove={c.remove}
           onMove={move}
           onReorder={c.reorder}
+          hideCollectionIds={homeOnlyCols}
         />
 
         <div className="flex min-w-0 flex-1 flex-col">

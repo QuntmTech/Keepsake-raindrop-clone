@@ -31,6 +31,9 @@ interface Props {
   onMove?: (bookmarkId: string, collectionId: string | undefined) => void;
   // Persist a new top-to-bottom collection order.
   onReorder?: (orderedIds: string[]) => void;
+  // Collection ids to hide (e.g. Home-only launcher folders don't belong in
+  // the library sidebar).
+  hideCollectionIds?: string[];
   compact?: boolean;
 }
 
@@ -50,8 +53,12 @@ export function CollectionSidebar({
   onRemove,
   onMove,
   onReorder,
+  hideCollectionIds,
   compact,
 }: Props) {
+  // Drop Home-only launcher folders from the library sidebar.
+  const hidden = new Set(hideCollectionIds ?? []);
+  const shownCollections = collections.filter((c) => !hidden.has(c.id));
   const [adding, setAdding] = useState(false);
   const [newName, setNewName] = useState('');
   const [newColor, setNewColor] = useState(ACCENTS[1].swatch);
@@ -175,9 +182,9 @@ export function CollectionSidebar({
         >
           <Icon name="chevron" size={12} className={`transition-transform ${collapsed ? '' : 'rotate-90'}`} />
           Collections
-          {collapsed && collections.length > 0 && (
+          {collapsed && shownCollections.length > 0 && (
             <span className="ml-1 rounded-full bg-surface-sunken px-1.5 text-[10px] normal-case text-ink-faint">
-              {collections.length}
+              {shownCollections.length}
             </span>
           )}
         </button>
@@ -213,7 +220,7 @@ export function CollectionSidebar({
         </div>
       )}
 
-      {!collapsed && collections.map((c) => {
+      {!collapsed && shownCollections.map((c) => {
         const active = selected.kind === 'collection' && selected.id === c.id;
         const isDrop = dropKey === c.id;
         if (editing === c.id) {

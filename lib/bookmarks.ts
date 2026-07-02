@@ -137,6 +137,24 @@ export async function countByCollection(): Promise<Record<string, number>> {
   return (await getBackend()).countByCollection();
 }
 
+// Collections that exist only to group Home launcher tiles — every bookmark in
+// them is a homeOnly tile. These are hidden from the library sidebars (popup +
+// dashboard) so the Home catalog folders don't clutter the bookmark manager.
+// Empty collections and any collection holding a real bookmark are NOT listed.
+export async function homeOnlyCollectionIds(): Promise<string[]> {
+  const all = await searchBookmarks('', { perPage: 5000, homeTiles: 'include' });
+  const total = new Map<string, number>();
+  const library = new Map<string, number>();
+  for (const b of all) {
+    if (!b.collection) continue;
+    total.set(b.collection, (total.get(b.collection) ?? 0) + 1);
+    if (!b.homeOnly) library.set(b.collection, (library.get(b.collection) ?? 0) + 1);
+  }
+  const ids: string[] = [];
+  for (const [id, t] of total) if (t > 0 && !library.get(id)) ids.push(id);
+  return ids;
+}
+
 // Subscribe to vault changes (saves/edits/deletes from any context) so open
 // surfaces refresh live. Returns an unsubscribe function.
 export function watchVault(cb: () => void): () => void {

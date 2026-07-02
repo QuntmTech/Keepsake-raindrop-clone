@@ -9,7 +9,7 @@ export default defineConfig({
     name: 'Keepsake — bookmarks on steroids',
     description:
       'Save, tag, search, highlight, and preview pages — an AI-powered bookmark vault that goes far beyond raindrop.io.',
-    version: '8.3.2',
+    version: '8.3.3',
 
     // Pins a stable extension ID across reloads / loading from a new folder, so
     // your locally-stored bookmarks survive updates instead of being wiped.

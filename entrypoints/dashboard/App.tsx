@@ -25,6 +25,7 @@ import {
   getAllTags,
   vaultStats,
   watchVault,
+  homeOnlyCollectionIds,
 } from '@/lib/bookmarks';
 import { aiAvailable, semanticFind } from '@/lib/ai';
 import { type Bookmark, type Plan, type SortMode, type ViewMode, type VaultStats } from '@/lib/types';
@@ -49,6 +50,7 @@ export default function App() {
   const [loading, setLoading] = useState(true);
   const [tags, setTags] = useState<{ tag: string; count: number }[]>([]);
   const [stats, setStats] = useState<VaultStats | null>(null);
+  const [homeOnlyCols, setHomeOnlyCols] = useState<string[]>([]);
   const [paletteOpen, setPaletteOpen] = useState(false);
   const [aiOpen, setAiOpen] = useState(false);
   const [addOpen, setAddOpen] = useState(false);
@@ -87,9 +89,10 @@ export default function App() {
   const refreshMeta = useCallback(async () => {
     if (!authed) return;
     try {
-      const [t, s] = await Promise.all([getAllTags(), vaultStats()]);
+      const [t, s, hc] = await Promise.all([getAllTags(), vaultStats(), homeOnlyCollectionIds()]);
       setTags(t);
       setStats(s);
+      setHomeOnlyCols(hc);
     } catch {
       /* ignore */
     }
@@ -262,6 +265,7 @@ export default function App() {
         onRemove={collectionsApi.remove}
         onMove={moveToCollection}
         onReorder={collectionsApi.reorder}
+        hideCollectionIds={homeOnlyCols}
       />
 
       <div className="flex min-w-0 flex-1 flex-col">
