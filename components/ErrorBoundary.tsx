@@ -1,5 +1,6 @@
 import { Component, type ReactNode } from 'react';
 import { storage } from 'wxt/utils/storage';
+import { finishBoot } from '@/lib/boottrace';
 
 // Last line of defense for every UI surface. Without a boundary, ANY uncaught
 // render error unmounts the entire React tree — and because the dark-theme
@@ -20,6 +21,7 @@ export class ErrorBoundary extends Component<{ children: ReactNode }, State> {
   }
 
   componentDidCatch(error: Error, info: { componentStack?: string | null }) {
+    finishBoot('crashed').catch(() => {});
     lastCrashStore
       .setValue(
         `${new Date().toISOString()} ${location.pathname}\n${error?.stack ?? String(error)}\n${info?.componentStack ?? ''}`.slice(0, 4000),

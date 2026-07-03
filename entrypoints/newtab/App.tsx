@@ -24,6 +24,7 @@ import { WALLPAPERS, COLOR_SWATCHES, wallpaperCss, colorLuminance, wallpaperUplo
 import { SEARCH_ENGINES, searchUrl } from '@/lib/search';
 import { normUrl } from '@/lib/apps';
 import { onboardingStage } from '@/lib/onboarding';
+import { finishBoot, readBootLog, formatBoot, type BootRecord } from '@/lib/boottrace';
 import { Tour, type TourStep } from '@/components/Tour';
 import { type Bookmark, type Collection } from '@/lib/types';
 
@@ -182,6 +183,12 @@ export default function App() {
     if (!authed) return;
     syncHomeOverlay().then(reloadAll).catch(() => {});
   }, [authed, reloadAll]);
+
+  // Boot diagnostics: the moment the first real frame paints, log the boot as
+  // OK. If this never fires, the BootSplash watchdog logs a stall instead.
+  useEffect(() => {
+    if (ready) requestAnimationFrame(() => finishBoot('ok'));
+  }, [ready]);
 
   // Fresh install → the sign-up form comes pre-selected on the login screen.
   useEffect(() => {
@@ -1172,7 +1179,10 @@ export default function App() {
 function BootSplash() {
   const [stuck, setStuck] = useState(false);
   useEffect(() => {
-    const id = setTimeout(() => setStuck(true), 6000);
+    const id = setTimeout(() => {
+      setStuck(true);
+      finishBoot('stalled'); // the trace shows the last milestone reached
+    }, 6000);
     return () => clearTimeout(id);
   }, []);
   return (
@@ -1217,10 +1227,65 @@ function HelpDialog({ onClose }: { onClose: () => void }) {
           </li>
           <li><b>7. Search:</b> type to search your vault; press <b>Enter</b> to search the web (engine picker on the right).</li>
         </ol>
+        <Diagnostics />
         <button className="btn-primary mt-4 w-full" onClick={onClose}>
           Got it
         </button>
       </div>
+    </div>
+  );
+}
+
+// Help → Diagnostics: the last Home boots (with the milestone each one reached)
+// plus the last crash, copyable in one click. This is what turns "Home didn't
+// load" into a fixable report.
+function Diagnostics() {
+  const [open, setOpen] = useState(false);
+  const [boots, setBoots] = useState<BootRecord[]>([]);
+  const [crash, setCrash] = useState<string | null>(null);
+  const [copied, setCopied] = useState(false);
+  useEffect(() => {
+    if (!open) return;
+    readBootLog().then(setBoots).catch(() => {});
+    storage.getItem<string>('local:last_crash').then((v) => setCrash(v ?? null)).catch(() => {});
+  }, [open]);
+
+  const report = [
+    `Keepsake diagnostics — ${new Date().toISOString()}`,
+    '',
+    'Recent Home boots (newest first):',
+    ...boots.map((b) => '  ' + formatBoot(b)),
+    ...(crash ? ['', 'Last crash:', crash] : []),
+  ].join('\n');
+
+  return (
+    <div className="mt-3 border-t border-line pt-3">
+      <button className="text-xs text-ink-faint hover:text-brand" onClick={() => setOpen((o) => !o)}>
+        {open ? '▾' : '▸'} Diagnostics {boots.some((b) => b.status !== 'ok') ? '⚠' : ''}
+      </button>
+      {open && (
+        <div className="mt-2">
+          <div className="max-h-40 overflow-auto rounded-lg border border-line bg-surface-sunken p-2 font-mono text-[10px] leading-relaxed text-ink-soft">
+            {boots.length === 0 && <p>No boots recorded yet.</p>}
+            {boots.map((b, i) => (
+              <p key={i} className={b.status !== 'ok' ? 'text-red-500' : ''}>
+                {formatBoot(b)}
+              </p>
+            ))}
+            {crash && <p className="mt-1 whitespace-pre-wrap text-red-500">Last crash: {crash.slice(0, 400)}</p>}
+          </div>
+          <button
+            className="btn-outline mt-2 px-3 py-1 text-xs"
+            onClick={async () => {
+              await navigator.clipboard.writeText(report).catch(() => {});
+              setCopied(true);
+              setTimeout(() => setCopied(false), 1500);
+            }}
+          >
+            {copied ? '✓ Copied' : 'Copy report'}
+          </button>
+        </div>
+      )}
     </div>
   );
 }

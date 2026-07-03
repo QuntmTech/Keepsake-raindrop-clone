@@ -26,6 +26,19 @@ import { type Bookmark } from '@/lib/types';
 
 const genId = () => `${Date.now().toString(36)}${Math.random().toString(36).slice(2, 6)}`;
 
+// Widgets are below-the-fold garnish: their data loads AFTER the page has
+// painted (idle callback, 1.5s cap) so they never compete with the launcher
+// grid for the first frame.
+function whenIdle(fn: () => void): () => void {
+  const ric = (window as any).requestIdleCallback as undefined | ((cb: () => void, o?: { timeout: number }) => number);
+  if (ric) {
+    const id = ric(fn, { timeout: 1500 });
+    return () => (window as any).cancelIdleCallback?.(id);
+  }
+  const id = setTimeout(fn, 250);
+  return () => clearTimeout(id);
+}
+
 interface Ctx {
   panelCls: string;
   labelCls: string;
@@ -106,9 +119,7 @@ function SavesStrip({
   onDark,
 }: Ctx & { title: string; icon: any; fetcher: (limit?: number) => Promise<Bookmark[]> }) {
   const [items, setItems] = useState<Bookmark[] | null>(null);
-  useEffect(() => {
-    fetcher(8).then(setItems).catch(() => setItems([]));
-  }, [fetcher]);
+  useEffect(() => whenIdle(() => fetcher(8).then(setItems).catch(() => setItems([]))), [fetcher]);
   if (items && items.length === 0) return null; // nothing to show — collapse
 
   const open = (b: Bookmark) => {
@@ -250,9 +261,7 @@ function TodoWidget({ panelCls }: Ctx) {
 function TopSitesWidget({ panelCls, pinnedUrls, onChanged }: Ctx) {
   const [sites, setSites] = useState<TopSite[] | null>(null);
   const { toast } = useToast();
-  useEffect(() => {
-    getTopSites(8).then(setSites).catch(() => setSites([]));
-  }, []);
+  useEffect(() => whenIdle(() => getTopSites(8).then(setSites).catch(() => setSites([]))), []);
   if (sites && sites.length === 0) return null;
   const norm = (u: string) => u.replace(/\/+$/, '');
   const pin = async (s: TopSite) => {
@@ -298,9 +307,7 @@ function TopSitesWidget({ panelCls, pinnedUrls, onChanged }: Ctx) {
 // ── recently closed ──────────────────────────────────────────────────────────
 function RecentClosedWidget({ panelCls }: Ctx) {
   const [tabs, setTabs] = useState<ClosedTab[] | null>(null);
-  useEffect(() => {
-    getRecentlyClosed(7).then(setTabs).catch(() => setTabs([]));
-  }, []);
+  useEffect(() => whenIdle(() => getRecentlyClosed(7).then(setTabs).catch(() => setTabs([]))), []);
   if (tabs && tabs.length === 0) return null;
   return (
     <Card title="Recently closed" icon="import" panelCls={panelCls}>
@@ -328,9 +335,7 @@ function RecentClosedWidget({ panelCls }: Ctx) {
 // ── weather ──────────────────────────────────────────────────────────────────
 function WeatherWidget({ panelCls }: Ctx) {
   const [w, setW] = useState<Weather | null | 'loading'>('loading');
-  useEffect(() => {
-    fetchWeather().then((r) => setW(r)).catch(() => setW(null));
-  }, []);
+  useEffect(() => whenIdle(() => fetchWeather().then((r) => setW(r)).catch(() => setW(null))), []);
   if (w === null) return null; // no permission / offline — hide
   const look = w && w !== 'loading' ? weatherLook(w.code) : null;
   return (

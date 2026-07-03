@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react';
 import { loadAuth, isLoggedIn, currentUser, login as doLogin, signup as doSignup, logout as doLogout } from '@/lib/auth';
+import { mark } from '@/lib/boottrace';
 import { clearSnapshot } from '@/lib/cache';
 import { type Plan } from '@/lib/types';
 
@@ -12,12 +13,15 @@ export function useAuth() {
 
   useEffect(() => {
     (async () => {
+      mark('init');
       await loadAuth();
+      mark('auth');
       setAuthed(await isLoggedIn());
       const u = await currentUser();
       setEmail(u?.email ?? null);
       setPlan(u?.plan ?? 'free');
       setReady(true);
+      mark('ready');
     })();
   }, []);
 

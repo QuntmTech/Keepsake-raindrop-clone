@@ -10,6 +10,7 @@ import {
 } from '../types';
 import { faviconFor, inferType, parseTags, safeDomain, SORT_FILTER, escFilter } from '../util';
 import { HOSTED_PB_URL } from '../config';
+import { mark } from '../boottrace';
 import {
   type AuthUser,
   type Backend,
@@ -65,6 +66,7 @@ export class PocketBaseBackend implements Backend {
   async init(): Promise<void> {
     // Never fall back to localhost in a hosted build — use the baked-in server.
     this.url = (await pbUrlStore.getValue()) || HOSTED_PB_URL || 'http://127.0.0.1:8090';
+    mark('pb:url'); // storage.sync read finished — a stall BEFORE this means sync storage hung
     this.pb = new PocketBase(this.url);
     // CRITICAL: the SDK auto-cancels duplicate in-flight requests by default,
     // which makes concurrent list/search calls (collections + bookmarks +
@@ -81,6 +83,7 @@ export class PocketBaseBackend implements Backend {
         await authMirror.setValue(null);
       }
     }
+    mark('pb:session'); // storage.local session restore finished
     if (!this.wired) {
       this.wired = true;
       this.pb.authStore.onChange(() => {
