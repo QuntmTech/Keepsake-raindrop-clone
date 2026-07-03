@@ -172,6 +172,18 @@ export class PocketBaseBackend implements Backend {
     await authMirror.setValue(null);
   }
 
+  async requestPasswordReset(email: string): Promise<void> {
+    try {
+      await this.pb.collection('users').requestPasswordReset(email);
+    } catch (e) {
+      // Don't reveal whether the email exists; only surface real transport errors.
+      const status = (e as { status?: number })?.status;
+      if (status === 429) throw new Error('Too many attempts — wait a few seconds and try again.');
+      if (!status) throw new Error('Can’t reach the server — check your connection and try again.');
+      // 400/404 (unknown email) is treated as success from the UI's side.
+    }
+  }
+
   currentUser(): AuthUser | null {
     return this.toUser();
   }

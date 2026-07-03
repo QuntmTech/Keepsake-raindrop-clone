@@ -21,6 +21,18 @@ export async function logout(): Promise<void> {
   return (await getBackend()).logout();
 }
 
+// Whether the active backend supports emailed password resets (PocketBase yes,
+// local no) — lets the login form show the link only when it'll work.
+export async function canResetPassword(): Promise<boolean> {
+  return typeof (await getBackend()).requestPasswordReset === 'function';
+}
+
+export async function requestPasswordReset(email: string): Promise<void> {
+  const backend = await getBackend();
+  if (!backend.requestPasswordReset) throw new Error('Password reset is not available for on-device storage.');
+  return backend.requestPasswordReset(email);
+}
+
 export async function isLoggedIn(): Promise<boolean> {
   return (await getBackend()).isLoggedIn();
 }

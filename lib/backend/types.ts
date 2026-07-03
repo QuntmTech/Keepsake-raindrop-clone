@@ -71,6 +71,8 @@ export interface Backend {
   renewAuthToken?(): Promise<void>;
   login(email: string, password: string): Promise<AuthUser>;
   signup(email: string, password: string, name?: string): Promise<AuthUser>;
+  // Optional: email a password-reset link (PocketBase). Local mode has none.
+  requestPasswordReset?(email: string): Promise<void>;
   logout(): Promise<void>;
   currentUser(): AuthUser | null;
   isLoggedIn(): boolean;

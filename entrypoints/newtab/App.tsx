@@ -10,6 +10,9 @@ import { AddDialog } from '@/components/AddDialog';
 import { AppCatalog } from '@/components/AppCatalog';
 import { CaptureMenu } from '@/components/CaptureMenu';
 import { WatchingStrip } from '@/components/WatchingStrip';
+import { DashboardWidgets } from '@/components/home/DashboardWidgets';
+import { WidgetPicker } from '@/components/home/WidgetPicker';
+import { type WidgetKey } from '@/lib/widgets';
 import { EditDialog } from '@/components/EditDialog';
 import { Favicon } from '@/components/Favicon';
 import { Icon } from '@/components/Icon';
@@ -859,6 +862,13 @@ export default function App() {
               </>
             )}
           </div>
+          {!minimal && (
+            <WidgetPicker
+              enabled={settings.homeWidgets as WidgetKey[]}
+              onChange={(next) => update({ homeWidgets: next })}
+              headBtn={headBtn}
+            />
+          )}
           <button className={headBtn} onClick={() => setHelp(true)} title="Help & setup">
             <span className="grid h-5 w-5 place-items-center rounded-full border border-current text-xs font-bold">?</span>
           </button>
@@ -872,8 +882,8 @@ export default function App() {
       </header>
 
       <main className="mx-auto w-full max-w-6xl px-6 pb-24">
-        <div className="mt-[4vh] text-center">
-          <p className={`text-5xl font-semibold tracking-tight ${onDark ? 'text-white drop-shadow-lg' : ''}`}>{time}</p>
+        <div className="mt-[4vh] animate-slide-up text-center">
+          <p className={`text-6xl font-semibold tracking-tight tabular-nums ${onDark ? 'text-white drop-shadow-lg' : ''}`}>{time}</p>
           <p className={`mt-2 text-lg ${onDark ? 'text-white/90 drop-shadow' : 'text-ink-soft'}`}>
             {greeting}
             {name ? `, ${name}` : ''}.
@@ -991,6 +1001,19 @@ export default function App() {
           </div>
         )}
 
+        {results === null && !minimal && (
+          <DashboardWidgets
+            panelCls={panelCls}
+            labelCls={labelCls}
+            onDark={onDark}
+            enabled={settings.homeWidgets as WidgetKey[]}
+            pinnedUrls={new Set(pinnedItems.map((b) => normUrl(b.url)))}
+            onChanged={() => {
+              reloadAll();
+              c.refresh();
+            }}
+          />
+        )}
         {results === null && !minimal && <WatchingStrip panelCls={panelCls} labelCls={labelCls} />}
       </main>
 

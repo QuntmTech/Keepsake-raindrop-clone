@@ -122,6 +122,7 @@ export interface Settings {
   view: ViewMode;
   sort: SortMode;
   newTabMode: 'home' | 'minimal'; // Keepsake Home new-tab: full or search-only
+  homeWidgets: string[]; // enabled dashboard widget keys, in display order
   wallpaper: string; // Home background: '' | preset key | 'url:<image>'
   searchEngine: 'google' | 'duckduckgo' | 'bing' | 'brave' | 'ecosia'; // Home web search
   defaultCollection?: string; // collection id new saves drop into
@@ -142,7 +143,8 @@ export const DEFAULT_SETTINGS: Settings = {
   view: 'grid',
   sort: 'newest',
   newTabMode: 'home',
-  wallpaper: '',
+  homeWidgets: ['jumpback', 'notes', 'todo', 'topsites', 'recentclosed'],
+  wallpaper: 'dusk',
   searchEngine: 'google',
   recallEnabled: false,
   recallBlocklist: [],

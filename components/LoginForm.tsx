@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import { Icon } from './Icon';
 import { getBackendMode, setBackendMode, HOSTED, type BackendMode } from '@/lib/backend';
+import { canResetPassword, requestPasswordReset } from '@/lib/auth';
 
 interface Props {
   onLogin: (email: string, password: string) => Promise<void>;
@@ -24,10 +25,30 @@ export function LoginForm({ onLogin, onSignup, compact, defaultMode }: Props) {
   const [error, setError] = useState('');
   const [busy, setBusy] = useState(false);
   const [backend, setBackend] = useState<BackendMode>('local');
+  const [reset, setReset] = useState<'idle' | 'form' | 'sent'>('idle');
+  const [canReset, setCanReset] = useState(false);
 
   useEffect(() => {
     getBackendMode().then(setBackend);
+    canResetPassword().then(setCanReset);
   }, []);
+
+  async function sendReset() {
+    if (!email) {
+      setError('Enter your email first, then tap “Send reset link”.');
+      return;
+    }
+    setBusy(true);
+    setError('');
+    try {
+      await requestPasswordReset(email);
+      setReset('sent');
+    } catch (e: any) {
+      setError(e?.message ?? 'Could not send the reset email');
+    } finally {
+      setBusy(false);
+    }
+  }
 
   async function submit() {
     if (!email || !password) {
@@ -69,34 +90,84 @@ export function LoginForm({ onLogin, onSignup, compact, defaultMode }: Props) {
         onChange={(e) => setEmail(e.target.value)}
         onKeyDown={(e) => e.key === 'Enter' && submit()}
       />
-      <input
-        className="input"
-        placeholder="Password"
-        type="password"
-        autoComplete={mode === 'login' ? 'current-password' : 'new-password'}
-        value={password}
-        onChange={(e) => setPassword(e.target.value)}
-        onKeyDown={(e) => e.key === 'Enter' && submit()}
-      />
+      {reset === 'idle' && (
+        <input
+          className="input"
+          placeholder="Password"
+          type="password"
+          autoComplete={mode === 'login' ? 'current-password' : 'new-password'}
+          value={password}
+          onChange={(e) => setPassword(e.target.value)}
+          onKeyDown={(e) => e.key === 'Enter' && submit()}
+        />
+      )}
       {error && <p className="text-xs text-red-500">{error}</p>}
 
-      <button className="btn-primary" onClick={submit} disabled={busy}>
-        {busy ? 'Please wait…' : mode === 'login' ? 'Sign in' : 'Create account'}
-      </button>
+      {reset === 'sent' ? (
+        <>
+          <div className="rounded-lg border border-line bg-surface-sunken p-3 text-xs text-ink-soft">
+            If an account exists for <b>{email}</b>, a password-reset link is on its way. Check your inbox
+            (and spam), then come back and sign in.
+          </div>
+          <button
+            className="btn-primary"
+            onClick={() => {
+              setReset('idle');
+              setError('');
+            }}
+          >
+            Back to sign in
+          </button>
+        </>
+      ) : reset === 'form' ? (
+        <>
+          <p className="text-xs text-ink-faint">Enter your email and we’ll send a reset link.</p>
+          <button className="btn-primary" onClick={sendReset} disabled={busy}>
+            {busy ? 'Sending…' : 'Send reset link'}
+          </button>
+          <button
+            className="text-xs text-ink-faint transition hover:text-brand"
+            onClick={() => {
+              setReset('idle');
+              setError('');
+            }}
+          >
+            ← Back to sign in
+          </button>
+        </>
+      ) : (
+        <>
+          <button className="btn-primary" onClick={submit} disabled={busy}>
+            {busy ? 'Please wait…' : mode === 'login' ? 'Sign in' : 'Create account'}
+          </button>
 
-      {onSignup && (
-        <button
-          className="text-xs text-ink-faint transition hover:text-brand"
-          onClick={() => {
-            setTouched(true);
-            setMode((m) => (m === 'login' ? 'signup' : 'login'));
-            setError('');
-          }}
-        >
-          {mode === 'login'
-            ? "Don't have an account? Sign up"
-            : 'Already have an account? Sign in'}
-        </button>
+          {mode === 'login' && canReset && (
+            <button
+              className="text-xs text-ink-faint transition hover:text-brand"
+              onClick={() => {
+                setReset('form');
+                setError('');
+              }}
+            >
+              Forgot your password?
+            </button>
+          )}
+
+          {onSignup && (
+            <button
+              className="text-xs text-ink-faint transition hover:text-brand"
+              onClick={() => {
+                setTouched(true);
+                setMode((m) => (m === 'login' ? 'signup' : 'login'));
+                setError('');
+              }}
+            >
+              {mode === 'login'
+                ? "Don't have an account? Sign up"
+                : 'Already have an account? Sign in'}
+            </button>
+          )}
+        </>
       )}
 
       {!HOSTED && backend === 'pocketbase' && (

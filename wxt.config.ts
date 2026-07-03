@@ -9,7 +9,7 @@ export default defineConfig({
     name: 'Keepsake — bookmarks on steroids',
     description:
       'Save, tag, search, highlight, and preview pages — an AI-powered bookmark vault that goes far beyond raindrop.io.',
-    version: '8.8.0',
+    version: '8.9.0',
 
     // Pins a stable extension ID across reloads / loading from a new folder, so
     // your locally-stored bookmarks survive updates instead of being wiped.
@@ -37,10 +37,15 @@ export default defineConfig({
       'alarms', // AI batch queue + Living Bookmarks watch scheduler
       'webNavigation', // Ambient Recall: match the library on navigation (local-only)
       'clipboardWrite', // copy screenshots to the clipboard
+      'topSites', // Home "Most visited" widget
+      'sessions', // Home "Recently closed" widget (reopen tabs)
     ],
 
     // Full-fidelity MHTML page snapshots are invasive → opt-in only.
+    // The weather widget's network hosts are requested only if the user turns
+    // that widget on — a default install makes no external calls.
     optional_permissions: ['pageCapture'],
+    optional_host_permissions: ['https://api.open-meteo.com/*', 'https://ipapi.co/*'],
 
     // transformers.js runs the local embedding model as WASM inside the
     // offscreen document — MV3 requires the wasm-unsafe-eval opt-in.
