@@ -42,16 +42,29 @@ function pickDropped(requested: HomeFields, result: Bookmark): HomeFields {
   return dropped;
 }
 
-// All overlay mutations are serialized through this chain: drag-drop and
-// bulk operations fire many updateBookmark calls in parallel, and an unlocked
-// read-modify-write here would let last-writer-wins silently drop sibling
-// tiles' pin/sort entries (the exact data this overlay exists to protect).
+// All overlay mutations are serialized through this chain WITHIN a context —
+// drag-drop and bulk operations fire many updateBookmark calls in parallel,
+// and an unlocked read-modify-write would let last-writer-wins silently drop
+// sibling tiles' pin/sort entries (the exact data this overlay exists to
+// protect). A promise chain can't serialize ACROSS contexts though (the Home
+// tab, popup, and background are separate programs), so UI contexts route
+// every mutation to the background — one context, one lock, no clobbering.
 let overlayWriteLock: Promise<unknown> = Promise.resolve();
 
-function writeOverlay(user: string, id: string, dropped: HomeFields, verified: (keyof HomeFields)[]) {
+const IS_BACKGROUND = typeof window === 'undefined'; // MV3 service worker has no window
+
+// The single writer. Only ever runs in the background (or as a last-resort
+// fallback when the background is unreachable).
+export function applyOverlayWrite(
+  user: string,
+  id: string,
+  dropped: HomeFields,
+  verified: (keyof HomeFields)[],
+) {
   const run = overlayWriteLock.then(async () => {
     const all = await overlayStore.getValue();
     const mine = { ...(all[user] ?? {}) };
+    if (verified.length && !Object.keys(dropped).length && !mine[id]) return; // nothing to clear
     const entry: HomeFields = { ...(mine[id] ?? {}) };
     for (const k of verified) delete entry[k]; // server round-tripped it — server wins now
     Object.assign(entry, dropped);
@@ -61,6 +74,32 @@ function writeOverlay(user: string, id: string, dropped: HomeFields, verified: (
   });
   overlayWriteLock = run.catch(() => {}); // a failed write must not poison the chain
   return run;
+}
+
+export function applyOverlayForget(user: string, id: string) {
+  const run = overlayWriteLock.then(async () => {
+    const all = await overlayStore.getValue();
+    if (!all[user]?.[id]) return;
+    const mine = { ...all[user] };
+    delete mine[id];
+    await overlayStore.setValue({ ...all, [user]: mine });
+  });
+  overlayWriteLock = run.catch(() => {});
+  return run;
+}
+
+async function writeOverlay(user: string, id: string, dropped: HomeFields, verified: (keyof HomeFields)[]) {
+  if (IS_BACKGROUND) return applyOverlayWrite(user, id, dropped, verified);
+  try {
+    const r = (await browser.runtime.sendMessage({ type: 'KS_OVERLAY_WRITE', user, id, dropped, verified })) as
+      | { ok?: boolean }
+      | null;
+    if (!r?.ok) throw new Error('overlay write not acknowledged');
+  } catch {
+    // Background unreachable (mid-update, message port closed…) — write
+    // directly rather than lose pin state. Still lock-serialized locally.
+    await applyOverlayWrite(user, id, dropped, verified);
+  }
 }
 
 // Merge overlay values over freshly-fetched bookmarks. Server values win only
@@ -104,15 +143,20 @@ export async function updateHomeBookmark(id: string, patch: Partial<Bookmark>): 
   return (await applyHomeOverlay([bm]))[0];
 }
 
-// Drop a deleted bookmark's overlay entry so it can't resurrect.
+// Drop a deleted bookmark's overlay entry so it can't resurrect. Routed
+// through the same single writer as every other overlay mutation.
 export async function forgetHomeOverlay(id: string): Promise<void> {
   const user = await uid();
   if (!user) return;
-  const all = await overlayStore.getValue();
-  if (!all[user]?.[id]) return;
-  const mine = { ...all[user] };
-  delete mine[id];
-  await overlayStore.setValue({ ...all, [user]: mine });
+  if (IS_BACKGROUND) return applyOverlayForget(user, id);
+  try {
+    const r = (await browser.runtime.sendMessage({ type: 'KS_OVERLAY_FORGET', user, id })) as
+      | { ok?: boolean }
+      | null;
+    if (!r?.ok) throw new Error('overlay forget not acknowledged');
+  } catch {
+    await applyOverlayForget(user, id);
+  }
 }
 
 // Best-effort flush: retry pushing overlay entries to the server (e.g. after

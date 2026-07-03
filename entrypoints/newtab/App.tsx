@@ -505,7 +505,7 @@ export default function App() {
     if (fileRef.current) fileRef.current.value = '';
   }
 
-  if (!ready) return <div className="grid h-screen place-items-center text-ink-faint">Loading…</div>;
+  if (!ready) return <BootSplash />;
   if (!authed)
     return (
       <div className="grid min-h-screen place-items-center bg-surface-sunken">
@@ -1138,6 +1138,32 @@ export default function App() {
       )}
       {help && <HelpDialog onClose={() => setHelp(false)} />}
       {tour && <Tour steps={HOME_TOUR} onDone={finishTour} />}
+      </div>
+    </div>
+  );
+}
+
+// Visible boot state (the old faint "Loading…" was invisible on a dark theme,
+// so a slow/stuck init read as a blank black screen). If init takes longer
+// than a few seconds something is genuinely wrong — offer a reload.
+function BootSplash() {
+  const [stuck, setStuck] = useState(false);
+  useEffect(() => {
+    const id = setTimeout(() => setStuck(true), 6000);
+    return () => clearTimeout(id);
+  }, []);
+  return (
+    <div className="grid h-screen place-items-center bg-surface-sunken">
+      <div className="flex flex-col items-center gap-3">
+        <span className="grid h-12 w-12 animate-pulse place-items-center rounded-2xl bg-brand text-white">
+          <Icon name="bookmark" size={24} fill />
+        </span>
+        <p className="text-sm text-ink-faint">Opening your vault…</p>
+        {stuck && (
+          <button className="btn-outline mt-2 px-4 py-1.5 text-xs" onClick={() => location.reload()}>
+            Taking too long? Reload
+          </button>
+        )}
       </div>
     </div>
   );

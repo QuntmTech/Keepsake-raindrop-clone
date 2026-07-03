@@ -22,13 +22,16 @@ export function WatchingStrip({ panelCls, labelCls }: { panelCls: string; labelC
 
   if (!watches.length) return null;
 
+  // Defensive: rows written by older versions (or a partial migration) can
+  // lack the monitoring/history shape — a bare `.history.filter` here throws
+  // during render and, with no data lost, blanks the whole Home page.
   const changes = watches
-    .flatMap((s) => s.monitoring.history.filter((h) => h.note).map((h) => ({ ...h, save: s })))
+    .flatMap((s) => (s.monitoring?.history ?? []).filter((h) => h.note).map((h) => ({ ...h, save: s })))
     .sort((a, b) => b.ts - a.ts)
     .slice(0, 6);
 
   const modeIcon = (s: Save) =>
-    s.monitoring.mode === 'price' ? '💰' : s.monitoring.mode === 'availability' ? '📦' : '📝';
+    s.monitoring?.mode === 'price' ? '💰' : s.monitoring?.mode === 'availability' ? '📦' : '📝';
 
   return (
     <section className={`mx-auto mt-10 max-w-4xl rounded-2xl border p-4 ${panelCls}`}>
@@ -48,7 +51,7 @@ export function WatchingStrip({ panelCls, labelCls }: { panelCls: string; labelC
 
       <div className="mt-3 flex flex-wrap gap-2">
         {watches.map((s) => {
-          const stale = s.archive.status !== 'alive';
+          const stale = s.archive?.status !== 'alive';
           return (
             <button
               key={s.id}
@@ -56,7 +59,7 @@ export function WatchingStrip({ panelCls, labelCls }: { panelCls: string; labelC
                 stale ? 'border-red-400/40' : 'border-line'
               } bg-surface`}
               onClick={() => setEditing(s.id)}
-              title={`${s.title}\n${s.url}${s.monitoring.jsRendered ? '\n(checks when you visit)' : ''}`}
+              title={`${s.title}\n${s.url}${s.monitoring?.jsRendered ? '\n(checks when you visit)' : ''}`}
             >
               <span className="grid h-6 w-6 place-items-center overflow-hidden rounded-full border border-line bg-surface-raised">
                 <Favicon src={s.favicon} size={14} label={s.title} />
@@ -64,22 +67,22 @@ export function WatchingStrip({ panelCls, labelCls }: { panelCls: string; labelC
               <span className="max-w-[140px] truncate font-medium text-ink">{s.title}</span>
               <span className="text-ink-faint">
                 {modeIcon(s)}{' '}
-                {s.monitoring.mode === 'price' && s.monitoring.lastValue
-                  ? `$${s.monitoring.lastValue}`
-                  : s.monitoring.mode === 'availability'
-                    ? s.monitoring.lastValue === 'in-stock'
+                {s.monitoring?.mode === 'price' && s.monitoring?.lastValue
+                  ? `$${s.monitoring?.lastValue}`
+                  : s.monitoring?.mode === 'availability'
+                    ? s.monitoring?.lastValue === 'in-stock'
                       ? 'in stock'
-                      : s.monitoring.lastValue === 'out-of-stock'
+                      : s.monitoring?.lastValue === 'out-of-stock'
                         ? 'out of stock'
                         : '…'
-                    : s.monitoring.lastCheckedAt
+                    : s.monitoring?.lastCheckedAt
                       ? 'tracking'
                       : 'pending'}
               </span>
               {stale &&
-                (s.archive.waybackUrl ? (
+                (s.archive?.waybackUrl ? (
                   <a
-                    href={s.archive.waybackUrl}
+                    href={s.archive?.waybackUrl}
                     className="text-red-500 underline"
                     onClick={(e) => e.stopPropagation()}
                     title="Original is dead — open the archived copy"

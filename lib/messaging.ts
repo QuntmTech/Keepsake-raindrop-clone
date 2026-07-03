@@ -23,6 +23,16 @@ export type Message =
   | { type: 'KS_WATCH_START'; saveId: string; cfg: WatchConfig }
   | { type: 'KS_WATCH_STOP'; saveId: string }
   | { type: 'KS_PICK_SELECTOR' } // element picker on the active tab -> CSS selector
+  // Home overlay single-writer: every context routes overlay mutations through
+  // the background so concurrent writes can't clobber each other (lib/home.ts).
+  | {
+      type: 'KS_OVERLAY_WRITE';
+      user: string;
+      id: string;
+      dropped: { pinned?: boolean; sort?: number; homeOnly?: boolean };
+      verified: ('pinned' | 'sort' | 'homeOnly')[];
+    }
+  | { type: 'KS_OVERLAY_FORGET'; user: string; id: string }
   | CaptureMessage; // screenshots + screen recording (see lib/capture.ts)
 
 export interface ScreenshotResult {

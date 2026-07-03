@@ -66,6 +66,9 @@ export interface Backend {
 
   // auth
   init(): Promise<void>;
+  // Optional: renew the auth token so active sessions never hard-expire
+  // (PocketBase). Local mode has no tokens and skips it.
+  renewAuthToken?(): Promise<void>;
   login(email: string, password: string): Promise<AuthUser>;
   signup(email: string, password: string, name?: string): Promise<AuthUser>;
   logout(): Promise<void>;

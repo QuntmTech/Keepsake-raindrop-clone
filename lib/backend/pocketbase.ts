@@ -28,6 +28,14 @@ const pbUrlStore = storage.defineItem<string>('sync:pb_url', {
 });
 const authMirror = storage.defineItem<string | null>('local:pb_auth', { fallback: null });
 
+// Auth tokens expire server-side (~30 days). The SDK never renews them on its
+// own, so without a refresh an active user gets silently logged out and every
+// request 401s. We renew opportunistically on init + a background alarm,
+// throttled through storage so the many extension contexts don't stampede.
+const lastRefreshStore = storage.defineItem<number>('local:pb_last_refresh', { fallback: 0 });
+const REFRESH_EVERY = 6 * 3600_000; // at most one refresh per 6h
+const RETRY_AFTER = 30 * 60_000; // transient failure -> allow retry in 30min
+
 export async function getPbUrl(): Promise<string> {
   return (await pbUrlStore.getValue()) || '';
 }
@@ -97,6 +105,33 @@ export class PocketBaseBackend implements Backend {
           /* ignore */
         }
       });
+    }
+    // Renew the token in the background — never block init (first paint) on it.
+    this.renewAuthToken().catch(() => {});
+  }
+
+  // Keep the session alive: exchange the current token for a fresh one so an
+  // active user is never silently logged out by server-side token expiry.
+  async renewAuthToken(): Promise<void> {
+    if (!this.pb.authStore.isValid) return;
+    const last = await lastRefreshStore.getValue();
+    if (Date.now() - last < REFRESH_EVERY) return;
+    // Claim the slot BEFORE calling out so concurrent contexts don't stampede.
+    await lastRefreshStore.setValue(Date.now());
+    try {
+      await this.pb.collection('users').authRefresh();
+      // authStore.onChange mirrors the new token to every context.
+    } catch (e) {
+      const status = (e as { status?: number })?.status;
+      if (status === 401 || status === 403) {
+        // The token is truly dead — clear it so the UI shows a login form
+        // instead of every request silently failing.
+        this.pb.authStore.clear();
+        await authMirror.setValue(null);
+      } else {
+        // Offline / server hiccup: keep the session, allow a retry soon.
+        await lastRefreshStore.setValue(Date.now() - REFRESH_EVERY + RETRY_AFTER);
+      }
     }
   }
 
@@ -328,7 +363,11 @@ export class PocketBaseBackend implements Backend {
   }
 
   async updateCollection(id: string, patch: Partial<Collection>): Promise<Collection> {
-    const rec = await this.pb.collection('collections').update(id, patch);
+    // Same undefined→'' conversion as updateBookmark: JSON.stringify drops
+    // undefined, so "clear parent/color/icon" would otherwise silently no-op.
+    const body: Record<string, unknown> = {};
+    for (const [k, v] of Object.entries(patch)) body[k] = v === undefined ? '' : v;
+    const rec = await this.pb.collection('collections').update(id, body);
     return rec as unknown as Collection;
   }
 

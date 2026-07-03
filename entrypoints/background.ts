@@ -22,10 +22,17 @@ import { matchPage, recallAllowed, type RecallResult } from '@/lib/recall';
 import { ensureOffscreen } from '@/lib/embedder';
 import { checkOnVisit, scheduleWatchAlarm, startWatch, stopWatch, watchTick, WATCH_ALARM, type WatchConfig } from '@/lib/watch';
 import { onboardingStage } from '@/lib/onboarding';
+import { applyOverlayWrite, applyOverlayForget, syncHomeOverlay } from '@/lib/home';
 import { storage } from 'wxt/utils/storage';
 
 // The background "service worker" is event-driven and can be killed at any time by Chrome.
 // Never rely on long-lived in-memory state here — read from storage when you need it.
+
+// Renew the auth token twice a day so sessions never hard-expire server-side.
+const AUTH_REFRESH_ALARM = 'ks-auth-refresh';
+function scheduleAuthRefresh(): void {
+  browser.alarms.create(AUTH_REFRESH_ALARM, { periodInMinutes: 720, delayInMinutes: 5 });
+}
 
 export default defineBackground(() => {
   browser.runtime.onInstalled.addListener(async (details) => {
@@ -41,7 +48,9 @@ export default defineBackground(() => {
     await flushQueue().catch(() => {});
     scheduleQueue();
     scheduleWatchAlarm();
+    scheduleAuthRefresh();
     await runMigration();
+    syncHomeOverlay().catch(() => {});
   });
 
   browser.runtime.onStartup?.addListener(async () => {
@@ -50,7 +59,9 @@ export default defineBackground(() => {
     await flushQueue().catch(() => {});
     scheduleQueue();
     scheduleWatchAlarm();
+    scheduleAuthRefresh();
     await runMigration();
+    syncHomeOverlay().catch(() => {});
   });
 
   // Batch AI queue + Living Bookmarks scheduler. Alarms are re-registered on
@@ -61,6 +72,12 @@ export default defineBackground(() => {
       // The watch fetch/parse runs in the offscreen document — make sure it exists.
       await ensureOffscreenDocument().catch(() => {});
       watchTick().catch(() => {});
+    }
+    if (alarm.name === AUTH_REFRESH_ALARM) {
+      // Keep long-lived sessions alive even if the user never opens a surface
+      // (the refresh itself is throttled through storage, so this is cheap).
+      const backend = await getBackend().catch(() => null);
+      await backend?.renewAuthToken?.().catch(() => {});
     }
   });
 
@@ -252,6 +269,16 @@ async function handleMessage(msg: Message): Promise<unknown> {
       if (result) await announceFiling(result);
       return { ok: true, result };
     }
+
+    // Home overlay single-writer: every context funnels overlay mutations here
+    // so the background's one lock serializes them (see lib/home.ts).
+    case 'KS_OVERLAY_WRITE':
+      await applyOverlayWrite(msg.user, msg.id, msg.dropped, msg.verified);
+      return { ok: true };
+
+    case 'KS_OVERLAY_FORGET':
+      await applyOverlayForget(msg.user, msg.id);
+      return { ok: true };
 
     // ---- capture: screenshots + screen recording (ported from CaptureCraft) ----
     // Every capture lands in the Capture Studio tab: edit/annotate screenshots,
