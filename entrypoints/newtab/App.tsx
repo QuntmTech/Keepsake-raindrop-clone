@@ -305,9 +305,16 @@ export default function App() {
   const name = email ? email.split('@')[0] : '';
   const time = now.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
 
-  const open = (b: Bookmark) => {
+  const open = (b: Bookmark, e?: React.MouseEvent) => {
     markVisited(b.id);
-    window.location.href = b.url;
+    // Cmd/Ctrl-click (or middle-click) opens in a new tab and keeps Home open,
+    // matching how links behave everywhere else. A plain click navigates the
+    // current tab, which is the expected launcher behavior.
+    if (e && (e.metaKey || e.ctrlKey || e.button === 1)) {
+      window.open(b.url, '_blank', 'noopener');
+    } else {
+      window.location.href = b.url;
+    }
   };
   const webSearch = () => {
     window.location.href = searchUrl(settings.searchEngine, query);
@@ -542,7 +549,15 @@ export default function App() {
           draggingTile === b.id ? 'opacity-40' : ''
         }`}
         draggable={!statik}
-        onClick={() => open(b)}
+        onClick={(e) => open(b, e)}
+        // Middle-click fires auxclick, not click — handle it so it also opens a
+        // new tab (and suppress the browser's middle-click autoscroll).
+        onAuxClick={(e) => {
+          if (e.button === 1) {
+            e.preventDefault();
+            open(b, e);
+          }
+        }}
         onDragStart={(e) => {
           e.stopPropagation();
           e.dataTransfer.setData(TILE_MIME, b.id);
