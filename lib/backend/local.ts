@@ -274,6 +274,8 @@ export class LocalBackend implements Backend {
     if (opts.type) items = items.filter((b) => b.type === opts.type);
     if (opts.favorite) items = items.filter((b) => b.favorite);
     if (opts.untagged) items = items.filter((b) => !b.tags || b.tags.length === 0);
+    // Home fast-path parity: only launcher rows (pinned || homeOnly).
+    if (opts.home) items = items.filter((b) => b.pinned || b.homeOnly);
 
     items.sort(compareBy(opts.sort ?? 'newest'));
 

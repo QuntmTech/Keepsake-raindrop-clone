@@ -102,6 +102,18 @@ async function writeOverlay(user: string, id: string, dropped: HomeFields, verif
   }
 }
 
+// Is the pin-overlay empty for the current user? When it is, every Home field
+// lives on the server, so Home can safely use the server-side row filter
+// (pinned || homeOnly) — the fast path. A non-empty overlay means the server
+// dropped some pins locally; a filtered query would miss those tiles, so the
+// caller must fall back to a full fetch + overlay merge instead.
+export async function homeOverlayEmpty(): Promise<boolean> {
+  const user = await uid();
+  if (!user) return true;
+  const mine = (await overlayStore.getValue())[user];
+  return !mine || Object.keys(mine).length === 0;
+}
+
 // Merge overlay values over freshly-fetched bookmarks. Server values win only
 // where no overlay entry exists (an entry means the server dropped the field).
 export async function applyHomeOverlay(items: Bookmark[]): Promise<Bookmark[]> {

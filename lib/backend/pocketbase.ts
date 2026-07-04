@@ -37,6 +37,18 @@ const lastRefreshStore = storage.defineItem<number>('local:pb_last_refresh', { f
 const REFRESH_EVERY = 6 * 3600_000; // at most one refresh per 6h
 const RETRY_AFTER = 30 * 60_000; // transient failure -> allow retry in 30min
 
+// Home tiles need everything `normalize` reads EXCEPT `content` — the cached
+// full-page text, by far the largest column. Fetching Home with this
+// projection keeps a new tab's payload to a few KB per tile instead of pulling
+// each pinned page's entire text. Kept in sync with normalize(): any field the
+// UI reads must be listed, or it round-trips as empty. `content` is the only
+// deliberate omission (nothing on Home renders or re-saves it).
+const HOME_TILE_FIELDS = [
+  'id', 'collectionId', 'url', 'title', 'description', 'summary', 'note', 'tags', 'aiTags',
+  'collection', 'domain', 'type', 'favorite', 'pinned', 'homeOnly', 'sort', 'readingTime',
+  'broken', 'lastVisited', 'cover', 'favicon', 'screenshot', 'user', 'created', 'updated',
+].join(',');
+
 export async function getPbUrl(): Promise<string> {
   return (await pbUrlStore.getValue()) || '';
 }
@@ -327,10 +339,15 @@ export class PocketBaseBackend implements Backend {
     if (opts.type) filters.push(`type = "${escFilter(opts.type)}"`);
     if (opts.favorite) filters.push('favorite = true');
     if (opts.untagged) filters.push('tags = "[]"');
-    const list = await this.req(() => this.pb.collection('bookmarks').getList(opts.page ?? 1, opts.perPage ?? 60, {
+    // Home fast-path: only launcher rows, and drop the heavy `content` column
+    // (cached full-page text) from the wire — nothing on Home reads it.
+    if (opts.home) filters.push('(pinned = true || homeOnly = true)');
+    const listOpts: Record<string, unknown> = {
       filter: filters.join(' && '),
       sort: SORT_FILTER[opts.sort ?? 'newest'],
-    }));
+    };
+    if (opts.home) listOpts.fields = HOME_TILE_FIELDS;
+    const list = await this.req(() => this.pb.collection('bookmarks').getList(opts.page ?? 1, opts.perPage ?? 60, listOpts));
     return list.items.map(this.normalize);
   }
 

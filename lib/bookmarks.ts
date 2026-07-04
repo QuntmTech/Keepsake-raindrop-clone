@@ -1,7 +1,7 @@
 import { getBackend } from './backend';
 import { type Bookmark } from './types';
 import { type SaveBookmarkInput, type SearchOpts } from './backend/types';
-import { applyHomeOverlay, forgetHomeOverlay, saveHomeBookmark, updateHomeBookmark } from './home';
+import { applyHomeOverlay, forgetHomeOverlay, homeOverlayEmpty, saveHomeBookmark, updateHomeBookmark } from './home';
 
 // The Save sidecar (IndexedDB via Dexie) must ONLY load in extension-origin
 // contexts. This facade is also bundled into the content script (Quick Bar /
@@ -69,14 +69,37 @@ export async function markVisited(id: string): Promise<void> {
 }
 
 export async function searchBookmarks(query: string, opts: LibrarySearchOpts = {}): Promise<Bookmark[]> {
-  const { homeTiles, ...backendOpts } = opts;
-  const filtering = homeTiles !== 'include' && !backendOpts.collection;
+  const { homeTiles, home, ...backendOpts } = opts;
+  const backend = await getBackend();
+
+  // Home fast-path: pull ONLY launcher rows (pinned || homeOnly) with a light
+  // field projection — a new tab transfers a handful of small tiles instead of
+  // the entire library. Only taken for an unfiltered Home load whose pin state
+  // fully lives on the server (empty overlay); otherwise a server-side filter
+  // would miss overlay-held tiles, so we fall through to the full fetch below.
+  if (home && !query.trim() && !backendOpts.collection && (await homeOverlayEmpty())) {
+    try {
+      const items = await backend.searchBookmarks('', {
+        ...backendOpts,
+        home: true,
+        perPage: backendOpts.perPage ?? 500,
+      });
+      return applyHomeOverlay(items);
+    } catch {
+      // A server whose schema predates the pinned/homeOnly columns rejects the
+      // filter — fall through to the full fetch so Home still loads.
+    }
+  }
+
+  // A `home` load (including the fast-path fallback) wants launcher tiles kept,
+  // exactly like homeTiles: 'include'.
+  const filtering = homeTiles !== 'include' && !home && !backendOpts.collection;
   // The homeOnly filter runs AFTER backend pagination, so over-fetch when
   // filtering — otherwise a page of recent launcher tiles would return an
   // empty "recent" list even though older real bookmarks exist.
   const perPage = backendOpts.perPage ?? 60;
   const fetchOpts = filtering ? { ...backendOpts, perPage: Math.min(perPage * 2 + 20, 500) } : backendOpts;
-  const items = await (await getBackend()).searchBookmarks(query, fetchOpts);
+  const items = await backend.searchBookmarks(query, fetchOpts);
   const merged = await applyHomeOverlay(items);
   if (!filtering) return merged;
   return merged.filter((b) => !b.homeOnly).slice(0, perPage);

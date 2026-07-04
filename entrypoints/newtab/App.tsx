@@ -149,8 +149,10 @@ export default function App() {
 
   const reloadAll = useCallback(() => {
     // Keep current links on screen if the request is slow/fails — never blank out.
-    // homeTiles: 'include' — catalog app tiles are hidden from the library but ARE Home.
-    searchBookmarks('', { perPage: 500, homeTiles: 'include' }).then(setAll).catch(() => {});
+    // home: true fetches ONLY launcher rows (pinned || homeOnly), projected light
+    // (no cached page content), so a new tab loads a few small tiles instead of
+    // the whole library. Home only ever renders pinned items anyway.
+    searchBookmarks('', { home: true, perPage: 500 }).then(setAll).catch(() => {});
     getAllTags().then((t) => setAllTags(t.map((x) => x.tag))).catch(() => {});
   }, []);
 
@@ -483,9 +485,15 @@ export default function App() {
     reloadAll();
   }
 
-  // One-click bootstrap: pin everything you've already favorited.
+  // One-click bootstrap: pin everything you've already favorited. Home only
+  // loads pinned rows now, so fetch favorites straight from the library.
   async function pinAllFavorites() {
-    const favs = all.filter((b) => b.favorite && !b.pinned);
+    let favs: Bookmark[] = [];
+    try {
+      favs = (await searchBookmarks('', { favorite: true, perPage: 200 })).filter((b) => !b.pinned);
+    } catch {
+      /* fall through to the empty-state message */
+    }
     if (!favs.length) {
       toast('No favorites to pin yet — use + to add links', 'info');
       return;

@@ -41,6 +41,10 @@ export interface SearchOpts {
   sort?: SortMode;
   page?: number;
   perPage?: number;
+  // Home fast-path: return ONLY launcher rows (pinned || homeOnly) and, on
+  // backends that support it, project away the heavy cached-content column so
+  // a new tab transfers a few small tiles instead of the whole library.
+  home?: boolean;
 }
 
 export interface CreateHighlightInput {
