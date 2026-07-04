@@ -67,7 +67,12 @@ export default defineBackground(() => {
   // Batch AI queue + Living Bookmarks scheduler. Alarms are re-registered on
   // install/startup, so watches survive browser restarts.
   browser.alarms?.onAlarm.addListener(async (alarm) => {
-    if (alarm.name === QUEUE_ALARM) processQueueTick().catch(() => {});
+    if (alarm.name === QUEUE_ALARM) {
+      processQueueTick().catch(() => {});
+      // Offline saves land within a minute of connectivity returning, even if
+      // the service worker never received an 'online' event.
+      flushQueue().catch(() => {});
+    }
     if (alarm.name === WATCH_ALARM) {
       // The watch fetch/parse runs in the offscreen document — make sure it exists.
       await ensureOffscreenDocument().catch(() => {});

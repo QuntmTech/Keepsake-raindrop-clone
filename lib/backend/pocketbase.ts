@@ -73,6 +73,12 @@ export class PocketBaseBackend implements Backend {
     // counts on open) reject as "autocancelled" and show up empty until a later
     // request lands. Turn it off so every request completes.
     this.pb.autoCancellation(false);
+    // A request with no timeout can hang a surface forever on a dead
+    // connection — abort at 30s so failures surface and the retry logic runs.
+    this.pb.beforeSend = (url, options) => {
+      options.signal ??= AbortSignal.timeout(30_000);
+      return { url, options };
+    };
 
     const saved = await authMirror.getValue();
     if (saved) {
@@ -200,6 +206,35 @@ export class PocketBaseBackend implements Backend {
     return id;
   }
 
+  // Every data call goes through here: transient failures (network blip,
+  // timeout, 5xx) retry with backoff instead of failing the user's action;
+  // a 401 means the session died server-side, so flip every surface to the
+  // login form (clearing authStore also clears the cross-context mirror).
+  // 4xx errors are real answers and never retried.
+  private async req<T>(fn: () => Promise<T>, retries = 2): Promise<T> {
+    for (let attempt = 0; ; attempt++) {
+      try {
+        return await fn();
+      } catch (e) {
+        const status = (e as { status?: number })?.status ?? 0;
+        if (status === 401 && this.pb.authStore.isValid) this.pb.authStore.clear();
+        const transient = status === 0 || status >= 500;
+        if (!transient || attempt >= retries) throw e;
+        await new Promise((r) => setTimeout(r, 400 * Math.pow(3, attempt)));
+      }
+    }
+  }
+
+  // Deletes retry like everything else, but a 404 on retry means an earlier
+  // attempt actually landed — that is success, not an error.
+  private async del(fn: () => Promise<unknown>): Promise<void> {
+    try {
+      await this.req(fn);
+    } catch (e) {
+      if ((e as { status?: number })?.status !== 404) throw e;
+    }
+  }
+
   fileUrl(record: { id: string; collectionId: string }, filename: string): string {
     return `${this.url}/api/files/${record.collectionId}/${record.id}/${filename}`;
   }
@@ -256,7 +291,7 @@ export class PocketBaseBackend implements Backend {
     if (typeof input.readingTime === 'number') form.set('readingTime', String(input.readingTime));
     form.set('user', user);
     if (input.screenshotBlob) form.set('screenshot', input.screenshotBlob, `${Date.now()}.jpg`);
-    const rec = await this.pb.collection('bookmarks').create(form);
+    const rec = await this.req(() => this.pb.collection('bookmarks').create(form), 1);
     return this.normalize(rec);
   }
 
@@ -270,12 +305,12 @@ export class PocketBaseBackend implements Backend {
     }
     if (patch.tags) body.tags = JSON.stringify(patch.tags);
     if (patch.aiTags) body.aiTags = JSON.stringify(patch.aiTags);
-    const rec = await this.pb.collection('bookmarks').update(id, body);
+    const rec = await this.req(() => this.pb.collection('bookmarks').update(id, body));
     return this.normalize(rec);
   }
 
   async deleteBookmark(id: string): Promise<void> {
-    await this.pb.collection('bookmarks').delete(id);
+    await this.del(() => this.pb.collection('bookmarks').delete(id));
   }
 
   async searchBookmarks(query: string, opts: SearchOpts = {}): Promise<Bookmark[]> {
@@ -292,18 +327,18 @@ export class PocketBaseBackend implements Backend {
     if (opts.type) filters.push(`type = "${escFilter(opts.type)}"`);
     if (opts.favorite) filters.push('favorite = true');
     if (opts.untagged) filters.push('tags = "[]"');
-    const list = await this.pb.collection('bookmarks').getList(opts.page ?? 1, opts.perPage ?? 60, {
+    const list = await this.req(() => this.pb.collection('bookmarks').getList(opts.page ?? 1, opts.perPage ?? 60, {
       filter: filters.join(' && '),
       sort: SORT_FILTER[opts.sort ?? 'newest'],
-    });
+    }));
     return list.items.map(this.normalize);
   }
 
   async findByUrl(url: string): Promise<Bookmark | null> {
     try {
-      const rec = await this.pb
-        .collection('bookmarks')
-        .getFirstListItem(`user = "${this.uid()}" && url = "${escFilter(url)}"`);
+      const rec = await this.req(() =>
+        this.pb.collection('bookmarks').getFirstListItem(`user = "${this.uid()}" && url = "${escFilter(url)}"`),
+      );
       return this.normalize(rec);
     } catch {
       return null;
@@ -312,25 +347,25 @@ export class PocketBaseBackend implements Backend {
 
   async markVisited(id: string): Promise<void> {
     try {
-      await this.pb.collection('bookmarks').update(id, { lastVisited: new Date().toISOString() });
+      await this.req(() => this.pb.collection('bookmarks').update(id, { lastVisited: new Date().toISOString() }), 1);
     } catch {
       /* non-critical */
     }
   }
 
   async getAllTags(): Promise<{ tag: string; count: number }[]> {
-    const items = await this.pb
-      .collection('bookmarks')
-      .getFullList({ filter: `user = "${this.uid()}"`, fields: 'tags' });
+    const items = await this.req(() =>
+      this.pb.collection('bookmarks').getFullList({ filter: `user = "${this.uid()}"`, fields: 'tags' }),
+    );
     const counts = new Map<string, number>();
     for (const it of items) for (const t of parseTags((it as any).tags)) counts.set(t, (counts.get(t) ?? 0) + 1);
     return [...counts.entries()].map(([tag, count]) => ({ tag, count })).sort((a, b) => b.count - a.count);
   }
 
   async countByCollection(): Promise<Record<string, number>> {
-    const items = await this.pb
-      .collection('bookmarks')
-      .getFullList({ filter: `user = "${this.uid()}"`, fields: 'collection' });
+    const items = await this.req(() =>
+      this.pb.collection('bookmarks').getFullList({ filter: `user = "${this.uid()}"`, fields: 'collection' }),
+    );
     const counts: Record<string, number> = {};
     for (const it of items) {
       const c = (it as any).collection;
@@ -342,14 +377,13 @@ export class PocketBaseBackend implements Backend {
   async vaultStats(): Promise<VaultStats> {
     const filter = `user = "${this.uid()}"`;
     const [bms, cols, hls, tags, favs] = await Promise.all([
-      this.pb.collection('bookmarks').getList(1, 1, { filter }),
-      this.pb.collection('collections').getList(1, 1, { filter }),
-      this.pb.collection('highlights').getList(1, 1, { filter }).catch(() => ({ totalItems: 0 })),
+      this.req(() => this.pb.collection('bookmarks').getList(1, 1, { filter })),
+      this.req(() => this.pb.collection('collections').getList(1, 1, { filter })),
+      this.req(() => this.pb.collection('highlights').getList(1, 1, { filter })).catch(() => ({ totalItems: 0 })),
       this.getAllTags(),
-      this.pb
-        .collection('bookmarks')
-        .getList(1, 1, { filter: `${filter} && favorite = true` })
-        .catch(() => ({ totalItems: 0 })),
+      this.req(() => this.pb.collection('bookmarks').getList(1, 1, { filter: `${filter} && favorite = true` })).catch(
+        () => ({ totalItems: 0 }),
+      ),
     ]);
     return {
       total: bms.totalItems,
@@ -361,9 +395,9 @@ export class PocketBaseBackend implements Backend {
   }
 
   async listCollections(): Promise<Collection[]> {
-    const list = await this.pb
-      .collection('collections')
-      .getFullList({ filter: `user = "${this.uid()}"`, sort: 'sort,name' });
+    const list = await this.req(() =>
+      this.pb.collection('collections').getFullList({ filter: `user = "${this.uid()}"`, sort: 'sort,name' }),
+    );
     return list as unknown as Collection[];
   }
 
@@ -373,7 +407,7 @@ export class PocketBaseBackend implements Backend {
     icon?: string;
     parent?: string;
   }): Promise<Collection> {
-    const rec = await this.pb.collection('collections').create({ ...data, user: this.uid() });
+    const rec = await this.req(() => this.pb.collection('collections').create({ ...data, user: this.uid() }), 1);
     return rec as unknown as Collection;
   }
 
@@ -382,50 +416,56 @@ export class PocketBaseBackend implements Backend {
     // undefined, so "clear parent/color/icon" would otherwise silently no-op.
     const body: Record<string, unknown> = {};
     for (const [k, v] of Object.entries(patch)) body[k] = v === undefined ? '' : v;
-    const rec = await this.pb.collection('collections').update(id, body);
+    const rec = await this.req(() => this.pb.collection('collections').update(id, body));
     return rec as unknown as Collection;
   }
 
   async deleteCollection(id: string): Promise<void> {
     const inside = await this.searchBookmarks('', { collection: id, perPage: 200 });
     await Promise.all(inside.map((b) => this.updateBookmark(b.id, { collection: undefined })));
-    await this.pb.collection('collections').delete(id);
+    await this.del(() => this.pb.collection('collections').delete(id));
   }
 
   async createHighlight(input: CreateHighlightInput): Promise<Highlight> {
-    const rec = await this.pb.collection('highlights').create({
-      url: input.url,
-      text: input.text,
-      color: input.color ?? 'yellow',
-      note: input.note ?? '',
-      bookmark: input.bookmark,
-      anchor: input.anchor ? JSON.stringify(input.anchor) : '',
-      user: this.uid(),
-    });
+    const rec = await this.req(
+      () =>
+        this.pb.collection('highlights').create({
+          url: input.url,
+          text: input.text,
+          color: input.color ?? 'yellow',
+          note: input.note ?? '',
+          bookmark: input.bookmark,
+          anchor: input.anchor ? JSON.stringify(input.anchor) : '',
+          user: this.uid(),
+        }),
+      1,
+    );
     return this.normalizeHighlight(rec);
   }
 
   async highlightsForUrl(url: string): Promise<Highlight[]> {
-    const list = await this.pb.collection('highlights').getFullList({
-      filter: `user = "${this.uid()}" && url = "${escFilter(url)}"`,
-      sort: 'created',
-    });
+    const list = await this.req(() =>
+      this.pb.collection('highlights').getFullList({
+        filter: `user = "${this.uid()}" && url = "${escFilter(url)}"`,
+        sort: 'created',
+      }),
+    );
     return list.map(this.normalizeHighlight);
   }
 
   async allHighlights(limit = 200): Promise<Highlight[]> {
-    const list = await this.pb
-      .collection('highlights')
-      .getList(1, limit, { filter: `user = "${this.uid()}"`, sort: '-created' });
+    const list = await this.req(() =>
+      this.pb.collection('highlights').getList(1, limit, { filter: `user = "${this.uid()}"`, sort: '-created' }),
+    );
     return list.items.map(this.normalizeHighlight);
   }
 
   async deleteHighlight(id: string): Promise<void> {
-    await this.pb.collection('highlights').delete(id);
+    await this.del(() => this.pb.collection('highlights').delete(id));
   }
 
   async updateHighlight(id: string, patch: { note?: string; color?: HighlightColor }): Promise<void> {
-    await this.pb.collection('highlights').update(id, patch);
+    await this.req(() => this.pb.collection('highlights').update(id, patch));
   }
 
   private normalizeHighlight = (rec: any): Highlight => ({
