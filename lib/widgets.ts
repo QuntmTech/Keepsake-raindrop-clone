@@ -46,6 +46,28 @@ export const WIDGETS: WidgetMeta[] = [
 
 export const notesStore = storage.defineItem<string>('local:widget_notes', { fallback: '' });
 
+// Free-form widget placement. Each widget's top-left {x,y} within the dashboard
+// canvas, kept per device. Widgets without an entry fall back to an auto-packed
+// default, so a fresh install still looks tidy until you drag things around.
+export interface WidgetPos {
+  x: number;
+  y: number;
+}
+export const widgetLayoutStore = storage.defineItem<Record<string, WidgetPos>>('local:widget_layout', {
+  fallback: {},
+});
+
+// Default footprint (in grid columns) — strips are wide, cards are one column.
+export const WIDGET_SPAN: Record<WidgetKey, number> = {
+  jumpback: 2,
+  rediscover: 2,
+  notes: 1,
+  todo: 1,
+  topsites: 1,
+  recentclosed: 1,
+  weather: 1,
+};
+
 export interface Todo {
   id: string;
   text: string;

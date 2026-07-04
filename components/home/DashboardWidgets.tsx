@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
 import {
   WIDGETS,
   type WidgetKey,
@@ -16,12 +16,15 @@ import {
   type Weather,
   type TopSite,
   type ClosedTab,
+  widgetLayoutStore,
+  WIDGET_SPAN,
 } from '@/lib/widgets';
 import { Favicon } from '@/components/Favicon';
 import { Icon } from '@/components/Icon';
 import { useToast } from '@/components/Toast';
 import { markVisited } from '@/lib/bookmarks';
 import { faviconFor, safeDomain } from '@/lib/util';
+import { normUrl } from '@/lib/apps';
 import { type Bookmark } from '@/lib/types';
 
 const genId = () => `${Date.now().toString(36)}${Math.random().toString(36).slice(2, 6)}`;
@@ -46,32 +49,165 @@ interface Ctx {
   enabled: WidgetKey[];
   pinnedUrls: Set<string>;
   onChanged: () => void;
+  cardStyle?: React.CSSProperties; // custom widget background color
 }
 
-// The dashboard: a "surface your stuff" strip zone on top, then a responsive
-// card grid. Every widget self-hides when it has nothing to show, so the area
-// silently collapses rather than showing empty boxes.
+const COL_W = 300; // one grid column
+const GAP = 16;
+const SNAP = 8; // drag snaps to this pixel grid
+
+// The dashboard: a free canvas. Every widget is absolutely positioned and can
+// be dragged anywhere by its grip handle; positions persist per device. A
+// widget with no saved position is auto-packed into columns so a fresh install
+// still looks tidy. Every widget self-hides when it has nothing to show.
 export function DashboardWidgets(ctx: Ctx) {
-  const strip = ctx.enabled.filter((k) => WIDGETS.find((w) => w.key === k)?.zone === 'strip');
-  const cards = ctx.enabled.filter((k) => WIDGETS.find((w) => w.key === k)?.zone === 'card');
+  const containerRef = useRef<HTMLDivElement>(null);
+  const cellRefs = useRef<Record<string, HTMLDivElement | null>>({});
+  const [layout, setLayout] = useState<Record<string, { x: number; y: number }>>({});
+  const [defaults, setDefaults] = useState<Record<string, { x: number; y: number }>>({});
+  const [cols, setCols] = useState(3);
+  const [canvasH, setCanvasH] = useState(240);
+  const [drag, setDrag] = useState<{ key: string; x: number; y: number } | null>(null);
+
+  useEffect(() => {
+    widgetLayoutStore.getValue().then(setLayout);
+    return widgetLayoutStore.watch((v) => setLayout(v ?? {}));
+  }, []);
+
+  const widthOf = (k: WidgetKey, colCount: number) => {
+    const span = Math.min(WIDGET_SPAN[k] ?? 1, colCount);
+    return span * COL_W + (span - 1) * GAP;
+  };
+
+  // Re-pack unsaved widgets whenever the container width or any card height
+  // changes (widgets collapse/expand as their data loads).
+  const repack = useCallback(() => {
+    const el = containerRef.current;
+    if (!el) return;
+    const cw = el.clientWidth;
+    const colCount = Math.max(1, Math.floor((cw + GAP) / (COL_W + GAP)));
+    setCols(colCount);
+    const colH = new Array(colCount).fill(0);
+    const def: Record<string, { x: number; y: number }> = {};
+    let maxBottom = 0;
+    for (const k of ctx.enabled) {
+      const cell = cellRefs.current[k];
+      const h = cell?.offsetHeight ?? 0;
+      const span = Math.min(WIDGET_SPAN[k] ?? 1, colCount);
+      // Best start column: the one minimizing the top edge across the span.
+      let bestCol = 0;
+      let bestY = Infinity;
+      for (let c = 0; c + span <= colCount; c++) {
+        const y = Math.max(...colH.slice(c, c + span));
+        if (y < bestY) {
+          bestY = y;
+          bestCol = c;
+        }
+      }
+      if (!isFinite(bestY)) bestY = 0;
+      def[k] = { x: bestCol * (COL_W + GAP), y: bestY };
+      if (h >= 8) {
+        for (let i = bestCol; i < bestCol + span; i++) colH[i] = bestY + h + GAP;
+        // Account for a saved (free) position when sizing the canvas.
+        const pos = layoutOrDef(k, def[k], layout);
+        maxBottom = Math.max(maxBottom, pos.y + h);
+      }
+    }
+    setDefaults(def);
+    setCanvasH(Math.max(maxBottom + 8, 200));
+  }, [ctx.enabled, layout]);
+
+  useLayoutEffect(() => {
+    repack();
+  }, [repack, drag]);
+
+  useEffect(() => {
+    const el = containerRef.current;
+    if (!el) return;
+    const ro = new ResizeObserver(() => repack());
+    ro.observe(el);
+    for (const k of ctx.enabled) {
+      const cell = cellRefs.current[k];
+      if (cell) ro.observe(cell);
+    }
+    window.addEventListener('resize', repack);
+    return () => {
+      ro.disconnect();
+      window.removeEventListener('resize', repack);
+    };
+  }, [repack, ctx.enabled]);
+
+  // Drag: move by the grip, snap + clamp, persist on release.
+  const startRef = useRef<{ px: number; py: number; x: number; y: number } | null>(null);
+  const onGripDown = (k: WidgetKey, e: React.PointerEvent) => {
+    e.preventDefault();
+    (e.target as HTMLElement).setPointerCapture(e.pointerId);
+    const cur = layoutOrDef(k, defaults[k], layout);
+    startRef.current = { px: e.clientX, py: e.clientY, x: cur.x, y: cur.y };
+    setDrag({ key: k, x: cur.x, y: cur.y });
+  };
+  const onGripMove = (k: WidgetKey, e: React.PointerEvent) => {
+    const s = startRef.current;
+    if (!s || drag?.key !== k) return;
+    const cw = containerRef.current?.clientWidth ?? COL_W;
+    const w = widthOf(k, cols);
+    const snap = (n: number) => Math.round(n / SNAP) * SNAP;
+    const x = Math.max(0, Math.min(cw - w, snap(s.x + (e.clientX - s.px))));
+    const y = Math.max(0, snap(s.y + (e.clientY - s.py)));
+    setDrag({ key: k, x, y });
+  };
+  const onGripUp = (k: WidgetKey) => {
+    if (drag?.key === k) {
+      const next = { ...layout, [k]: { x: drag.x, y: drag.y } };
+      setLayout(next);
+      widgetLayoutStore.setValue(next).catch(() => {});
+    }
+    startRef.current = null;
+    setDrag(null);
+  };
+
   if (!ctx.enabled.length) return null;
 
   return (
-    <div className="mx-auto mt-12 w-full max-w-5xl">
-      <div className="flex flex-col gap-4">
-        {strip.map((k) => (
-          <WidgetSwitch key={k} k={k} {...ctx} />
-        ))}
-      </div>
-      {cards.length > 0 && (
-        <div className="mt-4 grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
-          {cards.map((k) => (
-            <WidgetSwitch key={k} k={k} {...ctx} />
-          ))}
-        </div>
-      )}
+    <div ref={containerRef} className="relative mx-auto mt-12 w-full max-w-5xl" style={{ height: canvasH }}>
+      {ctx.enabled.map((k) => {
+        const pos = drag?.key === k ? { x: drag.x, y: drag.y } : layoutOrDef(k, defaults[k], layout);
+        return (
+          <div
+            key={k}
+            ref={(el) => {
+              cellRefs.current[k] = el;
+            }}
+            className={`group/w absolute ${drag?.key === k ? 'z-30' : 'z-10'}`}
+            style={{ left: pos.x, top: pos.y, width: widthOf(k, cols), transition: drag ? 'none' : 'left .12s, top .12s' }}
+          >
+            <button
+              className={`absolute -top-2 right-2 z-20 grid h-6 w-6 cursor-grab place-items-center rounded-md border border-line bg-surface-raised text-ink-faint shadow-card transition hover:text-brand group-hover/w:opacity-100 ${
+                drag?.key === k ? 'cursor-grabbing opacity-100' : 'opacity-0'
+              }`}
+              style={{ touchAction: 'none' }}
+              onPointerDown={(e) => onGripDown(k, e)}
+              onPointerMove={(e) => onGripMove(k, e)}
+              onPointerUp={() => onGripUp(k)}
+              onPointerCancel={() => onGripUp(k)}
+              title="Drag to move this widget"
+            >
+              <Icon name="grip" size={13} />
+            </button>
+            <WidgetSwitch k={k} {...ctx} />
+          </div>
+        );
+      })}
     </div>
   );
+}
+
+function layoutOrDef(
+  k: string,
+  def: { x: number; y: number } | undefined,
+  layout: Record<string, { x: number; y: number }>,
+): { x: number; y: number } {
+  return layout[k] ?? def ?? { x: 0, y: 0 };
 }
 
 function WidgetSwitch({ k, ...ctx }: Ctx & { k: WidgetKey }) {
@@ -96,9 +232,9 @@ function WidgetSwitch({ k, ...ctx }: Ctx & { k: WidgetKey }) {
 }
 
 // ── card shell ───────────────────────────────────────────────────────────────
-function Card({ title, icon, panelCls, right, children }: { title: string; icon: any; panelCls: string; right?: React.ReactNode; children: React.ReactNode }) {
+function Card({ title, icon, panelCls, cardStyle, right, children }: { title: string; icon: any; panelCls: string; cardStyle?: React.CSSProperties; right?: React.ReactNode; children: React.ReactNode }) {
   return (
-    <section className={`flex min-h-[9rem] flex-col rounded-2xl border p-4 ${panelCls}`}>
+    <section className={`flex min-h-[9rem] flex-col rounded-2xl border p-4 ${panelCls}`} style={cardStyle}>
       <div className="mb-2.5 flex items-center gap-2">
         <Icon name={icon} size={15} className="text-ink-faint" />
         <h3 className="text-sm font-semibold text-ink">{title}</h3>
@@ -117,6 +253,7 @@ function SavesStrip({
   panelCls,
   labelCls,
   onDark,
+  cardStyle,
 }: Ctx & { title: string; icon: any; fetcher: (limit?: number) => Promise<Bookmark[]> }) {
   const [items, setItems] = useState<Bookmark[] | null>(null);
   useEffect(() => whenIdle(() => fetcher(8).then(setItems).catch(() => setItems([]))), [fetcher]);
@@ -127,7 +264,7 @@ function SavesStrip({
     window.location.href = b.url;
   };
   return (
-    <section className={`rounded-2xl border p-4 ${panelCls}`}>
+    <section className={`rounded-2xl border p-4 ${panelCls}`} style={cardStyle}>
       <div className="mb-3 flex items-center gap-2">
         <Icon name={icon} size={15} className="text-ink-faint" />
         <h3 className="text-sm font-semibold text-ink">{title}</h3>
@@ -160,7 +297,7 @@ function SavesStrip({
 }
 
 // ── notes ────────────────────────────────────────────────────────────────────
-function NotesWidget({ panelCls }: Ctx) {
+function NotesWidget({ panelCls, cardStyle }: Ctx) {
   const [text, setText] = useState('');
   const [saved, setSaved] = useState(true);
   const first = useRef(true);
@@ -179,7 +316,7 @@ function NotesWidget({ panelCls }: Ctx) {
     return () => clearTimeout(id);
   }, [text]);
   return (
-    <Card title="Quick notes" icon="edit" panelCls={panelCls} right={<span className="text-[10px] text-ink-faint">{saved ? 'Saved' : '…'}</span>}>
+    <Card title="Quick notes" icon="edit" panelCls={panelCls} cardStyle={cardStyle} right={<span className="text-[10px] text-ink-faint">{saved ? 'Saved' : '…'}</span>}>
       <textarea
         className="h-full min-h-[6rem] w-full resize-none bg-transparent text-sm text-ink outline-none placeholder:text-ink-faint"
         placeholder="Jot something down… it saves automatically."
@@ -191,7 +328,7 @@ function NotesWidget({ panelCls }: Ctx) {
 }
 
 // ── to-do ────────────────────────────────────────────────────────────────────
-function TodoWidget({ panelCls }: Ctx) {
+function TodoWidget({ panelCls, cardStyle }: Ctx) {
   const [todos, setTodos] = useState<Todo[]>([]);
   const [draft, setDraft] = useState('');
   useEffect(() => {
@@ -216,6 +353,7 @@ function TodoWidget({ panelCls }: Ctx) {
       title="To-do"
       icon="check"
       panelCls={panelCls}
+      cardStyle={cardStyle}
       right={
         doneCount > 0 ? (
           <button className="text-[10px] text-ink-faint hover:text-brand" onClick={() => persist(todos.filter((t) => !t.done))}>
@@ -258,12 +396,11 @@ function TodoWidget({ panelCls }: Ctx) {
 }
 
 // ── most visited (top sites) ─────────────────────────────────────────────────
-function TopSitesWidget({ panelCls, pinnedUrls, onChanged }: Ctx) {
+function TopSitesWidget({ panelCls, cardStyle, pinnedUrls, onChanged }: Ctx) {
   const [sites, setSites] = useState<TopSite[] | null>(null);
   const { toast } = useToast();
   useEffect(() => whenIdle(() => getTopSites(8).then(setSites).catch(() => setSites([]))), []);
   if (sites && sites.length === 0) return null;
-  const norm = (u: string) => u.replace(/\/+$/, '');
   const pin = async (s: TopSite) => {
     try {
       await pinToHome(s.url, s.title);
@@ -274,10 +411,10 @@ function TopSitesWidget({ panelCls, pinnedUrls, onChanged }: Ctx) {
     }
   };
   return (
-    <Card title="Most visited" icon="grid" panelCls={panelCls}>
+    <Card title="Most visited" icon="grid" panelCls={panelCls} cardStyle={cardStyle}>
       <ul className="space-y-0.5">
         {(sites ?? []).map((s) => {
-          const pinned = pinnedUrls.has(norm(s.url));
+          const pinned = pinnedUrls.has(normUrl(s.url));
           return (
             <li key={s.url} className="group flex items-center gap-2 rounded-md px-1 py-1 hover:bg-surface-sunken">
               <span className="grid h-6 w-6 shrink-0 place-items-center overflow-hidden rounded-md border border-line bg-surface-raised">
@@ -305,41 +442,63 @@ function TopSitesWidget({ panelCls, pinnedUrls, onChanged }: Ctx) {
 }
 
 // ── recently closed ──────────────────────────────────────────────────────────
-function RecentClosedWidget({ panelCls }: Ctx) {
+function RecentClosedWidget({ panelCls, cardStyle, pinnedUrls, onChanged }: Ctx) {
   const [tabs, setTabs] = useState<ClosedTab[] | null>(null);
+  const { toast } = useToast();
   useEffect(() => whenIdle(() => getRecentlyClosed(7).then(setTabs).catch(() => setTabs([]))), []);
   if (tabs && tabs.length === 0) return null;
+  const pin = async (t: ClosedTab) => {
+    try {
+      await pinToHome(t.url, t.title);
+      toast(`Pinned ${t.title} to Home`, 'success');
+      onChanged();
+    } catch {
+      toast('Could not pin that site', 'error');
+    }
+  };
   return (
-    <Card title="Recently closed" icon="import" panelCls={panelCls}>
+    <Card title="Recently closed" icon="import" panelCls={panelCls} cardStyle={cardStyle}>
       <ul className="space-y-0.5">
-        {(tabs ?? []).map((t, i) => (
-          <li key={`${t.url}-${i}`}>
-            <button
-              onClick={() => (t.sessionId ? restoreClosed(t.sessionId) : window.open(t.url, '_blank'))}
-              className="flex w-full items-center gap-2 rounded-md px-1 py-1 text-left hover:bg-surface-sunken"
-              title={`Reopen ${t.url}`}
-            >
+        {(tabs ?? []).map((t, i) => {
+          const pinned = pinnedUrls.has(normUrl(t.url));
+          return (
+            <li key={`${t.url}-${i}`} className="group flex items-center gap-2 rounded-md px-1 py-1 hover:bg-surface-sunken">
               <span className="grid h-6 w-6 shrink-0 place-items-center overflow-hidden rounded-md border border-line bg-surface-raised">
                 <Favicon src={faviconFor(safeDomain(t.url))} size={14} label={t.title} />
               </span>
-              <span className="flex-1 truncate text-sm text-ink">{t.title}</span>
-              <Icon name="external" size={12} className="shrink-0 text-ink-faint" />
-            </button>
-          </li>
-        ))}
+              <button
+                onClick={() => (t.sessionId ? restoreClosed(t.sessionId) : window.open(t.url, '_blank'))}
+                className="flex-1 truncate text-left text-sm text-ink hover:text-brand"
+                title={`Reopen ${t.url}`}
+              >
+                {t.title}
+              </button>
+              <button
+                className={`shrink-0 rounded px-1.5 py-0.5 text-[10px] transition ${
+                  pinned ? 'text-ink-faint' : 'text-brand opacity-0 hover:bg-brand/10 group-hover:opacity-100'
+                }`}
+                disabled={pinned}
+                onClick={() => pin(t)}
+                title={pinned ? 'Already on Home' : 'Pin to Home'}
+              >
+                {pinned ? '✓ pinned' : '+ pin'}
+              </button>
+            </li>
+          );
+        })}
       </ul>
     </Card>
   );
 }
 
 // ── weather ──────────────────────────────────────────────────────────────────
-function WeatherWidget({ panelCls }: Ctx) {
+function WeatherWidget({ panelCls, cardStyle }: Ctx) {
   const [w, setW] = useState<Weather | null | 'loading'>('loading');
   useEffect(() => whenIdle(() => fetchWeather().then((r) => setW(r)).catch(() => setW(null))), []);
   if (w === null) return null; // no permission / offline — hide
   const look = w && w !== 'loading' ? weatherLook(w.code) : null;
   return (
-    <Card title="Weather" icon="image" panelCls={panelCls}>
+    <Card title="Weather" icon="image" panelCls={panelCls} cardStyle={cardStyle}>
       {w === 'loading' ? (
         <p className="py-4 text-center text-xs text-ink-faint">Loading…</p>
       ) : (

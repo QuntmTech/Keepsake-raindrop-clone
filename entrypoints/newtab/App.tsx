@@ -873,6 +873,8 @@ export default function App() {
             <WidgetPicker
               enabled={settings.homeWidgets as WidgetKey[]}
               onChange={(next) => update({ homeWidgets: next })}
+              color={settings.widgetColor}
+              onColor={(hex) => update({ widgetColor: hex })}
               headBtn={headBtn}
             />
           )}
@@ -1014,6 +1016,7 @@ export default function App() {
             labelCls={labelCls}
             onDark={onDark}
             enabled={settings.homeWidgets as WidgetKey[]}
+            cardStyle={settings.widgetColor ? { background: settings.widgetColor } : undefined}
             pinnedUrls={new Set(pinnedItems.map((b) => normUrl(b.url)))}
             onChanged={() => {
               reloadAll();
