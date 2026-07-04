@@ -74,6 +74,10 @@ export class PocketBaseBackend implements Backend {
   private pb = new PocketBase('http://127.0.0.1:8090');
   private url = '';
   private wired = false;
+  // Most recent server Retry-After (rate-limit), in ms + when it was seen —
+  // captured in afterSend so req()'s backoff waits the exact server interval.
+  private retryAfterMs = 0;
+  private retryAfterAt = 0;
 
   async init(): Promise<void> {
     // Never fall back to localhost in a hosted build — use the baked-in server.
@@ -90,6 +94,19 @@ export class PocketBaseBackend implements Backend {
     this.pb.beforeSend = (url, options) => {
       options.signal ??= AbortSignal.timeout(30_000);
       return { url, options };
+    };
+    // afterSend fires even for the 429 error response (verified against the SDK),
+    // so capture Retry-After here — it's the only place the raw header is
+    // reachable (ClientResponseError drops response headers). req() reads it.
+    this.pb.afterSend = (response, data) => {
+      if (response.status === 429) {
+        const secs = parseInt(response.headers.get('retry-after') ?? '', 10);
+        if (secs > 0) {
+          this.retryAfterMs = secs * 1000;
+          this.retryAfterAt = Date.now();
+        }
+      }
+      return data;
     };
 
     const saved = await authMirror.getValue();
@@ -230,11 +247,22 @@ export class PocketBaseBackend implements Backend {
       } catch (e) {
         const status = (e as { status?: number })?.status ?? 0;
         if (status === 401 && this.pb.authStore.isValid) this.pb.authStore.clear();
-        const transient = status === 0 || status >= 500;
+        // 429 = rate limited (retry, honoring Retry-After); 0/5xx = transient.
+        const transient = status === 0 || status === 429 || status >= 500;
         if (!transient || attempt >= retries) throw e;
-        await new Promise((r) => setTimeout(r, 400 * Math.pow(3, attempt)));
+        await new Promise((r) => setTimeout(r, this.backoffMs(status, attempt)));
       }
     }
+  }
+
+  // Delay before a retry. A fresh 429 waits the server's Retry-After (data
+  // endpoints report ≤10s), bounded so the UI never hangs on it; other transient
+  // failures use exponential backoff.
+  private backoffMs(status: number, attempt: number): number {
+    if (status === 429 && this.retryAfterMs > 0 && Date.now() - this.retryAfterAt < 3000) {
+      return Math.min(this.retryAfterMs, 12_000) + Math.floor(Math.random() * 250);
+    }
+    return 400 * Math.pow(3, attempt);
   }
 
   // Deletes retry like everything else, but a 404 on retry means an earlier
@@ -305,6 +333,66 @@ export class PocketBaseBackend implements Backend {
     if (input.screenshotBlob) form.set('screenshot', input.screenshotBlob, `${Date.now()}.jpg`);
     const rec = await this.req(() => this.pb.collection('bookmarks').create(form), 1);
     return this.normalize(rec);
+  }
+
+  // Bulk import via the server's atomic /api/batch endpoint: one request per
+  // chunk instead of one create per row. A batch is all-or-nothing (a single
+  // rejected row rolls the whole chunk back), so on ANY batch failure we fall
+  // back to resilient per-item creates for that chunk — a malformed row can't
+  // sink the rest of the import. Imported rows are plain library bookmarks with
+  // no screenshot file, so JSON bodies are fine.
+  async bulkSave(inputs: SaveBookmarkInput[]): Promise<number> {
+    const user = this.uid();
+    const toBody = (input: SaveBookmarkInput): Record<string, unknown> => {
+      const body: Record<string, unknown> = {
+        url: input.url,
+        title: input.title || input.url,
+        description: input.description ?? '',
+        summary: input.summary ?? '',
+        content: input.content ?? '',
+        note: input.note ?? '',
+        // Batch bodies are JSON, so json fields take the native array — NOT a
+        // stringified string (which the single-save FormData path needs). Sending
+        // a string here would double-encode it into the column.
+        tags: input.tags ?? [],
+        aiTags: input.aiTags ?? [],
+        domain: input.domain ?? safeDomain(input.url),
+        type: input.type ?? inferType(input.url),
+        favorite: Boolean(input.favorite),
+        pinned: Boolean(input.pinned),
+        homeOnly: Boolean(input.homeOnly),
+        user,
+      };
+      if (input.collection) body.collection = input.collection;
+      if (typeof input.sort === 'number') body.sort = input.sort;
+      if (input.cover) body.cover = input.cover;
+      if (input.favicon) body.favicon = input.favicon;
+      if (typeof input.readingTime === 'number') body.readingTime = input.readingTime;
+      return body;
+    };
+
+    let saved = 0;
+    const CHUNK = 100; // server cap is 200/batch; smaller keeps each atomic unit modest
+    for (let i = 0; i < inputs.length; i += CHUNK) {
+      const slice = inputs.slice(i, i + CHUNK);
+      try {
+        const batch = this.pb.createBatch();
+        for (const input of slice) batch.collection('bookmarks').create(toBody(input));
+        const results = await this.req(() => batch.send());
+        saved += results.filter((r) => r.status >= 200 && r.status < 300).length;
+      } catch {
+        // Batch unsupported/rejected — per-item so one bad row can't lose the chunk.
+        for (const input of slice) {
+          try {
+            await this.saveBookmark(input);
+            saved++;
+          } catch {
+            /* skip the row that failed; keep importing the rest */
+          }
+        }
+      }
+    }
+    return saved;
   }
 
   async updateBookmark(id: string, patch: Partial<Bookmark>): Promise<Bookmark> {
