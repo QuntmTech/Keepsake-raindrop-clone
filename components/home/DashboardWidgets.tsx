@@ -17,6 +17,7 @@ import {
   type TopSite,
   type ClosedTab,
   widgetLayoutStore,
+  widgetCollapsedStore,
   WIDGET_SPAN,
 } from '@/lib/widgets';
 import { Favicon } from '@/components/Favicon';
@@ -68,11 +69,21 @@ export function DashboardWidgets(ctx: Ctx) {
   const [cols, setCols] = useState(3);
   const [canvasH, setCanvasH] = useState(240);
   const [drag, setDrag] = useState<{ key: string; x: number; y: number } | null>(null);
+  const [collapsed, setCollapsed] = useState<string[]>([]);
 
   useEffect(() => {
     widgetLayoutStore.getValue().then(setLayout);
     return widgetLayoutStore.watch((v) => setLayout(v ?? {}));
   }, []);
+  useEffect(() => {
+    widgetCollapsedStore.getValue().then(setCollapsed);
+    return widgetCollapsedStore.watch((v) => setCollapsed(v ?? []));
+  }, []);
+  const toggleCollapse = (k: string) => {
+    const next = collapsed.includes(k) ? collapsed.filter((x) => x !== k) : [...collapsed, k];
+    setCollapsed(next);
+    widgetCollapsedStore.setValue(next).catch(() => {});
+  };
 
   const widthOf = (k: WidgetKey, colCount: number) => {
     const span = Math.min(WIDGET_SPAN[k] ?? 1, colCount);
@@ -119,7 +130,7 @@ export function DashboardWidgets(ctx: Ctx) {
 
   useLayoutEffect(() => {
     repack();
-  }, [repack, drag]);
+  }, [repack, drag, collapsed]);
 
   useEffect(() => {
     const el = containerRef.current;
@@ -172,6 +183,7 @@ export function DashboardWidgets(ctx: Ctx) {
     <div ref={containerRef} className="relative mx-auto mt-12 w-full max-w-5xl" style={{ height: canvasH }}>
       {ctx.enabled.map((k) => {
         const pos = drag?.key === k ? { x: drag.x, y: drag.y } : layoutOrDef(k, defaults[k], layout);
+        const isCol = collapsed.includes(k);
         return (
           <div
             key={k}
@@ -181,20 +193,33 @@ export function DashboardWidgets(ctx: Ctx) {
             className={`group/w absolute ${drag?.key === k ? 'z-30' : 'z-10'}`}
             style={{ left: pos.x, top: pos.y, width: widthOf(k, cols), transition: drag ? 'none' : 'left .12s, top .12s' }}
           >
-            <button
-              className={`absolute -top-2 right-2 z-20 grid h-6 w-6 cursor-grab place-items-center rounded-md border border-line bg-surface-raised text-ink-faint shadow-card transition hover:text-brand group-hover/w:opacity-100 ${
-                drag?.key === k ? 'cursor-grabbing opacity-100' : 'opacity-0'
-              }`}
-              style={{ touchAction: 'none' }}
-              onPointerDown={(e) => onGripDown(k, e)}
-              onPointerMove={(e) => onGripMove(k, e)}
-              onPointerUp={() => onGripUp(k)}
-              onPointerCancel={() => onGripUp(k)}
-              title="Drag to move this widget"
-            >
-              <Icon name="grip" size={13} />
-            </button>
-            <WidgetSwitch k={k} {...ctx} />
+            <div className="absolute -top-2 right-2 z-20 flex gap-1">
+              <button
+                className={`grid h-6 w-6 place-items-center rounded-md border border-line bg-surface-raised text-ink-faint shadow-card transition hover:text-brand group-hover/w:opacity-100 ${
+                  isCol ? 'opacity-100' : 'opacity-0'
+                }`}
+                onClick={() => toggleCollapse(k)}
+                title={isCol ? 'Expand' : 'Collapse'}
+              >
+                <Icon name="chevron" size={13} className={`transition ${isCol ? '-rotate-90' : 'rotate-90'}`} />
+              </button>
+              <button
+                className={`grid h-6 w-6 cursor-grab place-items-center rounded-md border border-line bg-surface-raised text-ink-faint shadow-card transition hover:text-brand group-hover/w:opacity-100 ${
+                  drag?.key === k ? 'cursor-grabbing opacity-100' : 'opacity-0'
+                }`}
+                style={{ touchAction: 'none' }}
+                onPointerDown={(e) => onGripDown(k, e)}
+                onPointerMove={(e) => onGripMove(k, e)}
+                onPointerUp={() => onGripUp(k)}
+                onPointerCancel={() => onGripUp(k)}
+                title="Drag to move this widget"
+              >
+                <Icon name="grip" size={13} />
+              </button>
+            </div>
+            <div className={isCol ? 'overflow-hidden rounded-2xl' : ''} style={isCol ? { maxHeight: 50 } : undefined}>
+              <WidgetSwitch k={k} {...ctx} />
+            </div>
           </div>
         );
       })}

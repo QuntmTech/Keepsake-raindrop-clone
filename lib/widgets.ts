@@ -57,6 +57,9 @@ export const widgetLayoutStore = storage.defineItem<Record<string, WidgetPos>>('
   fallback: {},
 });
 
+// Collapsed (minimized-to-header) widget keys. Per device.
+export const widgetCollapsedStore = storage.defineItem<string[]>('local:widget_collapsed', { fallback: [] });
+
 // Default footprint (in grid columns) — strips are wide, cards are one column.
 export const WIDGET_SPAN: Record<WidgetKey, number> = {
   jumpback: 2,

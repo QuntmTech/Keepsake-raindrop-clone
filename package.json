@@ -2,7 +2,7 @@
   "name": "keepsake",
   "description": "Keepsake \u2014 an AI-powered MV3 bookmark manager. Local-first, with an optional PocketBase backend.",
   "private": true,
-  "version": "8.9.3",
+  "version": "8.9.4",
   "type": "module",
   "scripts": {
     "dev": "wxt",
