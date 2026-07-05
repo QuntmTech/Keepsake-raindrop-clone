@@ -1,3 +1,4 @@
+import { useState } from 'react';
 import { type Bookmark, type BookmarkType, type ViewMode } from '@/lib/types';
 import { markVisited } from '@/lib/bookmarks';
 import { Icon, type IconName } from './Icon';
@@ -19,12 +20,29 @@ interface Props {
   onDelete?: (id: string) => void;
   onToggleFavorite?: (b: Bookmark) => void;
   onEdit?: (b: Bookmark) => void;
+  onRead?: (b: Bookmark) => void;
 }
 
-export function BookmarkCard({ bookmark, layout = 'grid', onDelete, onToggleFavorite, onEdit }: Props) {
+export function BookmarkCard({ bookmark, layout = 'grid', onDelete, onToggleFavorite, onEdit, onRead }: Props) {
+  const [copied, setCopied] = useState(false);
   const open = () => {
     markVisited(bookmark.id);
     window.open(bookmark.url, '_blank', 'noreferrer');
+  };
+  const copyLink = () => {
+    navigator.clipboard?.writeText(bookmark.url).then(() => {
+      setCopied(true);
+      setTimeout(() => setCopied(false), 1200);
+    });
+  };
+
+  // Drag a card onto a collection in the sidebar to file it there.
+  const dragProps = {
+    draggable: true,
+    onDragStart: (e: React.DragEvent) => {
+      e.dataTransfer.setData('text/plain', bookmark.id);
+      e.dataTransfer.effectAllowed = 'move';
+    },
   };
 
   const Cover = ({ className }: { className: string }) =>
@@ -33,6 +51,7 @@ export function BookmarkCard({ bookmark, layout = 'grid', onDelete, onToggleFavo
         src={bookmark.cover || bookmark.screenshot}
         alt=""
         loading="lazy"
+        draggable={false}
         className={`${className} object-cover`}
         onError={(e) => ((e.currentTarget.style.display = 'none'))}
       />
@@ -44,6 +63,28 @@ export function BookmarkCard({ bookmark, layout = 'grid', onDelete, onToggleFavo
 
   const Actions = () => (
     <div className="flex items-center gap-0.5">
+      <button
+        className={`rounded-md p-1.5 opacity-0 transition hover:bg-surface-sunken group-hover:opacity-100 ${copied ? 'text-emerald-500' : 'text-ink-faint hover:text-ink'}`}
+        onClick={(e) => {
+          e.stopPropagation();
+          copyLink();
+        }}
+        title={copied ? 'Copied!' : 'Copy link'}
+      >
+        <Icon name={copied ? 'check' : 'copy'} size={15} />
+      </button>
+      {onRead && bookmark.content && (
+        <button
+          className="rounded-md p-1.5 text-ink-faint opacity-0 transition hover:bg-surface-sunken hover:text-ink group-hover:opacity-100"
+          onClick={(e) => {
+            e.stopPropagation();
+            onRead(bookmark);
+          }}
+          title="Read saved copy"
+        >
+          <Icon name="doc" size={15} />
+        </button>
+      )}
       {onToggleFavorite && (
         <button
           className={`rounded-md p-1.5 transition hover:bg-surface-sunken ${
@@ -90,6 +131,7 @@ export function BookmarkCard({ bookmark, layout = 'grid', onDelete, onToggleFavo
       <div
         className="group flex cursor-pointer items-center gap-3 rounded-xl border border-line bg-surface-raised px-3 py-2.5 transition hover:border-brand/30 hover:shadow-card"
         onClick={open}
+        {...dragProps}
       >
         <Cover className="h-11 w-11 shrink-0 rounded-lg" />
         <div className="min-w-0 flex-1">
@@ -117,6 +159,7 @@ export function BookmarkCard({ bookmark, layout = 'grid', onDelete, onToggleFavo
     <div
       className="group flex cursor-pointer flex-col overflow-hidden rounded-2xl border border-line bg-surface-raised shadow-card transition hover:-translate-y-0.5 hover:border-brand/30 hover:shadow-float"
       onClick={open}
+      {...dragProps}
     >
       <div className="relative">
         <Cover className={layout === 'masonry' ? 'h-auto max-h-64 w-full' : 'h-32 w-full'} />

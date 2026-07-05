@@ -9,7 +9,17 @@ export default defineConfig({
     name: 'Keepsake — bookmarks on steroids',
     description:
       'Save, tag, search, highlight, and preview pages — an AI-powered bookmark vault that goes far beyond raindrop.io.',
-    version: '0.2.0',
+    version: '8.9.11',
+
+    // Pins a stable extension ID across reloads / loading from a new folder, so
+    // your locally-stored bookmarks survive updates instead of being wiped.
+    // The Chrome Web Store REJECTS packages that contain a `key` — build the
+    // store upload with `npm run zip:store` (sets WXT_STORE=1) to strip it.
+    ...(process.env.WXT_STORE
+      ? {}
+      : {
+          key: 'MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAiSj7RxnE0Qci0KQwiKiKKFhF4azzvI7v4csqTBHOWfd2leb091Rg7RDmPvJYyrP+crea+9kF65FJX269IM6ri6t2WGCQNfEOGDRiK+yH6USePTViESCcm7jrhjlVMUl3uKu4+TJEpD/D1HL8NDtmQ9m4NUmqdCG+YDpo2DRx6GqjMgIZwVTbNAwm4Lz+h0vsJNa5EiLFIeMuHDkNN4m6//LmApl11EBOlWP7LoX5nyeTB+pnOt/zH2g3kdpSfLWv83UjIYVe5K5xPKpgMmDWULFDbn+ZvvVfQK0/fDoHe3opO1Jx1dyqKUqZtFhObS+aMFvztJUlrJyQJdFrCcmVtQIDAQAB',
+        }),
 
     permissions: [
       'storage', // settings + local data + cached auth
@@ -19,11 +29,40 @@ export default defineConfig({
       'contextMenus', // right-click "Save to Keepsake"
       'sidePanel', // the side-panel UI surface
       'scripting', // inject metadata extractor + highlight logic
+      'downloads', // save screenshots + recordings to Downloads/Keepsake
+      'offscreen', // MV3 recorder + local AI model host (survives popup close)
+      'tabCapture', // "record this tab" stream ids
+      'desktopCapture', // screen/window picker for recording
+      'notifications', // capture failures + "Filed:" toasts + watch alerts
+      'alarms', // AI batch queue + Living Bookmarks watch scheduler
+      'webNavigation', // Ambient Recall: match the library on navigation (local-only)
+      'clipboardWrite', // copy screenshots to the clipboard
+      'topSites', // Home "Most visited" widget
+      'sessions', // Home "Recently closed" widget (reopen tabs)
     ],
+
+    // Full-fidelity MHTML page snapshots are invasive → opt-in only.
+    // The weather widget's network hosts are requested only if the user turns
+    // that widget on — a default install makes no external calls.
+    optional_permissions: ['pageCapture'],
+    optional_host_permissions: ['https://api.open-meteo.com/*', 'https://ipapi.co/*'],
+
+    // transformers.js runs the local embedding model as WASM inside the
+    // offscreen document — MV3 requires the wasm-unsafe-eval opt-in.
+    content_security_policy: {
+      extension_pages: "script-src 'self' 'wasm-unsafe-eval'; object-src 'self';",
+    },
 
     // <all_urls>: content script (highlights) + captureVisibleTab + metadata extraction.
     // api.anthropic.com: optional AI features (auto-tag, summarize, ask-your-library).
     host_permissions: ['<all_urls>', 'https://api.anthropic.com/*'],
+
+    icons: {
+      16: 'icon/16.png',
+      32: 'icon/32.png',
+      48: 'icon/48.png',
+      128: 'icon/128.png',
+    },
 
     side_panel: {
       default_path: 'sidepanel.html',
@@ -31,6 +70,12 @@ export default defineConfig({
 
     action: {
       default_title: 'Keepsake',
+      default_icon: {
+        16: 'icon/16.png',
+        32: 'icon/32.png',
+        48: 'icon/48.png',
+        128: 'icon/128.png',
+      },
     },
 
     // Keyboard shortcuts. Chrome lets users remap these at chrome://extensions/shortcuts.

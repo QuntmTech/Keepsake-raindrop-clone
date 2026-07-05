@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import {
   saveBookmark,
   listCollections,
+  createCollection,
   getAllTags,
   findByUrl,
   inferType,
@@ -11,11 +12,13 @@ import { enqueueSave } from '@/lib/queue';
 import { send, dataUrlToBlob, type ScreenshotResult, type MetaResult } from '@/lib/messaging';
 import { getSettings } from '@/lib/settings';
 import { aiAvailable, getAiSettings, suggestTags, summarize, type PageContext } from '@/lib/ai';
+import { canSaveBookmark, storageRemaining } from '@/lib/entitlements';
 import { type Collection } from '@/lib/types';
 import { type PageMeta } from '@/lib/metadata';
 import { TagInput } from './TagInput';
 import { Icon } from './Icon';
 import { useToast } from './Toast';
+import { UpgradeDialog } from './UpgradeDialog';
 
 // Reads the active tab, enriches it (metadata + optional AI tags/summary),
 // lets the user tweak, and saves to PocketBase — queueing offline if needed.
@@ -36,6 +39,24 @@ export function SaveForm({ onSaved }: { onSaved?: () => void }) {
   const [done, setDone] = useState(false);
   const [aiBusy, setAiBusy] = useState(false);
   const [existing, setExisting] = useState(false);
+  const [creatingFolder, setCreatingFolder] = useState(false);
+  const [newFolder, setNewFolder] = useState('');
+  const [showUpgrade, setShowUpgrade] = useState(false);
+
+  async function createFolder() {
+    const name = newFolder.trim();
+    if (!name) return;
+    try {
+      const c = await createCollection({ name });
+      setCollections((prev) => [...prev, c].sort((a, b) => a.name.localeCompare(b.name)));
+      setCollection(c.id);
+      setNewFolder('');
+      setCreatingFolder(false);
+      toast(`Folder “${name}” created`, 'success');
+    } catch {
+      toast('Could not create folder', 'error');
+    }
+  }
 
   useEffect(() => {
     (async () => {
@@ -46,8 +67,10 @@ export function SaveForm({ onSaved }: { onSaved?: () => void }) {
       setUrl(tabUrl);
 
       let tagNames: string[] = [];
+      let cols: Collection[] = [];
       try {
-        setCollections(await listCollections());
+        cols = await listCollections();
+        setCollections(cols);
         tagNames = (await getAllTags()).map((t) => t.tag);
         setAllTags(tagNames);
       } catch {
@@ -102,6 +125,8 @@ export function SaveForm({ onSaved }: { onSaved?: () => void }) {
               .catch(() => {}),
           );
         }
+        // Collection suggestion removed: filing is owned by the auto-file
+        // pipeline (KS_AUTOFILE after save) — two competing filers would fight.
         Promise.allSettled(jobs).finally(() => setAiBusy(false));
       }
     })();
@@ -109,16 +134,31 @@ export function SaveForm({ onSaved }: { onSaved?: () => void }) {
 
   async function save() {
     if (!url) return;
+    // Cloud bookmark cap (Free) — a guardrail; PocketBase is the real enforcer.
+    // Re-saving an already-existing bookmark isn't blocked (not a new one).
+    if (!existing) {
+      const cap = await canSaveBookmark();
+      if (!cap.allowed) {
+        setShowUpgrade(true);
+        return;
+      }
+    }
     setBusy(true);
     try {
       const settings = await getSettings();
       let screenshotBlob: Blob | undefined;
       if (settings.enableAutoScreenshot) {
-        try {
-          const res = await send<ScreenshotResult>({ type: 'CAPTURE_SCREENSHOT' });
-          if (res?.dataUrl) screenshotBlob = dataUrlToBlob(res.dataUrl);
-        } catch {
-          /* capture failed, save without preview */
+        // Storage guardrail: skip only the preview image when tight on the
+        // estimated cloud storage cap — the save itself always proceeds.
+        const storageState = await storageRemaining();
+        const roomy = storageState.unlimited || storageState.remaining === null || storageState.remaining > 0;
+        if (roomy) {
+          try {
+            const res = await send<ScreenshotResult>({ type: 'CAPTURE_SCREENSHOT' });
+            if (res?.dataUrl) screenshotBlob = dataUrlToBlob(res.dataUrl);
+          } catch {
+            /* capture failed, save without preview */
+          }
         }
       }
 
@@ -127,6 +167,7 @@ export function SaveForm({ onSaved }: { onSaved?: () => void }) {
         title: title || url,
         note: note || undefined,
         summary: summary || undefined,
+        content: meta?.text,
         description: meta?.description,
         tags,
         aiTags,
@@ -141,9 +182,19 @@ export function SaveForm({ onSaved }: { onSaved?: () => void }) {
       };
 
       try {
-        await saveBookmark(input);
-        toast('Saved to your vault', 'success');
-      } catch {
+        const bm = await saveBookmark(input);
+        toast(collection ? 'Saved to your vault' : 'Saved — filing with AI…', 'success');
+        // AI pass runs in the background so it survives the popup closing.
+        // A user-picked collection is respected; otherwise AI files it.
+        const [tab] = await browser.tabs.query({ active: true, currentWindow: true }).catch(() => [null] as any);
+        browser.runtime.sendMessage({ type: 'KS_AUTOFILE', id: bm.id, tabId: tab?.id }).catch(() => {});
+      } catch (e) {
+        // A 402 is the server's authoritative plan-cap rejection (permanent) —
+        // show the paywall rather than queuing it offline to retry forever.
+        if ((e as { status?: number })?.status === 402) {
+          setShowUpgrade(true);
+          return; // finally still resets busy; skip the "saved" UI below
+        }
         // Offline / server down — keep it so nothing is lost.
         await enqueueSave(input);
         toast('Offline — queued, will sync later', 'info');
@@ -225,19 +276,60 @@ export function SaveForm({ onSaved }: { onSaved?: () => void }) {
         placeholder="Add tags…"
       />
 
-      <select
-        className="input"
-        value={collection}
-        onChange={(e) => setCollection(e.target.value)}
-      >
-        <option value="">No collection</option>
-        {collections.map((c) => (
-          <option key={c.id} value={c.id}>
-            {c.icon ? `${c.icon} ` : ''}
-            {c.name}
-          </option>
-        ))}
-      </select>
+      {creatingFolder ? (
+        <div className="flex items-center gap-1.5">
+          <input
+            className="input flex-1"
+            autoFocus
+            placeholder="New folder name"
+            value={newFolder}
+            onChange={(e) => setNewFolder(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter') createFolder();
+              else if (e.key === 'Escape') {
+                setCreatingFolder(false);
+                setNewFolder('');
+              }
+            }}
+          />
+          <button className="btn-primary px-2.5" onClick={createFolder} title="Create folder">
+            <Icon name="check" size={16} />
+          </button>
+          <button
+            className="btn-ghost px-2"
+            onClick={() => {
+              setCreatingFolder(false);
+              setNewFolder('');
+            }}
+            title="Cancel"
+          >
+            <Icon name="close" size={16} />
+          </button>
+        </div>
+      ) : (
+        <div className="flex items-center gap-1.5">
+          <select
+            className="input flex-1"
+            value={collection}
+            onChange={(e) => setCollection(e.target.value)}
+          >
+            <option value="">No collection</option>
+            {collections.map((c) => (
+              <option key={c.id} value={c.id}>
+                {c.icon ? `${c.icon} ` : ''}
+                {c.name}
+              </option>
+            ))}
+          </select>
+          <button
+            className="btn-outline px-2.5"
+            onClick={() => setCreatingFolder(true)}
+            title="New folder"
+          >
+            <Icon name="plus" size={16} />
+          </button>
+        </div>
+      )}
 
       <input
         className="input text-sm"
@@ -262,6 +354,7 @@ export function SaveForm({ onSaved }: { onSaved?: () => void }) {
       {!savable && url !== '' && (
         <p className="text-center text-xs text-ink-faint">This page can’t be saved (not a web URL).</p>
       )}
+      {showUpgrade && <UpgradeDialog reason="bookmarks" onClose={() => setShowUpgrade(false)} />}
     </div>
   );
 }

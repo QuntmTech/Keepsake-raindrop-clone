@@ -1,0 +1,17 @@
+<svg width="128" height="128" viewBox="0 0 128 128" xmlns="http://www.w3.org/2000/svg">
+  <!-- Keepsake logo mark. Canonical source for public/icon/{16,32,48,128}.png.
+       iOS-style blue squircle (brand "ocean" #2563eb with a subtle lighter-top
+       gradient) + the exact in-app white bookmark glyph from
+       components/Icon.tsx ("M6 4h12v16l-6-4-6 4z"), so the toolbar/store icon
+       matches the in-app brand mark in shape and color. -->
+  <defs>
+    <linearGradient id="g" x1="0.15" y1="0" x2="0.85" y2="1">
+      <stop offset="0" stop-color="#4f8bf5"/>
+      <stop offset="1" stop-color="#2563eb"/>
+    </linearGradient>
+  </defs>
+  <rect x="0" y="0" width="128" height="128" rx="29" ry="29" fill="url(#g)"/>
+  <g transform="translate(16,16) scale(4)">
+    <path d="M6 4h12v16l-6-4-6 4z" fill="#ffffff"/>
+  </g>
+</svg>

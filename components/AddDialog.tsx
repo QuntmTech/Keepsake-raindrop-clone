@@ -1,33 +1,57 @@
 import { useState } from 'react';
 import { type Collection } from '@/lib/types';
 import { saveBookmark, safeDomain, inferType, faviconFor } from '@/lib/bookmarks';
+import { canSaveBookmark } from '@/lib/entitlements';
 import { useEscape } from '@/hooks/useEscape';
 import { TagInput } from './TagInput';
 import { Icon } from './Icon';
+import { IconPicker } from './IconPicker';
 import { useToast } from './Toast';
+import { UpgradeDialog } from './UpgradeDialog';
 
 interface Props {
   collections: Collection[];
   allTags: string[];
   defaultCollection?: string;
+  favorite?: boolean;
+  pinned?: boolean; // adding from the Home screen pins the link there
+  // Home context: added links are launcher tiles by default (hidden from the
+  // bookmark library), matching the app catalog. The dialog offers an opt-in
+  // to also keep it in the library.
+  homeContext?: boolean;
   onClose: () => void;
   onAdded: () => void;
 }
 
 // Add a bookmark by URL from the dashboard (no active tab needed).
-export function AddDialog({ collections, allTags, defaultCollection, onClose, onAdded }: Props) {
+export function AddDialog({ collections, allTags, defaultCollection, favorite, pinned, homeContext, onClose, onAdded }: Props) {
   const { toast } = useToast();
   const [url, setUrl] = useState('');
   const [title, setTitle] = useState('');
+  const [favicon, setFavicon] = useState('');
   const [tags, setTags] = useState<string[]>([]);
   const [collection, setCollection] = useState(defaultCollection ?? '');
+  const [alsoLibrary, setAlsoLibrary] = useState(false); // Home add → also keep in library?
   const [busy, setBusy] = useState(false);
+  const [showUpgrade, setShowUpgrade] = useState(false);
   useEscape(onClose);
 
   async function add() {
     let clean = url.trim();
     if (!clean) return;
     if (!/^https?:\/\//i.test(clean)) clean = `https://${clean}`;
+    // From Home, a link is a launcher tile (homeOnly) unless the user opts to
+    // also keep it in the library.
+    const homeOnly = Boolean(homeContext) && !alsoLibrary;
+    // Home launcher tiles never count toward the cloud bookmark cap — only
+    // gate when this add will land a real library bookmark.
+    if (!homeOnly) {
+      const cap = await canSaveBookmark();
+      if (!cap.allowed) {
+        setShowUpgrade(true);
+        return;
+      }
+    }
     setBusy(true);
     try {
       const domain = safeDomain(clean);
@@ -36,11 +60,14 @@ export function AddDialog({ collections, allTags, defaultCollection, onClose, on
         title: title.trim() || domain || clean,
         tags,
         collection: collection || undefined,
+        favorite,
+        pinned,
+        homeOnly,
         domain,
         type: inferType(clean),
-        favicon: faviconFor(domain),
+        favicon: favicon.trim() || faviconFor(domain),
       });
-      toast('Added to your vault', 'success');
+      toast(homeContext ? 'Added to Home' : 'Added to your vault', 'success');
       onAdded();
       onClose();
     } catch {
@@ -80,6 +107,7 @@ export function AddDialog({ collections, allTags, defaultCollection, onClose, on
             value={title}
             onChange={(e) => setTitle(e.target.value)}
           />
+          <IconPicker value={favicon} fallback={faviconFor(safeDomain(url))} onChange={setFavicon} />
           <TagInput tags={tags} onChange={setTags} suggestions={allTags} />
           <select className="input" value={collection} onChange={(e) => setCollection(e.target.value)}>
             <option value="">No collection</option>
@@ -90,6 +118,12 @@ export function AddDialog({ collections, allTags, defaultCollection, onClose, on
               </option>
             ))}
           </select>
+          {homeContext && (
+            <label className="flex cursor-pointer items-center gap-2 text-xs text-ink-soft">
+              <input type="checkbox" checked={alsoLibrary} onChange={(e) => setAlsoLibrary(e.target.checked)} />
+              Also keep this in my bookmark library (otherwise it lives only on Home)
+            </label>
+          )}
         </div>
         <div className="flex justify-end gap-2 border-t border-line p-3">
           <button className="btn-ghost" onClick={onClose}>
@@ -100,6 +134,7 @@ export function AddDialog({ collections, allTags, defaultCollection, onClose, on
           </button>
         </div>
       </div>
+      {showUpgrade && <UpgradeDialog reason="bookmarks" onClose={() => setShowUpgrade(false)} />}
     </div>
   );
 }

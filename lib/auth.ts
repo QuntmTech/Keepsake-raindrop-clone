@@ -21,10 +21,39 @@ export async function logout(): Promise<void> {
   return (await getBackend()).logout();
 }
 
+// Whether the active backend supports emailed password resets (PocketBase yes,
+// local no) — lets the login form show the link only when it'll work.
+export async function canResetPassword(): Promise<boolean> {
+  return typeof (await getBackend()).requestPasswordReset === 'function';
+}
+
+export async function requestPasswordReset(email: string): Promise<void> {
+  const backend = await getBackend();
+  if (!backend.requestPasswordReset) throw new Error('Password reset is not available for on-device storage.');
+  return backend.requestPasswordReset(email);
+}
+
 export async function isLoggedIn(): Promise<boolean> {
   return (await getBackend()).isLoggedIn();
 }
 
 export async function currentUser(): Promise<AuthUser | null> {
   return (await getBackend()).currentUser();
+}
+
+// Subscribe to live auth-record changes (any context) — e.g. a Stripe upgrade
+// picked up by a background refresh — so open UIs can re-read plan/email
+// without a full reload. No-op (never fires) on backends without the hook
+// (local mode). Returns an unsubscribe function.
+export function watchAuth(cb: () => void): () => void {
+  let unsub = () => {};
+  let cancelled = false;
+  getBackend().then((b) => {
+    if (cancelled) return;
+    unsub = b.watchAuthChange?.(cb) ?? (() => {});
+  });
+  return () => {
+    cancelled = true;
+    unsub();
+  };
 }

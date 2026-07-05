@@ -9,6 +9,7 @@ interface Props {
   onDelete?: (id: string) => void;
   onToggleFavorite?: (b: Bookmark) => void;
   onEdit?: (b: Bookmark) => void;
+  onRead?: (b: Bookmark) => void;
   emptyHint?: string;
 }
 
@@ -19,6 +20,7 @@ export function BookmarkGrid({
   onDelete,
   onToggleFavorite,
   onEdit,
+  onRead,
   emptyHint,
 }: Props) {
   if (loading) {
@@ -56,6 +58,7 @@ export function BookmarkGrid({
               onDelete={onDelete}
               onToggleFavorite={onToggleFavorite}
               onEdit={onEdit}
+            onRead={onRead}
             />
           </div>
         ))}
@@ -73,6 +76,7 @@ export function BookmarkGrid({
           onDelete={onDelete}
           onToggleFavorite={onToggleFavorite}
           onEdit={onEdit}
+        onRead={onRead}
         />
       ))}
     </div>

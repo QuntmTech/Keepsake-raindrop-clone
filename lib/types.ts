@@ -21,6 +21,7 @@ export interface Bookmark {
   title: string;
   description?: string;
   summary?: string;          // AI-generated TL;DR
+  content?: string;          // cached page text (link-rot-proof reading copy)
   note?: string;             // user's own note
   tags: string[];
   aiTags?: string[];         // tags suggested by AI (kept distinct so user edits win)
@@ -31,6 +32,9 @@ export interface Bookmark {
   domain?: string;
   type: BookmarkType;
   favorite?: boolean;
+  pinned?: boolean;          // shown on the Home screen (curated — separate from the library)
+  homeOnly?: boolean;        // a Home app tile (from the catalog) — hidden from library views
+  sort?: number;             // manual order for Home tiles / lists
   readingTime?: number;      // minutes
   broken?: boolean;          // link-checker flagged it as dead
   lastVisited?: string;      // ISO date of last open from within Keepsake
@@ -54,6 +58,10 @@ export interface Highlight {
 
 export type HighlightColor = 'yellow' | 'green' | 'blue' | 'pink' | 'orange';
 
+// Account tier. `owner` is you (unlimited, forever); `pro` is a paid customer;
+// `free` is the default limited tier. Stored on the user record (`plan`).
+export type Plan = 'free' | 'pro' | 'owner';
+
 // Robust highlight anchor — quote + surrounding context survives DOM changes
 // far better than a raw first-match search. Serialized into Highlight.anchor.
 export interface TextQuoteAnchor {
@@ -76,22 +84,26 @@ export type Accent = 'ocean' | 'violet' | 'emerald' | 'sunset' | 'rose' | 'slate
 
 // AI provider config. The key lives in chrome.storage.local (never synced,
 // never leaves the device except in calls to the model API).
+export type LlmProvider = 'anthropic' | 'openai' | 'google';
+
 export interface AiSettings {
   enabled: boolean;
+  provider: LlmProvider;     // which provider the BYOK key belongs to
   apiKey: string;
   autoTag: boolean;          // suggest tags on save
   autoSummarize: boolean;    // generate a TL;DR on save
-  autoCollection: boolean;   // suggest a collection on save
-  fastModel: string;         // tagging/summarizing (cheap + quick)
+  autoFile: boolean;         // zero-organization auto-filing on save
+  fastModel: string;         // tagging/summarizing/filing (cheap + quick)
   smartModel: string;        // "ask your library" Q&A
 }
 
 export const DEFAULT_AI_SETTINGS: AiSettings = {
   enabled: false,
+  provider: 'anthropic',
   apiKey: '',
   autoTag: true,
   autoSummarize: true,
-  autoCollection: false,
+  autoFile: true,
   fastModel: 'claude-haiku-4-5',
   smartModel: 'claude-opus-4-8',
 };
@@ -109,7 +121,15 @@ export interface Settings {
   accent: Accent;
   view: ViewMode;
   sort: SortMode;
+  newTabMode: 'home' | 'minimal'; // Keepsake Home new-tab: full or search-only
+  homeWidgets: string[]; // enabled dashboard widget keys, in display order
+  widgetColor: string; // custom widget-card background ('' = themed default)
+  wallpaper: string; // Home background: '' | preset key | 'url:<image>'
+  searchEngine: 'google' | 'duckduckgo' | 'bing' | 'brave' | 'ecosia'; // Home web search
   defaultCollection?: string; // collection id new saves drop into
+  // Ambient Recall — matching runs 100% locally; nothing leaves the device.
+  recallEnabled: boolean;     // opt-in: surface related saves while browsing
+  recallBlocklist: string[];  // domains never matched (banking etc.)
 }
 
 export const DEFAULT_SETTINGS: Settings = {
@@ -123,6 +143,13 @@ export const DEFAULT_SETTINGS: Settings = {
   accent: 'ocean',
   view: 'grid',
   sort: 'newest',
+  newTabMode: 'home',
+  homeWidgets: ['jumpback', 'notes', 'todo', 'topsites', 'recentclosed'],
+  widgetColor: '',
+  wallpaper: 'dusk',
+  searchEngine: 'google',
+  recallEnabled: false,
+  recallBlocklist: [],
 };
 
 // Aggregate stats for the dashboard header.

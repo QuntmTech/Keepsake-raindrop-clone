@@ -1,82 +1,341 @@
-import { useEffect, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useAuth } from '@/hooks/useAuth';
+import { currentUser } from '@/lib/auth';
+import { readSnapshot, writeSnapshot } from '@/lib/cache';
+import { useCollections } from '@/hooks/useCollections';
 import { LoginForm } from '@/components/LoginForm';
 import { SaveForm } from '@/components/SaveForm';
+import { SettingsPanel } from '@/components/SettingsPanel';
+import { BookmarkGrid } from '@/components/BookmarkGrid';
+import { HighlightsView } from '@/components/HighlightsView';
+import { CollectionSidebar, type LibraryFilter } from '@/components/CollectionSidebar';
+import { CaptureMenu } from '@/components/CaptureMenu';
 import { Icon } from '@/components/Icon';
-import { Favicon } from '@/components/Favicon';
+import { useToast } from '@/components/Toast';
 import { send } from '@/lib/messaging';
-import { recentBookmarks } from '@/lib/bookmarks';
-import { type Bookmark } from '@/lib/types';
+import {
+  searchBookmarks,
+  deleteBookmark,
+  toggleFavorite,
+  updateBookmark,
+  getAllTags,
+  vaultStats,
+  homeOnlyCollectionIds,
+  watchVault,
+} from '@/lib/bookmarks';
+import { EditDialog } from '@/components/EditDialog';
+import { onboardingStage } from '@/lib/onboarding';
+import { Tour, type TourStep } from '@/components/Tour';
+import { type Bookmark, type VaultStats } from '@/lib/types';
 
-// The popup is the fast path: save the current page in two clicks.
+type RightView = 'list' | 'save' | 'settings';
+
+// Coach-mark tour of the dropdown — shown once, the first time it opens after
+// the Home tour finished.
+const POPUP_TOUR: TourStep[] = [
+  {
+    title: 'Your library lives here',
+    body: 'This dropdown is your full bookmark vault — everything you save, on any page, one click from the toolbar.',
+  },
+  {
+    target: '[data-tour="pop-sidebar"]',
+    title: 'Collections & filters',
+    body: 'Browse by collection, favorites, highlights, or tag. Drag a bookmark onto a collection to file it. Folders that only live on your Home stay out of here.',
+  },
+  {
+    target: '[data-tour="pop-save"]',
+    title: 'Save the page you’re on',
+    body: 'Hit Save (or press Ctrl+Shift+S anywhere) and Keepsake grabs the title, icon, and preview — AI can even file and tag it for you.',
+  },
+  {
+    target: '[data-tour="pop-capture"]',
+    title: 'Screenshots & recordings',
+    body: 'Capture the visible area or the full page, or record your tab or screen — saved to Downloads or copied to your clipboard.',
+  },
+  {
+    target: '[data-tour="pop-expand"]',
+    title: 'Room to spread out',
+    body: 'The full-screen dashboard has the same library with more space — plus import, settings, and stats. That’s the tour. Happy keeping! 🎉',
+  },
+];
+
+// The popup is a compact two-pane mini-dashboard: collections on the left,
+// your bookmarks on the right, quick-save and settings without leaving the
+// dropdown. Full-screen is one click away when you want room to spread out.
 export default function App() {
   const { ready, authed, login, signup } = useAuth();
-  const [recent, setRecent] = useState<Bookmark[]>([]);
+  const [freshInstall, setFreshInstall] = useState(false);
 
-  const loadRecent = () => recentBookmarks(3).then(setRecent).catch(() => {});
   useEffect(() => {
-    if (authed) {
-      loadRecent();
-      // Opportunistically retry any saves that were queued while offline.
-      send({ type: 'FLUSH_QUEUE' }).catch(() => {});
-    }
+    if (authed) send({ type: 'FLUSH_QUEUE' }).catch(() => {});
   }, [authed]);
+  // Fresh install → the sign-up form comes pre-selected.
+  useEffect(() => {
+    onboardingStage.getValue().then((s) => setFreshInstall(s === 'fresh'));
+  }, []);
 
-  if (!ready) return <Shell><Loading /></Shell>;
-  if (!authed) return <Shell><LoginForm onLogin={login} onSignup={signup} compact /></Shell>;
+  if (!ready)
+    return (
+      <Frame>
+        <p className="p-6 text-center text-sm text-ink-faint">Loading…</p>
+      </Frame>
+    );
+  if (!authed)
+    return (
+      <Frame narrow>
+        <LoginForm onLogin={login} onSignup={signup} compact defaultMode={freshInstall ? 'signup' : 'login'} />
+      </Frame>
+    );
+  return <Vault />;
+}
+
+function Vault() {
+  const { toast } = useToast();
+  const c = useCollections(true);
+  const [filter, setFilter] = useState<LibraryFilter>({ kind: 'all' });
+  const [query, setQuery] = useState('');
+  const [items, setItems] = useState<Bookmark[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [stats, setStats] = useState<VaultStats | null>(null);
+  const [tags, setTags] = useState<{ tag: string; count: number }[]>([]);
+  const [right, setRight] = useState<RightView>('list');
+  const [editing, setEditing] = useState<Bookmark | null>(null);
+  const [homeOnlyCols, setHomeOnlyCols] = useState<string[]>([]);
+  const [tour, setTour] = useState(false);
+  const uidRef = useRef<string | null>(null);
+
+  // First open after the Home tour → walk through the dropdown once.
+  useEffect(() => {
+    onboardingStage.getValue().then((s) => {
+      if (s === 'home-done') setTour(true);
+    });
+  }, []);
+  const finishTour = useCallback(() => {
+    setTour(false);
+    onboardingStage.setValue('complete').catch(() => {});
+  }, []);
+
+  // Stale-while-revalidate: don't flash a skeleton while refreshing in the
+  // background — only show "loading" on the very first paint.
+  const run = useCallback(async () => {
+    if (filter.kind === 'highlights') return;
+    try {
+      const opts: Parameters<typeof searchBookmarks>[1] = { perPage: 100 };
+      if (filter.kind === 'collection') opts.collection = filter.id;
+      else if (filter.kind === 'favorites') opts.favorite = true;
+      else if (filter.kind === 'untagged') opts.untagged = true;
+      else if (filter.kind === 'tag') opts.tag = filter.tag;
+      const list = await searchBookmarks(query, opts);
+      setItems(list);
+      // Cache the default view for instant next-open.
+      if (filter.kind === 'all' && !query.trim()) {
+        writeSnapshot({ uid: uidRef.current ?? '', bookmarks: list, collections: c.collections, counts: c.counts });
+      }
+    } catch {
+      /* keep stale items */
+    } finally {
+      setLoading(false);
+    }
+  }, [filter, query, c.collections, c.counts]);
+
+  const refreshMeta = useCallback(async () => {
+    try {
+      const [s, t, hc] = await Promise.all([vaultStats(), getAllTags(), homeOnlyCollectionIds()]);
+      setStats(s);
+      setTags(t);
+      setHomeOnlyCols(hc);
+    } catch {
+      /* ignore */
+    }
+  }, []);
+
+  // Paint cached bookmarks instantly on open, then refresh.
+  useEffect(() => {
+    (async () => {
+      uidRef.current = (await currentUser())?.id ?? null;
+      const snap = await readSnapshot(uidRef.current);
+      if (snap) {
+        // The snapshot may include Home-only app tiles — never paint those in the library.
+        setItems(snap.bookmarks.filter((b) => !b.homeOnly));
+        setLoading(false);
+      }
+    })();
+  }, []);
+
+  useEffect(() => {
+    const id = setTimeout(run, 60);
+    return () => clearTimeout(id);
+  }, [run]);
+  useEffect(() => {
+    refreshMeta();
+  }, [refreshMeta]);
+  // Live refresh when the vault changes (Quick Bar, shortcut, another tab).
+  useEffect(() => {
+    return watchVault(() => {
+      run();
+      refreshMeta();
+      c.refresh();
+    });
+  }, [run, refreshMeta, c]);
+
+  async function remove(id: string) {
+    await deleteBookmark(id);
+    setItems((p) => p.filter((b) => b.id !== id));
+    refreshMeta();
+    c.refresh();
+    toast('Deleted', 'info');
+  }
+  async function fav(b: Bookmark) {
+    const u = await toggleFavorite(b.id, !b.favorite);
+    setItems((p) => p.map((x) => (x.id === b.id ? u : x)));
+    refreshMeta();
+  }
+  async function move(bookmarkId: string, collectionId: string | undefined) {
+    await updateBookmark(bookmarkId, { collection: collectionId });
+    run();
+    refreshMeta();
+    c.refresh();
+    const name = collectionId ? c.collections.find((x) => x.id === collectionId)?.name : null;
+    toast(name ? `Moved to ${name}` : 'Removed from collection', 'success');
+  }
+
+  const heading = useMemo(() => {
+    if (filter.kind === 'all') return 'All bookmarks';
+    if (filter.kind === 'favorites') return 'Favorites';
+    if (filter.kind === 'untagged') return 'Unsorted';
+    if (filter.kind === 'highlights') return 'Highlights';
+    if (filter.kind === 'tag') return `#${filter.tag}`;
+    return c.collections.find((x) => x.id === filter.id)?.name ?? 'Collection';
+  }, [filter, c.collections]);
 
   return (
-    <Shell>
-      <SaveForm onSaved={loadRecent} />
+    <Frame>
+      <div className="flex h-full">
+        <CollectionSidebar
+          compact
+          collections={c.collections}
+          counts={c.counts}
+          total={stats?.total ?? 0}
+          favorites={stats?.favorites ?? 0}
+          highlights={stats?.highlights ?? 0}
+          tags={tags}
+          selected={filter}
+          onSelect={(f) => {
+            setFilter(f);
+            setRight('list');
+          }}
+          onCreate={c.create}
+          onRename={c.rename}
+          onRemove={c.remove}
+          onMove={move}
+          onReorder={c.reorder}
+          hideCollectionIds={homeOnlyCols}
+          dataTour="pop-sidebar"
+        />
 
-      {recent.length > 0 && (
-        <div className="border-t border-line px-3 py-2">
-          <p className="mb-1.5 text-[10px] font-semibold uppercase tracking-wide text-ink-faint">
-            Recently saved
-          </p>
-          <div className="flex flex-col gap-1">
-            {recent.map((b) => (
-              <a
-                key={b.id}
-                href={b.url}
-                target="_blank"
-                rel="noreferrer"
-                className="flex items-center gap-2 rounded-lg px-1.5 py-1 hover:bg-surface-sunken"
-              >
-                <Favicon src={b.favicon} size={16} />
-                <span className="truncate text-xs text-ink-soft">{b.title}</span>
-              </a>
-            ))}
+        <div className="flex min-w-0 flex-1 flex-col">
+          <header className="flex items-center gap-2 border-b border-line px-3 py-2">
+            {right === 'list' ? (
+              <>
+                <div className="flex flex-1 items-center gap-1.5 rounded-lg border border-line bg-surface-raised px-2.5">
+                  <Icon name="search" size={15} className="text-ink-faint" />
+                  <input
+                    className="flex-1 bg-transparent py-1.5 text-sm outline-none placeholder:text-ink-faint"
+                    placeholder={`Search ${heading}…`}
+                    value={query}
+                    onChange={(e) => setQuery(e.target.value)}
+                  />
+                </div>
+                <button data-tour="pop-save" className="btn-primary px-2.5 py-1.5 text-xs" onClick={() => setRight('save')}>
+                  <Icon name="plus" size={15} /> Save
+                </button>
+              </>
+            ) : (
+              <>
+                <button className="btn-ghost px-2 py-1.5" onClick={() => setRight('list')} title="Back">
+                  <Icon name="chevron" size={16} className="rotate-180" />
+                </button>
+                <span className="flex-1 text-sm font-semibold">{right === 'save' ? 'Save page' : 'Settings'}</span>
+              </>
+            )}
+            <div data-tour="pop-capture">
+              <CaptureMenu buttonClass="btn-ghost px-2 py-1.5 text-xs" />
+            </div>
+            <button
+              className={`btn-ghost px-2 py-1.5 ${right === 'settings' ? 'text-brand' : ''}`}
+              onClick={() => setRight((r) => (r === 'settings' ? 'list' : 'settings'))}
+              title="Settings"
+            >
+              <Icon name="settings" size={16} />
+            </button>
+            <button
+              data-tour="pop-expand"
+              className="btn-ghost px-2 py-1.5"
+              onClick={() => send({ type: 'OPEN_DASHBOARD' })}
+              title="Open full screen"
+            >
+              <Icon name="external" size={16} />
+            </button>
+          </header>
+
+          <div className="flex-1 overflow-y-auto">
+            {right === 'save' && (
+              <SaveForm
+                onSaved={() => {
+                  setRight('list');
+                  run();
+                  refreshMeta();
+                  c.refresh();
+                }}
+              />
+            )}
+            {right === 'settings' && <SettingsPanel compact />}
+            {right === 'list' &&
+              (filter.kind === 'highlights' ? (
+                <div className="p-3">
+                  <HighlightsView onCountChange={refreshMeta} />
+                </div>
+              ) : (
+                <div className="p-3">
+                  <div className="mb-2 flex items-center gap-2 px-0.5">
+                    <h2 className="text-sm font-semibold">{heading}</h2>
+                    <span className="text-xs text-ink-faint">{items.length}</span>
+                  </div>
+                  <BookmarkGrid items={items} loading={loading} view="list" onDelete={remove} onToggleFavorite={fav} onEdit={setEditing} />
+                </div>
+              ))}
           </div>
         </div>
-      )}
-
-      <div className="flex gap-2 border-t border-line p-3">
-        <button className="btn-outline flex-1 py-1.5 text-xs" onClick={() => send({ type: 'OPEN_DASHBOARD' })}>
-          <Icon name="grid" size={14} /> Dashboard
-        </button>
-        <button className="btn-outline flex-1 py-1.5 text-xs" onClick={() => browser.runtime.openOptionsPage()}>
-          <Icon name="settings" size={14} /> Settings
-        </button>
       </div>
-    </Shell>
+
+      {editing && (
+        <EditDialog
+          bookmark={editing}
+          collections={c.collections}
+          allTags={tags.map((t) => t.tag)}
+          onClose={() => setEditing(null)}
+          onSaved={(b) => {
+            setItems((p) => p.map((x) => (x.id === b.id ? b : x)));
+            refreshMeta();
+            c.refresh();
+          }}
+        />
+      )}
+      {tour && <Tour steps={POPUP_TOUR} onDone={finishTour} />}
+    </Frame>
   );
 }
 
-function Shell({ children }: { children: React.ReactNode }) {
+function Frame({ children, narrow }: { children: React.ReactNode; narrow?: boolean }) {
   return (
-    <div className="w-[22rem] bg-surface text-ink">
-      <div className="flex items-center gap-2 border-b border-line px-3 py-2.5">
+    <div className={`flex flex-col bg-surface text-ink ${narrow ? 'w-[24rem]' : 'h-[34rem] w-[47rem]'}`}>
+      <div className="flex items-center gap-2 border-b border-line px-3 py-2">
         <span className="grid h-7 w-7 place-items-center rounded-lg bg-brand text-white">
           <Icon name="bookmark" size={16} fill />
         </span>
         <span className="text-sm font-semibold">Keepsake</span>
       </div>
-      {children}
+      <div className="flex-1 overflow-hidden">{children}</div>
     </div>
   );
-}
-
-function Loading() {
-  return <p className="p-6 text-center text-sm text-ink-faint">Loading…</p>;
 }
