@@ -245,7 +245,7 @@ export function SettingsPanel({ compact = false }: { compact?: boolean }) {
               <div className="rounded-lg border border-line bg-surface-sunken p-3">
                 <p className="text-sm font-medium text-ink">Upgrade to Pro</p>
                 <p className="mt-0.5 text-xs text-ink-faint">
-                  Unlimited cloud bookmarks, hosted AI, full Capture Studio, and 25 active watches.
+                  Unlimited cloud bookmarks, full Capture Studio, 25 active watches, and 10 GB storage.
                 </p>
                 <div className="mt-2 flex gap-2">
                   <button className="btn-outline flex-1" onClick={() => upgrade('month')} disabled={billingBusy !== null}>

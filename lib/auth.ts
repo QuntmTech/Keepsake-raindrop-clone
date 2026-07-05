@@ -41,6 +41,20 @@ export async function currentUser(): Promise<AuthUser | null> {
   return (await getBackend()).currentUser();
 }
 
+// Force a fresh read of the signed-in user record from the server (bypassing
+// the background refresh throttle), to catch a plan change made elsewhere —
+// e.g. an upgrade completed on the keepsaketab.com web checkout that never
+// touched the extension. Returns the fresh user, or the cached user on
+// backends without the hook (local mode).
+export async function refreshUserPlan(): Promise<AuthUser | null> {
+  const backend = await getBackend();
+  if (backend.refreshUser) {
+    const fresh = await backend.refreshUser().catch(() => null);
+    if (fresh) return fresh;
+  }
+  return backend.currentUser();
+}
+
 // Subscribe to live auth-record changes (any context) — e.g. a Stripe upgrade
 // picked up by a background refresh — so open UIs can re-read plan/email
 // without a full reload. No-op (never fires) on backends without the hook

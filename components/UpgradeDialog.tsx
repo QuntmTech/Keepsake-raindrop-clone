@@ -1,16 +1,18 @@
 import { Icon } from './Icon';
 
 // Shared paywall dialog — shown wherever a Free-plan limit blocks an action.
-// Messaging LEADS with what Pro actually unlocks (hosted AI, full Capture
-// Studio, more watches) — never with "you hit a cap" as the sales pitch. The
-// cap itself is only mentioned as a footnote for context.
+// Messaging LEADS with what Pro actually unlocks at launch (full Capture
+// Studio, Living Bookmarks, unlimited bookmarks, more storage) — never with
+// "you hit a cap" as the sales pitch. The cap itself is only a footnote.
 //
-// Checkout isn't wired yet (Phase 3): the CTA opens the options page, where
-// the Account section (SettingsPanel) will host the real "Upgrade to Pro"
-// action once Stripe Checkout is connected. This keeps the seam ready without
-// building billing UI ahead of schedule.
+// AI at launch is BRING-YOUR-OWN-KEY only (Anthropic / OpenAI / Google), free
+// on every plan — so AI is never a Pro selling point here. Hosted (no-key) AI
+// is a future feature announced separately; do NOT reference it in paywall copy.
+//
+// The CTA opens the options page, where the Account section (SettingsPanel)
+// hosts the real Stripe "Upgrade to Pro" action.
 
-export type UpgradeReason = 'bookmarks' | 'watches' | 'storage' | 'recording' | 'capture' | 'hosted-ai';
+export type UpgradeReason = 'bookmarks' | 'watches' | 'storage' | 'recording' | 'capture';
 
 interface Copy {
   title: string;
@@ -22,14 +24,14 @@ const COPY: Record<UpgradeReason, Copy> = {
   bookmarks: {
     title: 'Go unlimited with Pro',
     body:
-      'Pro gets you unlimited cloud bookmarks, plus hosted AI (no API key needed), full Capture Studio, ' +
-      'and up to 25 active watches.',
+      'Pro gets you unlimited cloud bookmarks, the full Capture Studio, up to 25 active watches, ' +
+      'and 10 GB of storage.',
     footnote: 'Your Free plan is capped at 200 cloud bookmarks — everything you already have stays put.',
   },
   watches: {
     title: 'Watch more with Pro',
     body:
-      'Pro raises your Living Bookmarks limit to 25 active watches, plus hosted AI and full Capture Studio.',
+      'Pro raises your Living Bookmarks limit to 25 active watches, plus unlimited bookmarks and the full Capture Studio.',
     footnote: 'Free includes 3 active watches at a time.',
   },
   storage: {
@@ -47,14 +49,8 @@ const COPY: Record<UpgradeReason, Copy> = {
     title: 'Unlock full Capture Studio',
     body:
       'Pro unlocks full-page capture, the annotation/crop editor, and permanent MHTML archive copies of any page ' +
-      '— plus hosted AI and more watches.',
+      '— plus 25 active watches and unlimited bookmarks.',
     footnote: 'Free includes single-area screenshots.',
-  },
-  'hosted-ai': {
-    title: 'Turn on hosted AI',
-    body:
-      'Pro includes hosted AI — auto-tagging, summaries, auto-filing, and Ask Your Library with no API key required. ' +
-      'Bring-your-own-key AI stays free on every plan.',
   },
 };
 
