@@ -702,7 +702,20 @@ async function saveTab(tab: chrome.tabs.Tab, collection?: string) {
   try {
     saved = await saveBookmark(input);
     await flash('✓', '#16a34a');
-  } catch {
+  } catch (e) {
+    // The server enforces the plan cap authoritatively and rejects an over-cap
+    // save with 402 — that's a PERMANENT rejection, not an offline blip, so it
+    // must NOT go on the offline queue (it would retry forever). Surface the
+    // upgrade path instead. Everything else (offline / 5xx) queues as before.
+    if ((e as { status?: number })?.status === 402) {
+      await flash('★', '#f59e0b');
+      notifyUpgrade(
+        'ks-upgrade-bookmarks-',
+        "You've reached your Free plan's bookmark limit",
+        'Upgrade to Pro for unlimited cloud bookmarks, hosted AI, and more.',
+      );
+      return;
+    }
     await enqueueSave(input);
     await flash('…', '#f59e0b'); // queued offline
     return;

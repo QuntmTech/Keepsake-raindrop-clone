@@ -32,17 +32,24 @@ export async function flushQueue(): Promise<number> {
 
   const remaining: QueuedSave[] = [];
   let saved = 0;
+  let dropped = 0;
   for (const item of queue) {
     try {
       const { queuedAt, ...input } = item;
       void queuedAt;
       await saveBookmark(input);
       saved++;
-    } catch {
-      remaining.push(item);
+    } catch (e) {
+      const status = (e as { status?: number })?.status ?? 0;
+      // A permanent 4xx rejection (e.g. 402 over the plan cap, 403 forbidden,
+      // 400 invalid) can NEVER succeed on retry — drop it instead of poisoning
+      // the queue forever. Transient failures (offline / 5xx / 429) stay queued.
+      if (status >= 400 && status < 500 && status !== 429) dropped++;
+      else remaining.push(item);
     }
   }
   await queueStore.setValue(remaining);
+  if (dropped) console.warn(`[keepsake] dropped ${dropped} queued save(s) permanently rejected by the server (e.g. over plan cap)`);
   return saved;
 }
 

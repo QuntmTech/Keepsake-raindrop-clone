@@ -188,7 +188,13 @@ export function SaveForm({ onSaved }: { onSaved?: () => void }) {
         // A user-picked collection is respected; otherwise AI files it.
         const [tab] = await browser.tabs.query({ active: true, currentWindow: true }).catch(() => [null] as any);
         browser.runtime.sendMessage({ type: 'KS_AUTOFILE', id: bm.id, tabId: tab?.id }).catch(() => {});
-      } catch {
+      } catch (e) {
+        // A 402 is the server's authoritative plan-cap rejection (permanent) —
+        // show the paywall rather than queuing it offline to retry forever.
+        if ((e as { status?: number })?.status === 402) {
+          setShowUpgrade(true);
+          return; // finally still resets busy; skip the "saved" UI below
+        }
         // Offline / server down — keep it so nothing is lost.
         await enqueueSave(input);
         toast('Offline — queued, will sync later', 'info');
