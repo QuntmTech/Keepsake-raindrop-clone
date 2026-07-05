@@ -95,6 +95,16 @@ export interface Backend {
   // Optional: read the data-driven plan/limits config (PocketBase `plans`
   // collection). Absent on backends without it (local mode).
   fetchPlans?(): Promise<PlanConfigRow[]>;
+  // Optional: notify when the signed-in user's auth record changes in ANY
+  // context (e.g. a background refresh picks up a Stripe-upgraded plan) so
+  // open UIs can re-read plan/email live instead of only at initial load.
+  watchAuthChange?(cb: () => void): () => void;
+  // Optional Stripe billing (PocketBase only — see lib/config.ts route
+  // constants + /docs/POCKETBASE_BUILD_PROMPT.md for the server contract).
+  // Both return a Stripe-hosted URL to open in a new tab; absent entirely on
+  // backends without billing (local mode).
+  createCheckoutSession?(plan: 'pro', interval: 'month' | 'year'): Promise<{ url: string }>;
+  createPortalSession?(): Promise<{ url: string }>;
   login(email: string, password: string): Promise<AuthUser>;
   signup(email: string, password: string, name?: string): Promise<AuthUser>;
   // Optional: email a password-reset link (PocketBase). Local mode has none.

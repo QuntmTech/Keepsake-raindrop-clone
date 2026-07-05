@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { loadAuth, isLoggedIn, currentUser, login as doLogin, signup as doSignup, logout as doLogout } from '@/lib/auth';
+import { loadAuth, isLoggedIn, currentUser, watchAuth, login as doLogin, signup as doSignup, logout as doLogout } from '@/lib/auth';
 import { mark } from '@/lib/boottrace';
 import { clearSnapshot } from '@/lib/cache';
 import { type Plan } from '@/lib/types';
@@ -23,6 +23,20 @@ export function useAuth() {
       setReady(true);
       mark('ready');
     })();
+  }, []);
+
+  // Re-read plan/email whenever the auth record changes in ANY context — e.g.
+  // a completed Stripe upgrade lands via the webhook, and a background
+  // refreshUser() call (Phase 3) picks it up and mirrors it here live, without
+  // requiring this surface to reload.
+  useEffect(() => {
+    return watchAuth(() => {
+      isLoggedIn().then(setAuthed);
+      currentUser().then((u) => {
+        setEmail(u?.email ?? null);
+        setPlan(u?.plan ?? 'free');
+      });
+    });
   }, []);
 
   async function login(em: string, password: string) {

@@ -40,3 +40,20 @@ export async function isLoggedIn(): Promise<boolean> {
 export async function currentUser(): Promise<AuthUser | null> {
   return (await getBackend()).currentUser();
 }
+
+// Subscribe to live auth-record changes (any context) — e.g. a Stripe upgrade
+// picked up by a background refresh — so open UIs can re-read plan/email
+// without a full reload. No-op (never fires) on backends without the hook
+// (local mode). Returns an unsubscribe function.
+export function watchAuth(cb: () => void): () => void {
+  let unsub = () => {};
+  let cancelled = false;
+  getBackend().then((b) => {
+    if (cancelled) return;
+    unsub = b.watchAuthChange?.(cb) ?? (() => {});
+  });
+  return () => {
+    cancelled = true;
+    unsub();
+  };
+}

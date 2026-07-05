@@ -9,7 +9,7 @@ import {
   type VaultStats,
 } from '../types';
 import { faviconFor, inferType, parseTags, safeDomain, SORT_FILTER, escFilter } from '../util';
-import { HOSTED_PB_URL } from '../config';
+import { HOSTED_PB_URL, PB_CHECKOUT_ROUTE, PB_PORTAL_ROUTE } from '../config';
 import { mark } from '../boottrace';
 import {
   type AuthUser,
@@ -214,6 +214,28 @@ export class PocketBaseBackend implements Backend {
     } catch {
       return [];
     }
+  }
+
+  // Cross-context auth-change notifications: authMirror already gets written
+  // whenever the auth record changes (onChange handler in init()) and watched
+  // by every other open context (also in init()) to keep this.pb.authStore in
+  // sync. This just re-exposes THAT existing signal to callers (useAuth())
+  // that want to re-render on a live plan change — e.g. after a Stripe
+  // upgrade lands via the webhook and refreshUser() picks it up.
+  watchAuthChange(cb: () => void): () => void {
+    return authMirror.watch(() => cb());
+  }
+
+  // Stripe billing (Phase 3 client -> PocketBase custom routes). Both simply
+  // relay to the backend and return its Stripe-hosted URL; the backend picks
+  // test/live secret key + price ids server-side (stripe_mode), and the
+  // webhook — never this response — is the source of truth for plan state.
+  async createCheckoutSession(plan: 'pro', interval: 'month' | 'year'): Promise<{ url: string }> {
+    return this.req(() => this.pb.send(PB_CHECKOUT_ROUTE, { method: 'POST', body: { plan, interval } }), 1);
+  }
+
+  async createPortalSession(): Promise<{ url: string }> {
+    return this.req(() => this.pb.send(PB_PORTAL_ROUTE, { method: 'POST' }), 1);
   }
 
   private toUser(): AuthUser | null {

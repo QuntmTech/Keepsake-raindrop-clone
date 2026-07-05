@@ -15,6 +15,7 @@ import { getPbUrl, setPbUrl } from '@/lib/backend/pocketbase';
 import { clearLocalData } from '@/lib/backend/local';
 import { detectAndParse, importWithAi, exportJson } from '@/lib/importer';
 import { searchBookmarks, deleteBookmark } from '@/lib/bookmarks';
+import { send } from '@/lib/messaging';
 
 // All of Keepsake's settings in one component, used by the full-page options
 // screen AND inside the popup / side panel (compact mode) — so you never have
@@ -33,6 +34,7 @@ export function SettingsPanel({ compact = false }: { compact?: boolean }) {
   const [testing, setTesting] = useState(false);
   const [importing, setImporting] = useState<string | null>(null);
   const [deduping, setDeduping] = useState(false);
+  const [billingBusy, setBillingBusy] = useState<'month' | 'year' | 'portal' | null>(null);
   const fileRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
@@ -180,6 +182,35 @@ export function SettingsPanel({ compact = false }: { compact?: boolean }) {
     setTimeout(() => location.reload(), 600);
   }
 
+  // The background owns the actual Checkout/Portal tab (see entrypoints/
+  // background.ts) so it survives this popup closing — Chrome unloads a
+  // popup the instant it loses focus, which window.open() from here would
+  // trigger immediately. This only relays the click.
+  async function upgrade(interval: 'month' | 'year') {
+    setBillingBusy(interval);
+    try {
+      const r = await send<{ ok: boolean; error?: string }>({ type: 'KS_START_CHECKOUT', interval });
+      if (!r?.ok) throw new Error(r?.error || 'Could not start checkout');
+      toast('Opening checkout…', 'info');
+    } catch (e) {
+      toast((e as Error)?.message || 'Could not start checkout', 'error');
+    } finally {
+      setBillingBusy(null);
+    }
+  }
+
+  async function manageBilling() {
+    setBillingBusy('portal');
+    try {
+      const r = await send<{ ok: boolean; error?: string }>({ type: 'KS_OPEN_BILLING_PORTAL' });
+      if (!r?.ok) throw new Error(r?.error || 'Could not open the billing portal');
+    } catch (e) {
+      toast((e as Error)?.message || 'Could not open the billing portal', 'error');
+    } finally {
+      setBillingBusy(null);
+    }
+  }
+
   if (!ready) return <div className="p-8 text-center text-sm text-ink-faint">Loading…</div>;
 
   return (
@@ -195,17 +226,42 @@ export function SettingsPanel({ compact = false }: { compact?: boolean }) {
 
       <Section title="Account" compact={compact}>
         {authed ? (
-          <div className="flex items-center justify-between gap-2">
-            <div className="flex min-w-0 items-center gap-2 text-sm text-ink-soft">
-              <span className="grid h-9 w-9 shrink-0 place-items-center rounded-full bg-brand/10 font-semibold uppercase text-brand">
-                {email?.[0] ?? '?'}
-              </span>
-              <span className="truncate">{email}</span>
-              <PlanBadge plan={plan} />
+          <div className="flex flex-col gap-3">
+            <div className="flex items-center justify-between gap-2">
+              <div className="flex min-w-0 items-center gap-2 text-sm text-ink-soft">
+                <span className="grid h-9 w-9 shrink-0 place-items-center rounded-full bg-brand/10 font-semibold uppercase text-brand">
+                  {email?.[0] ?? '?'}
+                </span>
+                <span className="truncate">{email}</span>
+                <PlanBadge plan={plan} />
+              </div>
+              <button className="btn-outline shrink-0" onClick={logout}>
+                <Icon name="logout" size={15} /> Sign out
+              </button>
             </div>
-            <button className="btn-outline shrink-0" onClick={logout}>
-              <Icon name="logout" size={15} /> Sign out
-            </button>
+
+            {HOSTED && plan === 'free' && (
+              <div className="rounded-lg border border-line bg-surface-sunken p-3">
+                <p className="text-sm font-medium text-ink">Upgrade to Pro</p>
+                <p className="mt-0.5 text-xs text-ink-faint">
+                  Unlimited cloud bookmarks, hosted AI, full Capture Studio, and 25 active watches.
+                </p>
+                <div className="mt-2 flex gap-2">
+                  <button className="btn-outline flex-1" onClick={() => upgrade('month')} disabled={billingBusy !== null}>
+                    {billingBusy === 'month' ? 'Opening…' : '$6.99/mo'}
+                  </button>
+                  <button className="btn-primary flex-1" onClick={() => upgrade('year')} disabled={billingBusy !== null}>
+                    {billingBusy === 'year' ? 'Opening…' : '$49/yr — 7-day free trial'}
+                  </button>
+                </div>
+              </div>
+            )}
+
+            {HOSTED && plan === 'pro' && (
+              <button className="btn-outline" onClick={manageBilling} disabled={billingBusy !== null}>
+                {billingBusy === 'portal' ? 'Opening…' : 'Manage billing'}
+              </button>
+            )}
           </div>
         ) : (
           <LoginForm onLogin={login} onSignup={signup} compact />

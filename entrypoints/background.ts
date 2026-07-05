@@ -23,7 +23,7 @@ import { ensureOffscreen } from '@/lib/embedder';
 import { checkOnVisit, scheduleWatchAlarm, startWatch, stopWatch, watchTick, WATCH_ALARM, type WatchConfig } from '@/lib/watch';
 import { onboardingStage } from '@/lib/onboarding';
 import { applyOverlayWrite, applyOverlayForget, syncHomeOverlay } from '@/lib/home';
-import { canSaveBookmark, storageRemaining } from '@/lib/entitlements';
+import { canSaveBookmark, storageRemaining, refreshEntitlements } from '@/lib/entitlements';
 import { storage } from 'wxt/utils/storage';
 
 // The background "service worker" is event-driven and can be killed at any time by Chrome.
@@ -162,6 +162,15 @@ export default defineBackground(() => {
       if (cache[tabId]) {
         delete cache[tabId];
         recallCache.setValue(cache);
+      }
+    });
+    // Stripe Checkout/Portal tab closed — re-read entitlements. The redirect
+    // itself proves nothing (the webhook is the source of truth), so this is
+    // just "a good moment to check," backstopped by the poll below.
+    pendingCheckoutTab.getValue().then((pending) => {
+      if (pending === tabId) {
+        pendingCheckoutTab.setValue(null);
+        pollEntitlementsAfterCheckout();
       }
     });
   });
@@ -384,8 +393,54 @@ async function handleMessage(msg: Message): Promise<unknown> {
       return { ok: true };
     }
 
+    // ---- Stripe billing (Phase 3) ----
+    // The background opens the tab (not the caller) so checkout/portal
+    // survives an MV3 popup unloading the instant it loses focus.
+    case 'KS_START_CHECKOUT': {
+      const backend = await getBackend();
+      if (!backend.createCheckoutSession) return { ok: false, error: 'Billing is not available in local mode' };
+      try {
+        const { url } = await backend.createCheckoutSession('pro', msg.interval);
+        if (!url) return { ok: false, error: 'Checkout did not return a URL' };
+        const tab = await browser.tabs.create({ url });
+        if (tab.id != null) await pendingCheckoutTab.setValue(tab.id);
+        return { ok: true };
+      } catch (e) {
+        return { ok: false, error: (e as Error)?.message || 'Could not start checkout' };
+      }
+    }
+
+    case 'KS_OPEN_BILLING_PORTAL': {
+      const backend = await getBackend();
+      if (!backend.createPortalSession) return { ok: false, error: 'Billing is not available in local mode' };
+      try {
+        const { url } = await backend.createPortalSession();
+        if (!url) return { ok: false, error: 'Billing portal did not return a URL' };
+        await browser.tabs.create({ url });
+        return { ok: true };
+      } catch (e) {
+        return { ok: false, error: (e as Error)?.message || 'Could not open the billing portal' };
+      }
+    }
+
     default:
       return { ok: false, error: 'unknown message' };
+  }
+}
+
+// Tracks the open Checkout/Portal tab so onRemoved (below) knows when to
+// re-check entitlements. Session-scoped: irrelevant across a full restart.
+const pendingCheckoutTab = storage.defineItem<number | null>('session:pending_checkout_tab', { fallback: null });
+
+// The Stripe redirect back to success/cancel is never trusted alone — the
+// webhook is the source of truth and may lag behind the tab closing. Poll a
+// few times with backoff instead of a single check; refreshEntitlements()
+// forces re-reads of both the user record (authRefresh) and the plans config,
+// and mirrors any new plan to every open surface via authMirror.
+async function pollEntitlementsAfterCheckout(): Promise<void> {
+  for (const delay of [0, 4000, 10000]) {
+    if (delay) await new Promise((r) => setTimeout(r, delay));
+    await refreshEntitlements().catch(() => {});
   }
 }
 
