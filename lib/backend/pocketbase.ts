@@ -15,6 +15,7 @@ import {
   type AuthUser,
   type Backend,
   type CreateHighlightInput,
+  type PlanConfigRow,
   type SaveBookmarkInput,
   type SearchOpts,
 } from './types';
@@ -170,6 +171,48 @@ export class PocketBaseBackend implements Backend {
         // Offline / server hiccup: keep the session, allow a retry soon.
         await lastRefreshStore.setValue(Date.now() - REFRESH_EVERY + RETRY_AFTER);
       }
+    }
+  }
+
+  // Force an immediate session refresh (bypasses the 6h throttle in
+  // renewAuthToken) so a plan change — e.g. a completed Stripe upgrade written
+  // by the webhook — is reflected in the client without a re-login. onChange
+  // mirrors the fresh record (incl. plan) to every context.
+  async refreshUser(): Promise<AuthUser | null> {
+    if (!this.pb.authStore.isValid) return null;
+    try {
+      await this.pb.collection('users').authRefresh();
+    } catch (e) {
+      const status = (e as { status?: number })?.status;
+      if (status === 401 || status === 403) {
+        this.pb.authStore.clear();
+        await authMirror.setValue(null);
+      }
+      return null; // keep the current session on a transient failure
+    }
+    return this.toUser();
+  }
+
+  // Data-driven plan/limits config. Returns [] if the collection doesn't exist
+  // yet (backend built later) or is unreachable — the client then falls back to
+  // its bundled defaults. Read-only; no auth beyond what the collection's rule
+  // requires (the handoff spec makes `plans` publicly/authed-readable).
+  async fetchPlans(): Promise<PlanConfigRow[]> {
+    try {
+      const rows = await this.req(() => this.pb.collection('plans').getFullList({ sort: 'key' }));
+      return rows.map((r: any) => ({
+        key: String(r.key ?? ''),
+        max_bookmarks: r.max_bookmarks ?? null,
+        max_watches: r.max_watches ?? null,
+        max_storage_bytes: r.max_storage_bytes ?? null,
+        hosted_ai: Boolean(r.hosted_ai),
+        ai_credit_allowance: r.ai_credit_allowance ?? null,
+        capture_tier: String(r.capture_tier ?? 'basic'),
+        stripe_price_month: String(r.stripe_price_month ?? ''),
+        stripe_price_year: String(r.stripe_price_year ?? ''),
+      }));
+    } catch {
+      return [];
     }
   }
 

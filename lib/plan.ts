@@ -1,9 +1,11 @@
 import { type Plan } from './types';
+import { limitsFor } from './entitlements';
 
-// Central definition of what each account tier can do. The extension reads the
-// signed-in user's `plan` and gates against this. NOTE: limits are defined here
-// but NOT hard-enforced yet — enforcement + Stripe billing is the next step.
-// `owner` (you) and `pro` (paid) are unlimited.
+// Thin, back-compatible façade over the data-driven entitlements module
+// (lib/entitlements.ts). This file used to hardcode the limits (200 bookmarks,
+// ai on/off); those literals now live ONLY in lib/entitlements.ts's
+// DEFAULT_PLANS and, authoritatively, in the PocketBase `plans` config. Nothing
+// here — or in any component — should carry a magic limit number.
 
 export const PLAN_LABEL: Record<Plan, string> = {
   free: 'Free',
@@ -11,24 +13,23 @@ export const PLAN_LABEL: Record<Plan, string> = {
   owner: 'Owner',
 };
 
-export interface Entitlements {
-  unlimited: boolean;
-  maxBookmarks: number | null; // null = unlimited
-  ai: boolean; // access to hosted AI features (when AI is proxied server-side)
-}
-
-export function entitlements(plan: Plan = 'free'): Entitlements {
-  if (plan === 'owner' || plan === 'pro') {
-    return { unlimited: true, maxBookmarks: null, ai: true };
-  }
-  // Free tier defaults (tune when billing ships).
-  return { unlimited: false, maxBookmarks: 200, ai: false };
+export function planLabel(plan?: Plan): string {
+  return PLAN_LABEL[plan ?? 'free'];
 }
 
 export function isUnlimited(plan?: Plan): boolean {
-  return plan === 'owner' || plan === 'pro';
+  return limitsFor(plan ?? 'free').maxBookmarks == null;
 }
 
-export function planLabel(plan?: Plan): string {
-  return PLAN_LABEL[plan ?? 'free'];
+// Back-compat shape for older callers. Derived from the data-driven limits, not
+// hardcoded. Prefer importing from lib/entitlements.ts directly in new code.
+export interface Entitlements {
+  unlimited: boolean;
+  maxBookmarks: number | null;
+  ai: boolean;
+}
+
+export function entitlements(plan: Plan = 'free'): Entitlements {
+  const l = limitsFor(plan);
+  return { unlimited: l.maxBookmarks == null, maxBookmarks: l.maxBookmarks, ai: l.hostedAi };
 }

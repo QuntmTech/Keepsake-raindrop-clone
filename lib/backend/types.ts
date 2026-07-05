@@ -63,6 +63,21 @@ export interface AuthUser {
   plan: Plan;
 }
 
+// Row shape of the PocketBase `plans` config collection (snake_case wire
+// fields). The client reads these to drive entitlements data-drivenly; see
+// lib/entitlements.ts. Empty/absent numeric cap => unlimited.
+export interface PlanConfigRow {
+  key: string; // 'free' | 'pro'
+  max_bookmarks: number | null;
+  max_watches: number | null;
+  max_storage_bytes: number | null;
+  hosted_ai: boolean;
+  ai_credit_allowance: number | null;
+  capture_tier: string; // 'basic' | 'full'
+  stripe_price_month: string;
+  stripe_price_year: string;
+}
+
 // Every data backend (local chrome.storage, PocketBase, …) implements this.
 // The UI talks only to this interface, so swapping backends is a config flip.
 export interface Backend {
@@ -73,6 +88,13 @@ export interface Backend {
   // Optional: renew the auth token so active sessions never hard-expire
   // (PocketBase). Local mode has no tokens and skips it.
   renewAuthToken?(): Promise<void>;
+  // Optional: force an immediate re-read of the signed-in user record
+  // (bypassing any refresh throttle) so a plan change — e.g. a completed Stripe
+  // upgrade — is picked up right away. Returns the fresh user, or null.
+  refreshUser?(): Promise<AuthUser | null>;
+  // Optional: read the data-driven plan/limits config (PocketBase `plans`
+  // collection). Absent on backends without it (local mode).
+  fetchPlans?(): Promise<PlanConfigRow[]>;
   login(email: string, password: string): Promise<AuthUser>;
   signup(email: string, password: string, name?: string): Promise<AuthUser>;
   // Optional: email a password-reset link (PocketBase). Local mode has none.
