@@ -249,12 +249,30 @@ export interface StorageState {
   estimated: boolean; // true until PB reports authoritative bytes
 }
 
-// Storage headroom. Authoritative bytes come from PB later; callers may pass a
-// local estimate meanwhile (estimated:true flags that it's not server-verified).
+// Local, NON-authoritative storage estimate: sum of every capture blob's size
+// in the IndexedDB sidecar (screenshots/recordings/MHTML snapshots — the
+// large binary data behind a save). This is the best signal the client can
+// compute on its own; it does NOT see bytes already synced from other devices
+// or the server's actual file storage, so it always undercounts somewhat.
+// Once PocketBase exposes an authoritative `usage.storage_bytes` figure, pass
+// it into storageRemaining() explicitly and this estimate is bypassed.
+export async function estimatedStorageBytes(): Promise<number> {
+  try {
+    const { db } = await import('./save');
+    const blobs = await db.blobs.toArray();
+    return blobs.reduce((sum, b) => sum + (b.size || 0), 0);
+  } catch {
+    return 0; // sidecar unavailable (content-script context, etc.) — assume no usage
+  }
+}
+
+// Storage headroom. Pass `usedBytes` once PocketBase reports authoritative
+// bytes; until then this falls back to the local blob-size estimate above
+// (estimated:true flags that it's not server-verified).
 export async function storageRemaining(usedBytes?: number): Promise<StorageState> {
   const { limits } = await getEntitlements();
-  const used = Math.max(0, usedBytes ?? 0);
   const estimated = usedBytes == null;
+  const used = Math.max(0, usedBytes ?? (await estimatedStorageBytes()));
   if (limits.maxStorageBytes == null) return { used, limit: null, remaining: null, unlimited: true, estimated };
   return {
     used,

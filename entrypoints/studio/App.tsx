@@ -80,7 +80,7 @@ export default function App() {
       if (saveId) {
         await putBlob(saveId, item.kind, blob);
       } else {
-        saveId = await saveCaptureToLibrary({
+        const result = await saveCaptureToLibrary({
           kind: item.kind,
           blob,
           pageUrl: item.pageUrl,
@@ -88,6 +88,10 @@ export default function App() {
           filename: `${base}${ext}`,
           durationMs: item.durationMs,
         });
+        saveId = result.saveId;
+        if (item.kind === 'recording' && !result.cloudSaved) {
+          toast('Saved on this device — upgrade to Pro to sync recordings to your library', 'info');
+        }
       }
       // Persist the edited bytes to the studio row (so reopening this tab shows
       // the latest version) — but do NOT swap the live editor's source blob,

@@ -1,6 +1,7 @@
 import { getAiSettings } from './ai';
 import { createCollection, listCollections, updateBookmark } from './bookmarks';
 import { embedTexts } from './embedder';
+import { captureTier } from './entitlements';
 import { builtinSummarize, extractJson, llmAvailable, llmComplete } from './llm';
 import { extractPageMeta, type PageMeta } from './metadata';
 import { canonicalUrl, db, getSave, patchSave, putBlob, findSaveByUrl, type Save } from './save';
@@ -59,11 +60,14 @@ async function extractContent(tabId: number): Promise<PageMeta | null> {
 }
 
 // Full-fidelity MHTML snapshot — only when the user granted the optional
-// pageCapture permission (Settings → Archive copies).
+// pageCapture permission (Settings → Archive copies) AND is on the 'full'
+// capture tier (Pro). Permanent archive copies are a Pro perk; Free users who
+// enabled the permission simply don't get snapshots until they upgrade.
 async function snapshotTab(tabId: number, saveId: string): Promise<void> {
   try {
     const granted = await browser.permissions.contains({ permissions: ['pageCapture'] });
     if (!granted || !browser.pageCapture) return;
+    if ((await captureTier()) !== 'full') return;
     // Never snapshot a tab that navigated away from the saved URL.
     const [tab, save] = await Promise.all([browser.tabs.get(tabId).catch(() => null), getSave(saveId)]);
     if (!tab?.url || !save || canonicalUrl(tab.url) !== save.canonicalUrl) return;

@@ -1,8 +1,10 @@
 import { useEffect, useState } from 'react';
 import { getSave, type Save, type WatchFrequency, type WatchMode } from '@/lib/save';
+import { canCreateWatch } from '@/lib/entitlements';
 import { useEscape } from '@/hooks/useEscape';
 import { Icon } from './Icon';
 import { useToast } from './Toast';
+import { UpgradeDialog } from './UpgradeDialog';
 
 // "Watch this page" (Living Bookmarks). Configure price / content /
 // availability monitoring for one Save; shows price history + alert log.
@@ -42,6 +44,7 @@ export function WatchDialog({ saveId, onClose }: { saveId: string; onClose: () =
   const [ruleValue, setRuleValue] = useState('');
   const [busy, setBusy] = useState(false);
   const [picking, setPicking] = useState(false);
+  const [showUpgrade, setShowUpgrade] = useState(false);
   useEscape(onClose);
 
   useEffect(() => {
@@ -79,6 +82,15 @@ export function WatchDialog({ saveId, onClose }: { saveId: string; onClose: () =
   }
 
   async function start() {
+    // Only a NEW watch counts against the cap — updating an already-active
+    // watch's settings must never be blocked.
+    if (!save?.monitoring.enabled) {
+      const cap = await canCreateWatch();
+      if (!cap.allowed) {
+        setShowUpgrade(true);
+        return;
+      }
+    }
     setBusy(true);
     try {
       await browser.runtime.sendMessage({
@@ -233,6 +245,7 @@ export function WatchDialog({ saveId, onClose }: { saveId: string; onClose: () =
           </button>
         </div>
       </div>
+      {showUpgrade && <UpgradeDialog reason="watches" onClose={() => setShowUpgrade(false)} />}
     </div>
   );
 }

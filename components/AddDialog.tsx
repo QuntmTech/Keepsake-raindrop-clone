@@ -1,11 +1,13 @@
 import { useState } from 'react';
 import { type Collection } from '@/lib/types';
 import { saveBookmark, safeDomain, inferType, faviconFor } from '@/lib/bookmarks';
+import { canSaveBookmark } from '@/lib/entitlements';
 import { useEscape } from '@/hooks/useEscape';
 import { TagInput } from './TagInput';
 import { Icon } from './Icon';
 import { IconPicker } from './IconPicker';
 import { useToast } from './Toast';
+import { UpgradeDialog } from './UpgradeDialog';
 
 interface Props {
   collections: Collection[];
@@ -31,18 +33,28 @@ export function AddDialog({ collections, allTags, defaultCollection, favorite, p
   const [collection, setCollection] = useState(defaultCollection ?? '');
   const [alsoLibrary, setAlsoLibrary] = useState(false); // Home add → also keep in library?
   const [busy, setBusy] = useState(false);
+  const [showUpgrade, setShowUpgrade] = useState(false);
   useEscape(onClose);
 
   async function add() {
     let clean = url.trim();
     if (!clean) return;
     if (!/^https?:\/\//i.test(clean)) clean = `https://${clean}`;
+    // From Home, a link is a launcher tile (homeOnly) unless the user opts to
+    // also keep it in the library.
+    const homeOnly = Boolean(homeContext) && !alsoLibrary;
+    // Home launcher tiles never count toward the cloud bookmark cap — only
+    // gate when this add will land a real library bookmark.
+    if (!homeOnly) {
+      const cap = await canSaveBookmark();
+      if (!cap.allowed) {
+        setShowUpgrade(true);
+        return;
+      }
+    }
     setBusy(true);
     try {
       const domain = safeDomain(clean);
-      // From Home, a link is a launcher tile (homeOnly) unless the user opts to
-      // also keep it in the library.
-      const homeOnly = Boolean(homeContext) && !alsoLibrary;
       await saveBookmark({
         url: clean,
         title: title.trim() || domain || clean,
@@ -122,6 +134,7 @@ export function AddDialog({ collections, allTags, defaultCollection, favorite, p
           </button>
         </div>
       </div>
+      {showUpgrade && <UpgradeDialog reason="bookmarks" onClose={() => setShowUpgrade(false)} />}
     </div>
   );
 }

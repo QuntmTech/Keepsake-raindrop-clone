@@ -12,11 +12,13 @@ import { enqueueSave } from '@/lib/queue';
 import { send, dataUrlToBlob, type ScreenshotResult, type MetaResult } from '@/lib/messaging';
 import { getSettings } from '@/lib/settings';
 import { aiAvailable, getAiSettings, suggestTags, summarize, type PageContext } from '@/lib/ai';
+import { canSaveBookmark, storageRemaining } from '@/lib/entitlements';
 import { type Collection } from '@/lib/types';
 import { type PageMeta } from '@/lib/metadata';
 import { TagInput } from './TagInput';
 import { Icon } from './Icon';
 import { useToast } from './Toast';
+import { UpgradeDialog } from './UpgradeDialog';
 
 // Reads the active tab, enriches it (metadata + optional AI tags/summary),
 // lets the user tweak, and saves to PocketBase — queueing offline if needed.
@@ -39,6 +41,7 @@ export function SaveForm({ onSaved }: { onSaved?: () => void }) {
   const [existing, setExisting] = useState(false);
   const [creatingFolder, setCreatingFolder] = useState(false);
   const [newFolder, setNewFolder] = useState('');
+  const [showUpgrade, setShowUpgrade] = useState(false);
 
   async function createFolder() {
     const name = newFolder.trim();
@@ -131,16 +134,31 @@ export function SaveForm({ onSaved }: { onSaved?: () => void }) {
 
   async function save() {
     if (!url) return;
+    // Cloud bookmark cap (Free) — a guardrail; PocketBase is the real enforcer.
+    // Re-saving an already-existing bookmark isn't blocked (not a new one).
+    if (!existing) {
+      const cap = await canSaveBookmark();
+      if (!cap.allowed) {
+        setShowUpgrade(true);
+        return;
+      }
+    }
     setBusy(true);
     try {
       const settings = await getSettings();
       let screenshotBlob: Blob | undefined;
       if (settings.enableAutoScreenshot) {
-        try {
-          const res = await send<ScreenshotResult>({ type: 'CAPTURE_SCREENSHOT' });
-          if (res?.dataUrl) screenshotBlob = dataUrlToBlob(res.dataUrl);
-        } catch {
-          /* capture failed, save without preview */
+        // Storage guardrail: skip only the preview image when tight on the
+        // estimated cloud storage cap — the save itself always proceeds.
+        const storageState = await storageRemaining();
+        const roomy = storageState.unlimited || storageState.remaining === null || storageState.remaining > 0;
+        if (roomy) {
+          try {
+            const res = await send<ScreenshotResult>({ type: 'CAPTURE_SCREENSHOT' });
+            if (res?.dataUrl) screenshotBlob = dataUrlToBlob(res.dataUrl);
+          } catch {
+            /* capture failed, save without preview */
+          }
         }
       }
 
@@ -330,6 +348,7 @@ export function SaveForm({ onSaved }: { onSaved?: () => void }) {
       {!savable && url !== '' && (
         <p className="text-center text-xs text-ink-faint">This page can’t be saved (not a web URL).</p>
       )}
+      {showUpgrade && <UpgradeDialog reason="bookmarks" onClose={() => setShowUpgrade(false)} />}
     </div>
   );
 }

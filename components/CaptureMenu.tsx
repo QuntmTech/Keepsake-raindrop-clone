@@ -1,8 +1,10 @@
 import { useEffect, useRef, useState } from 'react';
 import { send } from '@/lib/messaging';
 import { recordingStateStore, type RecordingState, type RecordMode, IDLE_RECORDING_STATE } from '@/lib/capture';
+import { captureTier } from '@/lib/entitlements';
 import { Icon } from './Icon';
 import { useToast } from './Toast';
+import { UpgradeDialog } from './UpgradeDialog';
 
 // Capture dropdown (screenshots + screen recording), shown in the popup and on
 // Home. The heavy lifting happens in the background worker + offscreen
@@ -14,6 +16,7 @@ export function CaptureMenu({ buttonClass = 'btn-ghost px-2.5 text-sm' }: { butt
   const [systemAudio, setSystemAudio] = useState(true);
   const [rec, setRec] = useState<RecordingState>(IDLE_RECORDING_STATE);
   const [elapsed, setElapsed] = useState('');
+  const [showUpgrade, setShowUpgrade] = useState(false);
   const busyRef = useRef(false);
 
   // Live recording state: initial fetch (verified against the offscreen doc)
@@ -59,6 +62,13 @@ export function CaptureMenu({ buttonClass = 'btn-ghost px-2.5 text-sm' }: { butt
 
   const shotFull = () =>
     run(async () => {
+      // Full-page capture is a Pro perk (full Capture Studio tier); Free stays
+      // on the basic single-area screenshot above.
+      if ((await captureTier()) !== 'full') {
+        setOpen(false);
+        setShowUpgrade(true);
+        return;
+      }
       setOpen(false);
       const r = await send<{ ok: boolean; error?: string }>({ type: 'KS_CAPTURE_FULL' });
       if (!r?.ok) throw new Error(r?.error || 'Could not capture');
@@ -148,6 +158,7 @@ export function CaptureMenu({ buttonClass = 'btn-ghost px-2.5 text-sm' }: { butt
           </div>
         </>
       )}
+      {showUpgrade && <UpgradeDialog reason="capture" onClose={() => setShowUpgrade(false)} />}
     </div>
   );
 }

@@ -23,6 +23,7 @@ import { ensureOffscreen } from '@/lib/embedder';
 import { checkOnVisit, scheduleWatchAlarm, startWatch, stopWatch, watchTick, WATCH_ALARM, type WatchConfig } from '@/lib/watch';
 import { onboardingStage } from '@/lib/onboarding';
 import { applyOverlayWrite, applyOverlayForget, syncHomeOverlay } from '@/lib/home';
+import { canSaveBookmark, storageRemaining } from '@/lib/entitlements';
 import { storage } from 'wxt/utils/storage';
 
 // The background "service worker" is event-driven and can be killed at any time by Chrome.
@@ -84,6 +85,14 @@ export default defineBackground(() => {
       const backend = await getBackend().catch(() => null);
       await backend?.renewAuthToken?.().catch(() => {});
     }
+  });
+
+  // Plan-limit notifications (buttons: "See Pro plans") — one action, any
+  // button index opens the options page where upgrading will live (Phase 3).
+  browser.notifications?.onButtonClicked.addListener(async (notifId) => {
+    if (!notifId.startsWith('ks-upgrade-')) return;
+    await browser.runtime.openOptionsPage();
+    browser.notifications?.clear(notifId).catch(() => {});
   });
 
   // "Filed: …" notification actions (buttons: Undo / View).
@@ -431,9 +440,19 @@ async function openStudio(opts: {
   filename: string;
   durationMs?: number;
 }): Promise<void> {
-  const saveId = await saveCaptureToLibrary(opts).catch(() => undefined);
-  const id = await stashStudioItem({ ...opts, saveId });
+  const result = await saveCaptureToLibrary(opts).catch(() => undefined);
+  const id = await stashStudioItem({ ...opts, saveId: result?.saveId });
   await browser.tabs.create({ url: browser.runtime.getURL('/studio.html') + `#${id}` });
+  // A recording that was kept local-only (Free plan) still downloads/edits
+  // fine — only cross-device sync was withheld. Tell the user once, with a
+  // path to upgrade, instead of silently doing something they didn't expect.
+  if (opts.kind === 'recording' && result && !result.cloudSaved) {
+    notifyUpgrade(
+      'ks-upgrade-recording-',
+      'Recording saved on this device',
+      'Upgrade to Pro to sync recordings to your library across devices.',
+    );
+  }
 }
 
 // Offscreen creation is shared with the embedder/watcher: lib/embedder.ts
@@ -516,6 +535,20 @@ function notify(title: string, message: string) {
     .catch(() => {});
 }
 
+// A plan-limit notice with a single "See Pro plans" action. idPrefix must be
+// one of the ks-upgrade-* prefixes the onButtonClicked handler recognizes.
+function notifyUpgrade(idPrefix: string, title: string, message: string) {
+  browser.notifications
+    ?.create(`${idPrefix}${Date.now()}`, {
+      type: 'basic',
+      iconUrl: browser.runtime.getURL('/icon/128.png'),
+      title,
+      message,
+      buttons: [{ title: 'See Pro plans' }],
+    })
+    .catch(() => {});
+}
+
 async function captureVisibleTab(): Promise<string> {
   return browser.tabs.captureVisibleTab(undefined as any, { format: 'jpeg', quality: 70 });
 }
@@ -566,14 +599,33 @@ async function saveTab(tab: chrome.tabs.Tab, collection?: string) {
     return;
   }
 
+  // Cloud bookmark cap (Free plan) — a guardrail only; PocketBase enforces the
+  // real limit server-side. Checked AFTER dedupe: filing an existing save into
+  // a different folder is never blocked by the cap, only genuinely new saves.
+  const cap = await canSaveBookmark();
+  if (!cap.allowed) {
+    await flash('★', '#f59e0b');
+    notifyUpgrade(
+      'ks-upgrade-bookmarks-',
+      "You've reached your Free plan's bookmark limit",
+      `${cap.used}/${cap.limit} cloud bookmarks used. Upgrade to Pro for unlimited bookmarks, hosted AI, and more.`,
+    );
+    return;
+  }
+
   const meta = settings.enableMetadata ? await extractMeta(tab.id) : null;
 
   let screenshotBlob: Blob | undefined;
   if (settings.enableAutoScreenshot) {
-    try {
-      screenshotBlob = dataUrlToBlob(await captureVisibleTab());
-    } catch {
-      /* capture can fail on protected pages — save anyway */
+    // Storage guardrail: skip only the preview image when the estimated cloud
+    // storage cap is tight — the save itself always proceeds.
+    const storageState = await storageRemaining();
+    if (storageState.unlimited || storageState.remaining === null || storageState.remaining > 0) {
+      try {
+        screenshotBlob = dataUrlToBlob(await captureVisibleTab());
+      } catch {
+        /* capture can fail on protected pages — save anyway */
+      }
     }
   }
 
