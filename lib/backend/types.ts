@@ -63,6 +63,24 @@ export interface AuthUser {
   plan: Plan;
 }
 
+// Owner admin: the single Stripe config row (test|live flag + PUBLIC
+// publishable keys). Secret keys are NEVER part of this shape — they live only
+// in the backend's server-side env, selected by `mode`.
+export interface BillingConfig {
+  mode: 'test' | 'live';
+  pkTest: string; // pk_test_… (public — safe to display/edit)
+  pkLive: string; // pk_live_… (public)
+}
+
+// Owner admin: one recent webhook/subscription event, for sanity-checking
+// (read-only). Comes from the PB `webhook_events` log.
+export interface BillingEvent {
+  id: string;
+  type: string;
+  created: string;
+  handled?: boolean;
+}
+
 // Row shape of the PocketBase `plans` config collection (snake_case wire
 // fields). The client reads these to drive entitlements data-drivenly; see
 // lib/entitlements.ts. Empty/absent numeric cap => unlimited.
@@ -105,6 +123,14 @@ export interface Backend {
   // backends without billing (local mode).
   createCheckoutSession?(plan: 'pro', interval: 'month' | 'year'): Promise<{ url: string }>;
   createPortalSession?(): Promise<{ url: string }>;
+
+  // Optional owner-admin config (PocketBase only; server enforces owner-scoped
+  // rules — the client gate is UX only). Read/flip the test|live mode + public
+  // publishable keys, and read recent webhook events. null / [] when the
+  // billing collections don't exist yet.
+  getBillingConfig?(): Promise<BillingConfig | null>;
+  updateBillingConfig?(patch: Partial<BillingConfig>): Promise<BillingConfig>;
+  recentBillingEvents?(limit?: number): Promise<BillingEvent[]>;
   login(email: string, password: string): Promise<AuthUser>;
   signup(email: string, password: string, name?: string): Promise<AuthUser>;
   // Optional: email a password-reset link (PocketBase). Local mode has none.

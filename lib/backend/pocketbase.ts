@@ -14,6 +14,8 @@ import { mark } from '../boottrace';
 import {
   type AuthUser,
   type Backend,
+  type BillingConfig,
+  type BillingEvent,
   type CreateHighlightInput,
   type PlanConfigRow,
   type SaveBookmarkInput,
@@ -236,6 +238,48 @@ export class PocketBaseBackend implements Backend {
 
   async createPortalSession(): Promise<{ url: string }> {
     return this.req(() => this.pb.send(PB_PORTAL_ROUTE, { method: 'POST' }), 1);
+  }
+
+  // ── Owner admin (billing config) ─────────────────────────────────────────
+  // The `stripe_mode` collection holds ONE row: the test|live flag plus the
+  // PUBLIC publishable keys (pk_test/pk_live). Owner-scoped write rules live
+  // server-side; this client access is a convenience for the admin panel, not
+  // the security boundary. Secret keys never touch this collection.
+  async getBillingConfig(): Promise<BillingConfig | null> {
+    try {
+      const list = await this.req(() => this.pb.collection('stripe_mode').getList(1, 1));
+      const rec = list.items[0] as any;
+      if (!rec) return null;
+      return { mode: rec.mode === 'live' ? 'live' : 'test', pkTest: String(rec.pk_test ?? ''), pkLive: String(rec.pk_live ?? '') };
+    } catch {
+      return null; // collection missing / not owner — panel degrades gracefully
+    }
+  }
+
+  async updateBillingConfig(patch: Partial<BillingConfig>): Promise<BillingConfig> {
+    const list = await this.req(() => this.pb.collection('stripe_mode').getList(1, 1));
+    const rec = list.items[0] as any;
+    if (!rec) throw new Error('No stripe_mode config row exists yet — the backend must seed it first.');
+    const body: Record<string, unknown> = {};
+    if (patch.mode) body.mode = patch.mode;
+    if (patch.pkTest !== undefined) body.pk_test = patch.pkTest;
+    if (patch.pkLive !== undefined) body.pk_live = patch.pkLive;
+    const updated = (await this.req(() => this.pb.collection('stripe_mode').update(rec.id, body))) as any;
+    return { mode: updated.mode === 'live' ? 'live' : 'test', pkTest: String(updated.pk_test ?? ''), pkLive: String(updated.pk_live ?? '') };
+  }
+
+  async recentBillingEvents(limit = 20): Promise<BillingEvent[]> {
+    try {
+      const list = await this.req(() => this.pb.collection('webhook_events').getList(1, limit, { sort: '-created' }));
+      return list.items.map((r: any) => ({
+        id: String(r.event_id ?? r.id ?? ''),
+        type: String(r.type ?? ''),
+        created: String(r.received_at ?? r.created ?? ''),
+        handled: r.handled != null ? Boolean(r.handled) : undefined,
+      }));
+    } catch {
+      return [];
+    }
   }
 
   private toUser(): AuthUser | null {

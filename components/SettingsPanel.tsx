@@ -4,6 +4,7 @@ import { useSettings } from '@/hooks/useSettings';
 import { useCollections } from '@/hooks/useCollections';
 import { LoginForm } from './LoginForm';
 import { PlanBadge } from './PlanBadge';
+import { AdminBilling } from './AdminBilling';
 import { Icon } from './Icon';
 import { useToast } from './Toast';
 import { ACCENTS } from '@/lib/theme';
@@ -267,6 +268,10 @@ export function SettingsPanel({ compact = false }: { compact?: boolean }) {
           <LoginForm onLogin={login} onSignup={signup} compact />
         )}
       </Section>
+
+      {/* Owner-only billing admin. HOSTED-gated too, so local-mode accounts —
+          which are ALL 'owner' — never see it; only the real cloud owner does. */}
+      {HOSTED && authed && plan === 'owner' && <AdminBilling />}
 
       {HOSTED ? (
         <Section title="Sync" compact={compact}>
