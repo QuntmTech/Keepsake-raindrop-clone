@@ -663,7 +663,7 @@ async function saveTab(tab: chrome.tabs.Tab, collection?: string) {
     notifyUpgrade(
       'ks-upgrade-bookmarks-',
       "You've reached your Free plan's bookmark limit",
-      `${cap.used}/${cap.limit} cloud bookmarks used. Upgrade to Pro for unlimited bookmarks, hosted AI, and more.`,
+      `${cap.used}/${cap.limit} cloud bookmarks used. Upgrade to Pro for unlimited bookmarks, the full Capture Studio, and 25 watches.`,
     );
     return;
   }
@@ -712,7 +712,7 @@ async function saveTab(tab: chrome.tabs.Tab, collection?: string) {
       notifyUpgrade(
         'ks-upgrade-bookmarks-',
         "You've reached your Free plan's bookmark limit",
-        'Upgrade to Pro for unlimited cloud bookmarks, hosted AI, and more.',
+        'Upgrade to Pro for unlimited cloud bookmarks, the full Capture Studio, and 25 watches.',
       );
       return;
     }
