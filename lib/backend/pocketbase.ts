@@ -9,7 +9,7 @@ import {
   type VaultStats,
 } from '../types';
 import { faviconFor, inferType, parseTags, safeDomain, SORT_FILTER, escFilter } from '../util';
-import { HOSTED_PB_URL, PB_CHECKOUT_ROUTE, PB_PORTAL_ROUTE } from '../config';
+import { HOSTED, HOSTED_PB_URL, PB_CHECKOUT_ROUTE, PB_PORTAL_ROUTE } from '../config';
 import { mark } from '../boottrace';
 import {
   type AuthUser,
@@ -83,9 +83,18 @@ export class PocketBaseBackend implements Backend {
   private retryAfterAt = 0;
 
   async init(): Promise<void> {
-    // Never fall back to localhost in a hosted build — use the baked-in server.
-    this.url = (await pbUrlStore.getValue()) || HOSTED_PB_URL || 'http://127.0.0.1:8090';
-    mark('pb:url'); // storage.sync read finished — a stall BEFORE this means sync storage hung
+    // ── Boot-gate fix: first paint must NEVER wait on chrome.storage.sync ──
+    // chrome.storage.sync is network-backed and can stall for seconds; awaiting
+    // sync:pb_url here was the intermittent "Opening your vault…" buffering. In
+    // a HOSTED build the server URL is compiled in (HOSTED_PB_URL) and the
+    // Settings → Storage URL field is hidden, so sync:pb_url can only ever equal
+    // HOSTED_PB_URL — use it synchronously and skip the sync read entirely.
+    // A self-hosted build (no baked URL) still honors the user's pasted server
+    // URL; that read stays on this branch, but self-hosted keeps no vault
+    // snapshot, so nothing paints ahead of it, and local-first paint decouples
+    // the splash from it regardless.
+    this.url = HOSTED ? HOSTED_PB_URL : (await pbUrlStore.getValue()) || 'http://127.0.0.1:8090';
+    mark('pb:url'); // HOSTED: synchronous — no sync-storage wait on the boot path
     this.pb = new PocketBase(this.url);
     // CRITICAL: the SDK auto-cancels duplicate in-flight requests by default,
     // which makes concurrent list/search calls (collections + bookmarks +
