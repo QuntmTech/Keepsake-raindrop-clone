@@ -24,6 +24,8 @@ import { checkOnVisit, scheduleWatchAlarm, startWatch, stopWatch, watchTick, WAT
 import { onboardingStage } from '@/lib/onboarding';
 import { applyOverlayWrite, applyOverlayForget, syncHomeOverlay } from '@/lib/home';
 import { canSaveBookmark, storageRemaining, refreshEntitlements } from '@/lib/entitlements';
+import { warmIcons } from '@/lib/favicons';
+import { APP_CATALOG } from '@/lib/apps';
 import { storage } from 'wxt/utils/storage';
 
 // The background "service worker" is event-driven and can be killed at any time by Chrome.
@@ -52,6 +54,7 @@ export default defineBackground(() => {
     scheduleAuthRefresh();
     await runMigration();
     syncHomeOverlay().catch(() => {});
+    warmCatalogIcons().catch(() => {});
   });
 
   browser.runtime.onStartup?.addListener(async () => {
@@ -63,6 +66,7 @@ export default defineBackground(() => {
     scheduleAuthRefresh();
     await runMigration();
     syncHomeOverlay().catch(() => {});
+    warmCatalogIcons().catch(() => {});
   });
 
   // Batch AI queue + Living Bookmarks scheduler. Alarms are re-registered on
@@ -449,6 +453,19 @@ async function pollEntitlementsAfterCheckout(): Promise<void> {
 async function runMigration() {
   await migrateToSaves(() => searchBookmarks('', { perPage: 2000, homeTiles: 'include' })).catch(() => 0);
   await pruneStudioItems().catch(() => {});
+}
+
+// Pre-warm the persistent favicon cache with the whole app catalog so a Home
+// open is network-free from the first paint (no per-open Google favicon fetch,
+// no pop-in, works offline). Throttled to at most weekly — the catalog only
+// changes on an extension update — and fully best-effort: a blocked/offline
+// host just leaves that icon to load lazily on first sight.
+const lastIconWarm = storage.defineItem<number>('local:catalog_icons_warmed_at', { fallback: 0 });
+async function warmCatalogIcons() {
+  const last = await lastIconWarm.getValue().catch(() => 0);
+  if (Date.now() - last < 7 * 24 * 3600_000) return;
+  await lastIconWarm.setValue(Date.now()).catch(() => {});
+  await warmIcons(APP_CATALOG.map((a) => a.icon)).catch(() => {});
 }
 
 // ---- capture plumbing ----

@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react';
 import { Icon } from './Icon';
+import { cachedIcon, ensureIcon } from '@/lib/favicons';
 
 // Deterministic hue per label so a site's letter tile keeps its color.
 const TILE_COLORS = ['#4f7cf7', '#8b5cf6', '#0ea5e9', '#10b981', '#f59e0b', '#ec4899', '#ef4444', '#14b8a6'];
@@ -24,10 +25,35 @@ export function Favicon({
   label?: string;
 }) {
   const [failed, setFailed] = useState(false);
+  // Prefer a cached data URI (instant, offline, no per-open network). Seed from
+  // the in-memory cache so an already-warmed icon renders with no flash; then
+  // resolve through IndexedDB / a one-time network fetch and swap in the result.
+  const [resolved, setResolved] = useState<string | undefined>(() => cachedIcon(src) ?? src);
   // A tile can be recycled for a different bookmark (list reorder) — give the
   // new src a fresh chance instead of staying stuck on the fallback.
-  useEffect(() => setFailed(false), [src]);
-  if (!src || failed) {
+  useEffect(() => {
+    setFailed(false);
+    const hit = cachedIcon(src);
+    if (hit) {
+      setResolved(hit);
+      return;
+    }
+    setResolved(src); // paint the network URL / fallback while we resolve
+    if (!src) return;
+    let alive = true;
+    ensureIcon(src).then((data) => {
+      // A cached/fetched data URI wins — and clears any failure the optimistic
+      // network <img> already hit (e.g. offline, where only the cache resolves).
+      if (alive && data) {
+        setResolved(data);
+        setFailed(false);
+      }
+    });
+    return () => {
+      alive = false;
+    };
+  }, [src]);
+  if (!resolved || failed) {
     const letter = label?.trim().charAt(0).toUpperCase();
     if (letter) {
       return (
@@ -43,7 +69,7 @@ export function Favicon({
   }
   return (
     <img
-      src={src}
+      src={resolved}
       alt=""
       width={size}
       height={size}
