@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { WIDGETS, type WidgetKey, widgetLayoutStore } from '@/lib/widgets';
+import { WIDGETS, type WidgetKey } from '@/lib/widgets';
 import { Icon } from '@/components/Icon';
 import { useToast } from '@/components/Toast';
 
@@ -115,19 +115,6 @@ export function WidgetPicker({
               </label>
             </div>
 
-            <button
-              className="mt-3 w-full rounded-lg border border-line py-1.5 text-xs text-ink-soft hover:border-brand/50 hover:text-brand"
-              onClick={async () => {
-                await widgetLayoutStore.setValue({});
-                toast('Widget layout reset', 'success');
-                setOpen(false);
-              }}
-            >
-              Reset widget positions
-            </button>
-            <p className="px-2 pb-1 pt-2 text-[11px] leading-tight text-ink-faint">
-              Tip: hover a widget and drag its <b>grip</b> (top-right) to move it anywhere.
-            </p>
           </div>
         </>
       )}
