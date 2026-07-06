@@ -129,11 +129,13 @@ export async function warmIcons(urls: (string | undefined)[], concurrency = 6): 
   await Promise.all(Array.from({ length: Math.min(concurrency, list.length) }, worker));
 }
 
-function blobToDataUrl(blob: Blob): Promise<string> {
-  return new Promise((resolve, reject) => {
-    const r = new FileReader();
-    r.onload = () => resolve(r.result as string);
-    r.onerror = () => reject(r.error);
-    r.readAsDataURL(blob);
-  });
+// arrayBuffer + btoa (not FileReader): FileReader isn't exposed in a MV3
+// service worker, and the catalog pre-warm runs there — this works in both the
+// worker and page contexts. Favicons are small (< MAX_BYTES), so the byte loop
+// is cheap and avoids the stack blow-up of String.fromCharCode(...bigArray).
+async function blobToDataUrl(blob: Blob): Promise<string> {
+  const bytes = new Uint8Array(await blob.arrayBuffer());
+  let bin = '';
+  for (let i = 0; i < bytes.length; i++) bin += String.fromCharCode(bytes[i]);
+  return `data:${blob.type || 'image/png'};base64,${btoa(bin)}`;
 }
