@@ -47,8 +47,17 @@ export function useAuth() {
   useEffect(() => {
     if (!authed) return;
     let last = 0;
-    const maybeRefresh = () => {
+    // Only refresh after the tab has ACTUALLY been left and returned to — a
+    // genuine re-focus always has a preceding blur / tab-hide; the initial
+    // new-tab mount fires focus/visible with none. Without this `away` guard,
+    // every single new tab kicked off a needless authRefresh network call on
+    // open (the mount already read the plan via loadAuth). Still throttled so
+    // rapid away/return switching doesn't hammer the server.
+    let away = false;
+    const refresh = () => {
       if (typeof document !== 'undefined' && document.visibilityState !== 'visible') return;
+      if (!away) return; // no genuine leave happened → not a re-focus
+      away = false;
       const now = Date.now();
       if (now - last < 60_000) return;
       last = now;
@@ -61,11 +70,20 @@ export function useAuth() {
         })
         .catch(() => {});
     };
-    window.addEventListener('focus', maybeRefresh);
-    document.addEventListener('visibilitychange', maybeRefresh);
+    const markAway = () => {
+      away = true;
+    };
+    const onVisibility = () => {
+      if (document.visibilityState === 'hidden') markAway();
+      else refresh();
+    };
+    window.addEventListener('blur', markAway);
+    window.addEventListener('focus', refresh);
+    document.addEventListener('visibilitychange', onVisibility);
     return () => {
-      window.removeEventListener('focus', maybeRefresh);
-      document.removeEventListener('visibilitychange', maybeRefresh);
+      window.removeEventListener('blur', markAway);
+      window.removeEventListener('focus', refresh);
+      document.removeEventListener('visibilitychange', onVisibility);
     };
   }, [authed]);
 
