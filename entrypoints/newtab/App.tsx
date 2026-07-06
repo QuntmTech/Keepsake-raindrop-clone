@@ -523,8 +523,17 @@ export default function App() {
     if (fileRef.current) fileRef.current.value = '';
   }
 
-  if (!ready) return <BootSplash />;
-  if (!authed)
+  // Local-first paint (stale-while-revalidate): show the boot splash ONLY until
+  // there's something real to render — either cached snapshot tiles have arrived
+  // (a returning signed-in user) or auth has finished resolving. The snapshot is
+  // uid-keyed and HOSTED-only, so it's only ever populated for a signed-in
+  // account; a signed-out user reads no snapshot, `all` stays empty, and we fall
+  // through to the login form the instant `ready` flips — never a blank Home.
+  if (!ready && all.length === 0) return <BootSplash />;
+  // Only route a KNOWN-signed-out user to the login form. Before auth resolves
+  // (`ready` still false) `authed` is its initial false, so gating on `ready`
+  // stops a returning user from flashing the login form over their cached tiles.
+  if (ready && !authed)
     return (
       <div className="grid min-h-screen place-items-center bg-surface-sunken">
         <div className="card w-full max-w-sm">
