@@ -38,6 +38,7 @@ export interface Save {
     filedBy: 'ai' | 'user' | null;
     confidence?: number | null;
     processedAt?: string | null; // last successful AI pass (embed and/or file)
+    queueAttempts?: number; // failed AI-queue passes — items over the cap are skipped, not retried forever
   };
   organization: {
     collectionId?: string;
@@ -272,7 +273,11 @@ export function saveFromBookmark(b: Bookmark, existing?: Save): Save {
     },
     timestamps: {
       ...base.timestamps,
-      createdAt: base.timestamps.createdAt || b.created,
+      // A FRESH row must take the bookmark's real save date — emptySave() stamps
+      // createdAt "now" (always truthy), so `base... || b.created` made every
+      // mirrored row look saved-today ("You saved this today" on years-old
+      // bookmarks, wrong dates in Ambient Recall). Existing rows keep their own.
+      createdAt: existing ? base.timestamps.createdAt : b.created || base.timestamps.createdAt,
       lastVisitedAt: b.lastVisited ?? base.timestamps.lastVisitedAt,
     },
   };
@@ -301,7 +306,10 @@ const MIGRATED_KEY = 'migrated_saves_v820';
 const backupDone = storage.defineItem<boolean>('local:backup_v820_done', { fallback: false });
 
 export async function migrateToSaves(
-  fetchAll: () => Promise<Bookmark[]>,
+  // Must page through the WHOLE vault and report completeness honestly (see
+  // fetchAllBookmarks in lib/bookmarks.ts) — the orphan-deletion pass below is
+  // gated on `complete`, never on a row-count heuristic.
+  fetchAll: () => Promise<{ items: Bookmark[]; complete: boolean }>,
   // Startup sweeps mark newly mirrored rows as user-filed (pre-existing vault
   // organization is sacred); the import escape hatch passes false so its rows
   // flow through the AI queue.
@@ -326,7 +334,7 @@ export async function migrateToSaves(
   // device arrive here), and drop link rows whose bookmark no longer exists.
   let created = 0;
   try {
-    const bookmarks = await fetchAll();
+    const { items: bookmarks, complete } = await fetchAll();
     const ids = bookmarks.map((b) => b.id);
     const existing = await db.saves.bulkGet(ids);
     const rows: Save[] = [];
@@ -343,8 +351,13 @@ export async function migrateToSaves(
     });
     if (rows.length) await db.saves.bulkPut(rows);
 
-    // Deletions: only safe when the fetch plausibly covered the whole vault.
-    if (bookmarks.length < 2000) {
+    // Deletions: ONLY when the fetch PROVABLY covered the whole vault. The old
+    // `length < 2000` heuristic was catastrophically wrong on hosted vaults
+    // bigger than the PocketBase server page clamp: a single clamped page
+    // "proved" completeness, and every save beyond it — embeddings, AI
+    // summaries, watch configs, snapshot blobs — was bulk-deleted as an orphan
+    // on every startup.
+    if (complete) {
       const alive = new Set(ids);
       const orphans = await db.saves
         .filter((s) => s.type === 'link' && !alive.has(s.id))

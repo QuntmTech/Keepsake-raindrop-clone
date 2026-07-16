@@ -275,8 +275,17 @@ async function watchFetch(url: string, mode: string | null, selector?: string, p
       const normalized = normalizeForDiff(mainText);
       out.text = normalized;
       if (prevText) {
-        out.similarity = shingleSimilarity(prevText, normalized);
-        out.diff = compactDiff(prevText, normalized);
+        // Compare LIKE-FOR-LIKE windows. The stored baseline is truncated to
+        // 30k chars (watch.ts setPrevText) while this fresh text runs up to
+        // 60k — comparing mismatched windows made every check of a long page
+        // ~50% similar, i.e. a false "Page content changed" alert forever. If
+        // the baseline hit its cap, cap the fresh text identically; a baseline
+        // below the cap is complete, so compare it against the full fresh text
+        // (appended content still detected).
+        const PREV_CAP = 30_000; // keep in sync with setPrevText in lib/watch.ts
+        const fresh = prevText.length >= PREV_CAP ? normalized.slice(0, PREV_CAP) : normalized;
+        out.similarity = shingleSimilarity(prevText, fresh);
+        out.diff = compactDiff(prevText, fresh);
       }
     }
   } else if (mode === 'availability') {
@@ -304,7 +313,19 @@ async function buildAudioTracks(options: RecordOptions): Promise<MediaStreamTrac
 async function startRecording(streamId: string, options: RecordOptions): Promise<void> {
   if (mediaRecorder && mediaRecorder.state !== 'inactive') throw new Error('Already recording');
   await cleanup();
+  try {
+    await startRecordingInner(streamId, options);
+  } catch (e) {
+    // A failed start (mic permission denied, MediaRecorder rejecting the
+    // codec, …) must release the already-acquired capture stream — otherwise
+    // Chrome's "this tab is being captured" indicator stays lit and the next
+    // attempt can fail because the tab is still captured.
+    await cleanup().catch(() => {});
+    throw e;
+  }
+}
 
+async function startRecordingInner(streamId: string, options: RecordOptions): Promise<void> {
   const source = options.mode === 'desktop' ? 'desktop' : 'tab';
   // chromeMediaSource constraints are Chrome-only and untyped.
   const constraints: any = {

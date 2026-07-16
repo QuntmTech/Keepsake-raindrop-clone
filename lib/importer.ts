@@ -1,4 +1,4 @@
-import { saveBookmark, searchBookmarks } from './bookmarks';
+import { fetchAllBookmarks, saveBookmark, searchBookmarks } from './bookmarks';
 import { getBackend } from './backend';
 import { type SaveBookmarkInput } from './backend/types';
 import { safeDomain, inferType, faviconFor } from './bookmarks';
@@ -18,18 +18,44 @@ export interface ParsedItem {
   description?: string;
 }
 
-// Parse a Netscape "Bookmarks.html" file into flat items. Folder names become tags.
+// Parse a Netscape "Bookmarks.html" file into flat items. Folder names become
+// tags — REAL folders too, not just Firefox's `tags` attribute: Chrome/Edge/
+// Safari exports carry the user's whole organization as nested <DL>/<H3>
+// folders, and a flat parse silently threw all of it away.
 export function parseNetscapeHtml(html: string): ParsedItem[] {
   const doc = new DOMParser().parseFromString(html, 'text/html');
   const items: ParsedItem[] = [];
+
+  // Map each <a> to its enclosing folder names by walking up the <dl> chain;
+  // each <dl>'s folder name is the <h3> in the <dt> that contains it.
+  const folderOf = (el: Element): string[] => {
+    const names: string[] = [];
+    let node: Element | null = el;
+    while (node) {
+      const dl: Element | null = node.closest('dl');
+      if (!dl) break;
+      const dt = dl.parentElement?.tagName === 'DT' ? dl.parentElement : null;
+      const h3 = dt ? Array.from(dt.children).find((c) => c.tagName === 'H3') : null;
+      const name = h3?.textContent?.trim();
+      // Skip the container pseudo-folders browsers wrap everything in.
+      if (name && !/^(bookmarks( bar| menu)?|other bookmarks|favorites( bar)?|imported)$/i.test(name)) {
+        names.unshift(name);
+      }
+      node = dl.parentElement;
+    }
+    return names;
+  };
+
   doc.querySelectorAll('a[href]').forEach((a) => {
     const url = a.getAttribute('href') ?? '';
     if (!/^https?:/i.test(url)) return;
     const tagsAttr = a.getAttribute('tags');
+    const attrTags = tagsAttr ? tagsAttr.split(',').map((t) => t.trim()).filter(Boolean) : [];
+    const tags = [...new Set([...attrTags, ...folderOf(a)])];
     items.push({
       url,
       title: a.textContent?.trim() || url,
-      tags: tagsAttr ? tagsAttr.split(',').map((t) => t.trim()).filter(Boolean) : undefined,
+      tags: tags.length ? tags : undefined,
     });
   });
   return items;
@@ -226,7 +252,7 @@ export async function importWithAi(
   // Create sidecar Saves for the batch (idempotent sweep), which is exactly
   // what the alarms queue polls for unembedded/unfiled work.
   const queuedForAi = await migrateToSaves(
-    () => searchBookmarks('', { perPage: 5000, homeTiles: 'include' }),
+    fetchAllBookmarks, // paged full fetch — a clamped single page must never drive the orphan diff
     { respectExisting: false }, // imported rows should flow through the AI queue
   ).catch(() => 0);
 

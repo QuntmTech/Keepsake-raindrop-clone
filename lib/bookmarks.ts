@@ -109,6 +109,30 @@ export async function recentBookmarks(limit = 12): Promise<Bookmark[]> {
   return searchBookmarks('', { perPage: limit });
 }
 
+// Fetch the ENTIRE vault by paging until a short page. A single big-perPage
+// request is NOT equivalent: PocketBase clamps perPage server-side, so
+// `perPage: 2000` silently returns one clamped page and everything beyond it
+// looks deleted to callers that diff against the result. `complete` is only
+// true when the final page came back short (the fetch provably covered
+// everything) — callers doing destructive reconciliation MUST check it.
+export async function fetchAllBookmarks(): Promise<{ items: Bookmark[]; complete: boolean }> {
+  const PAGE = 500;
+  const MAX_PAGES = 40; // 20k rows — beyond this, treat as incomplete rather than risk a bad diff
+  const items: Bookmark[] = [];
+  try {
+    for (let page = 1; page <= MAX_PAGES; page++) {
+      // Stable oldest-first ordering so rows can't shuffle between pages while
+      // we walk (new saves append at the newest end, past our cursor).
+      const batch = await searchBookmarks('', { page, perPage: PAGE, sort: 'oldest', homeTiles: 'include' });
+      items.push(...batch);
+      if (batch.length < PAGE) return { items, complete: true };
+    }
+  } catch {
+    /* offline / auth expired — partial result, never complete */
+  }
+  return { items, complete: false };
+}
+
 export async function findByUrl(url: string): Promise<Bookmark | null> {
   const bm = await (await getBackend()).findByUrl(url);
   if (!bm) return null;

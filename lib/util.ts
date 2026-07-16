@@ -80,8 +80,12 @@ export function nowIso(): string {
   return new Date().toISOString();
 }
 
+// Escape a user-supplied value for interpolation inside a double-quoted
+// PocketBase filter string. Backslashes MUST be escaped first: a trailing `\`
+// would otherwise escape the closing quote (malformed filter → 400), and a
+// crafted `\"` would terminate the string early and inject raw filter syntax.
 export function escFilter(s: string): string {
-  return s.replace(/"/g, '\\"');
+  return s.replace(/\\/g, '\\\\').replace(/"/g, '\\"');
 }
 
 // Human "saved N ago" label shared by notifications and recall UI.

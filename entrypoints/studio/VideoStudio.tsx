@@ -1,4 +1,5 @@
 import { forwardRef, useEffect, useImperativeHandle, useRef, useState } from 'react';
+import { useToast } from '@/components/Toast';
 
 // Recording side of the Capture Studio: a big preview player plus a trim tool.
 // Trimming re-encodes by playing the selected range through captureStream +
@@ -16,6 +17,7 @@ const fmt = (s: number) => {
 
 export const VideoStudio = forwardRef<VideoStudioHandle, { blob: Blob; durationMs?: number; onEdited: () => void }>(
   function VideoStudio({ blob, durationMs, onEdited }, ref) {
+    const { toast } = useToast();
     const videoRef = useRef<HTMLVideoElement>(null);
     const [working, setWorking] = useState<Blob>(blob);
     const [url, setUrl] = useState('');
@@ -70,6 +72,10 @@ export const VideoStudio = forwardRef<VideoStudioHandle, { blob: Blob; durationM
         setRange(null);
         setDuration(end - start);
         onEdited();
+      } catch (e) {
+        // Without this catch, a corrupt/unreadable recording just snapped the
+        // UI back to idle with no message (and an unhandled rejection).
+        toast((e as Error)?.message || 'Trim failed — try again', 'error');
       } finally {
         setTrimming(0);
       }
@@ -170,6 +176,32 @@ async function reencodeRange(src: Blob, start: number, end: number, onProgress: 
   const v = document.createElement('video');
   v.src = URL.createObjectURL(src);
   v.preload = 'auto';
+  // Cleanup must run on EVERY exit: a failed trim used to leave the (possibly
+  // hundreds-of-MB) blob URL pinned for the tab's lifetime, the AudioContext
+  // open, and the captureStream tracks live — and repeat attempts stacked more.
+  let ac: AudioContext | null = null;
+  let liveTracks: MediaStreamTrack[] = [];
+  try {
+    return await reencodeRangeInner(v, src, start, end, onProgress, (a, t) => {
+      ac = a;
+      liveTracks = t;
+    });
+  } finally {
+    v.pause();
+    for (const t of liveTracks) t.stop();
+    URL.revokeObjectURL(v.src);
+    (ac as AudioContext | null)?.close().catch(() => {});
+  }
+}
+
+async function reencodeRangeInner(
+  v: HTMLVideoElement,
+  src: Blob,
+  start: number,
+  end: number,
+  onProgress: (p: number) => void,
+  expose: (ac: AudioContext | null, tracks: MediaStreamTrack[]) => void,
+): Promise<Blob> {
   await new Promise<void>((res, rej) => {
     v.onloadedmetadata = () => res();
     v.onerror = () => rej(new Error('Could not read the recording'));
@@ -191,6 +223,7 @@ async function reencodeRange(src: Blob, start: number, end: number, onProgress: 
   } else {
     v.muted = true;
   }
+  expose(ac, [...captured.getTracks(), ...tracks]); // the caller's finally stops these
 
   const mime = ['video/webm;codecs=vp9,opus', 'video/webm;codecs=vp8,opus', 'video/webm'].find((m) =>
     MediaRecorder.isTypeSupported(m),
@@ -219,8 +252,8 @@ async function reencodeRange(src: Blob, start: number, end: number, onProgress: 
   });
   rec.stop();
   const blob = await done;
-  URL.revokeObjectURL(v.src);
-  ac?.close().catch(() => {});
+  // URL revoke / AudioContext close / track stop all happen in the caller's
+  // finally — shared by the success AND failure paths.
   if (blob.size < 1024) throw new Error('Trim failed — the re-encode produced no data');
   return blob;
 }

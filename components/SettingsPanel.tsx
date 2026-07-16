@@ -15,7 +15,7 @@ import { getBackendMode, setBackendMode, HOSTED, type BackendMode } from '@/lib/
 import { getPbUrl, setPbUrl } from '@/lib/backend/pocketbase';
 import { clearLocalData } from '@/lib/backend/local';
 import { detectAndParse, importWithAi, exportJson } from '@/lib/importer';
-import { searchBookmarks, deleteBookmark } from '@/lib/bookmarks';
+import { deleteBookmark, fetchAllBookmarks } from '@/lib/bookmarks';
 import { send } from '@/lib/messaging';
 
 // All of Keepsake's settings in one component, used by the full-page options
@@ -112,25 +112,38 @@ export function SettingsPanel({ compact = false }: { compact?: boolean }) {
       return;
     }
     setImporting(`0 / ${items.length}`);
-    const res = await importWithAi(items, settings.defaultCollection, (p) =>
-      setImporting(`${p.done} / ${p.total}`),
-    );
-    setImporting(null);
-    const label = format === 'raindrop-csv' ? 'from Raindrop' : format === 'pocket-csv' ? 'from Pocket' : '';
-    toast(
-      `Imported ${res.done - res.failed} ${label} · ${res.duplicates} duplicate${res.duplicates === 1 ? '' : 's'} skipped` +
-        (res.queuedForAi ? ` · ${res.queuedForAi} queued for AI filing` : ''),
-      'success',
-    );
-    collectionsApi.refresh();
-    if (fileRef.current) fileRef.current.value = '';
+    try {
+      const res = await importWithAi(items, settings.defaultCollection, (p) =>
+        setImporting(`${p.done} / ${p.total}`),
+      );
+      const label = format === 'raindrop-csv' ? 'from Raindrop' : format === 'pocket-csv' ? 'from Pocket' : '';
+      toast(
+        `Imported ${res.done - res.failed} ${label} · ${res.duplicates} duplicate${res.duplicates === 1 ? '' : 's'} skipped` +
+          (res.queuedForAi ? ` · ${res.queuedForAi} queued for AI filing` : ''),
+        'success',
+      );
+      collectionsApi.refresh();
+    } catch {
+      // Without this, a rejection mid-import (IndexedDB blocked, quota) left
+      // the button wedged on "Importing 0 / N" until the page was reopened.
+      toast('Import failed part-way — already-imported links are kept. Try the file again.', 'error');
+    } finally {
+      setImporting(null);
+      if (fileRef.current) fileRef.current.value = '';
+    }
   }
 
   async function doExport() {
-    // homeTiles:'include' — a backup must contain the Home launcher tiles too.
-    const all = await searchBookmarks('', { perPage: 9999, homeTiles: 'include' });
+    // Paged full fetch — a single perPage:9999 request gets CLAMPED by the
+    // PocketBase server, silently truncating the "backup" to one page. A backup
+    // that isn't complete is worse than none: warn instead of pretending.
+    const { items: all, complete } = await fetchAllBookmarks();
     if (all.length === 0) {
       toast('Nothing to export yet', 'info');
+      return;
+    }
+    if (!complete) {
+      toast('Could not fetch the whole vault — export aborted. Check your connection and retry.', 'error');
       return;
     }
     const blob = exportJson(all);
@@ -148,7 +161,18 @@ export function SettingsPanel({ compact = false }: { compact?: boolean }) {
   async function findDuplicates() {
     setDeduping(true);
     try {
-      const all = await searchBookmarks('', { perPage: 9999 }); // newest-first
+      // Paged full fetch: the old perPage:9999 went through the facade's
+      // over-fetch clamp and scanned only the newest ~500 — "No duplicates
+      // found" on vaults whose dupes were older. Never delete from a partial
+      // view (a pair straddling the window would lose its only visible copy).
+      const { items, complete } = await fetchAllBookmarks();
+      if (!complete) {
+        toast('Could not scan the whole vault — try again when back online.', 'error');
+        return;
+      }
+      // Keep newest of each pair (fetch is oldest-first, so scan in reverse);
+      // library bookmarks only — Home tiles are launcher entries, not dupes.
+      const all = items.filter((b) => !b.homeOnly).reverse();
       const seen = new Set<string>();
       const dupes: string[] = [];
       for (const b of all) {

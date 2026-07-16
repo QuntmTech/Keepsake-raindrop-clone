@@ -11,6 +11,7 @@ import { db, findSaveByUrl, getSave, patchSave, type Save, type WatchFrequency, 
 // automatically when the user next opens the page.
 
 export const WATCH_ALARM = 'ks-watch-tick';
+export const BADGE_CLEAR_ALARM = 'ks-badge-clear';
 export const WATCH_WAKE_MINUTES = 15;
 const GLOBAL_CAP = 10; // max checks per wake
 const FAIL_DEAD_THRESHOLD = 2; // consecutive 404/410 before declaring dead
@@ -41,6 +42,10 @@ export async function startWatch(saveId: string, cfg: WatchConfig): Promise<void
     s.monitoring.selector = cfg.selector;
     s.monitoring.alertRule = cfg.alertRule;
     s.monitoring.failCount = 0;
+    // A (re)configured watch gets a clean slate: one bad probe (bot-wall /
+    // consent interstitial) had set jsRendered, and without clearing it here a
+    // re-created watch stayed silently excluded from the scheduler forever.
+    s.monitoring.jsRendered = undefined;
     s.monitoring.nextCheckAt = Date.now() + 5_000; // first check on the next wake
   });
 }
@@ -194,6 +199,26 @@ export async function applyProbe(save: Save, probe: WatchProbe): Promise<void> {
       }
     }
   } else if (m.mode === 'content') {
+    if (m.selector && probe.selectorFound === false) {
+      // The watched element vanished (site redesign). This used to fall through
+      // to the success patch — failCount reset, fresh lastCheckedAt — i.e. a
+      // "healthy" check of nothing, forever, with no alert. Count it as a
+      // failure and tell the user once it's clearly not transient.
+      const fails = (m.failCount ?? 0) + 1;
+      await patchSave(save.id, (s) => {
+        s.monitoring.failCount = fails;
+        s.monitoring.lastCheckedAt = now;
+        s.monitoring.nextCheckAt = now + FREQ_MS[m.frequency];
+      });
+      if (fails === 3) {
+        notify(
+          'Watched element not found',
+          `The section you watch on "${save.title}" no longer exists — the site may have changed. Edit the watch to pick a new one.`,
+          save.url,
+        );
+      }
+      return;
+    }
     if (m.selector && probe.selectorFound) {
       value = probe.selectorValue?.slice(0, 500);
       changed = m.lastValue !== undefined && value !== m.lastValue;
@@ -229,7 +254,10 @@ export async function applyProbe(save: Save, probe: WatchProbe): Promise<void> {
     notify(alertText.startsWith('Price') ? '💰 ' + alertText : alertText, save.url, save.url);
     browser.action?.setBadgeText({ text: '!' }).catch(() => {});
     browser.action?.setBadgeBackgroundColor({ color: '#f59e0b' }).catch(() => {});
-    setTimeout(() => browser.action?.setBadgeText({ text: '' }).catch(() => {}), 30_000);
+    // Clear via an ALARM, not setTimeout: plain timers die with the service
+    // worker (which routinely unloads right after this tick), leaving the '!'
+    // stuck on the toolbar for days. Alarms survive SW teardown.
+    browser.alarms?.create(BADGE_CLEAR_ALARM, { delayInMinutes: 0.5 });
   }
 }
 

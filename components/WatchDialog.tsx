@@ -93,7 +93,11 @@ export function WatchDialog({ saveId, onClose }: { saveId: string; onClose: () =
     }
     setBusy(true);
     try {
-      await browser.runtime.sendMessage({
+      // The background wraps handler errors into a RESOLVED {ok:false,error}
+      // response — the catch below only fires on transport failures. Without
+      // checking ok, a failed start toasted "Watching this page" and the user
+      // walked away believing a price watch was active that never checks.
+      const resp = (await browser.runtime.sendMessage({
         type: 'KS_WATCH_START',
         saveId,
         cfg: {
@@ -105,7 +109,8 @@ export function WatchDialog({ saveId, onClose }: { saveId: string; onClose: () =
               ? { type: ruleType, value: ruleType === 'below' ? Number(ruleValue) || undefined : undefined }
               : { type: 'any-change' as const },
         },
-      });
+      })) as { ok?: boolean; error?: string } | undefined;
+      if (resp && resp.ok === false) throw new Error(resp.error || 'watch start failed');
       toast('Watching this page', 'success');
       onClose();
     } catch {
@@ -116,9 +121,16 @@ export function WatchDialog({ saveId, onClose }: { saveId: string; onClose: () =
   }
 
   async function stop() {
-    await browser.runtime.sendMessage({ type: 'KS_WATCH_STOP', saveId }).catch(() => {});
-    toast('Stopped watching', 'info');
-    onClose();
+    try {
+      const resp = (await browser.runtime.sendMessage({ type: 'KS_WATCH_STOP', saveId })) as
+        | { ok?: boolean }
+        | undefined;
+      if (resp && resp.ok === false) throw new Error('stop failed');
+      toast('Stopped watching', 'info');
+      onClose();
+    } catch {
+      toast('Could not stop the watch — try again', 'error');
+    }
   }
 
   const prices = (save?.monitoring.history ?? [])

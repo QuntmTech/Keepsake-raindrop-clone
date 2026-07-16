@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { storage } from 'wxt/utils/storage';
 import { type Collection } from '@/lib/types';
 import { Icon, type IconName } from './Icon';
@@ -80,11 +80,18 @@ export function CollectionSidebar({
       return next;
     });
 
+  const creatingRef = useRef(false);
   async function create() {
-    if (!newName.trim()) return;
-    await onCreate({ name: newName.trim(), color: newColor });
-    setNewName('');
-    setAdding(false);
+    // Double-Enter during the network round-trip created two identical folders.
+    if (creatingRef.current || !newName.trim()) return;
+    creatingRef.current = true;
+    try {
+      await onCreate({ name: newName.trim(), color: newColor });
+      setNewName('');
+      setAdding(false);
+    } finally {
+      creatingRef.current = false;
+    }
   }
 
   function startEdit(c: Collection) {

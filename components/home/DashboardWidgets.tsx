@@ -173,8 +173,15 @@ function NotesWidget({ panelCls, cardStyle }: Ctx) {
   const [text, setText] = useState('');
   const [saved, setSaved] = useState(true);
   const first = useRef(true);
+  // The widget unmounts whenever search results render (or minimal mode /
+  // widget toggle) — flush any unsaved text then, or the last ≤500ms of typing
+  // is silently discarded with it.
+  const unsavedRef = useRef<string | null>(null);
   useEffect(() => {
     notesStore.getValue().then((v) => setText(v));
+    return () => {
+      if (unsavedRef.current !== null) notesStore.setValue(unsavedRef.current).catch(() => {});
+    };
   }, []);
   useEffect(() => {
     if (first.current) {
@@ -182,8 +189,12 @@ function NotesWidget({ panelCls, cardStyle }: Ctx) {
       return;
     }
     setSaved(false);
+    unsavedRef.current = text;
     const id = setTimeout(() => {
-      notesStore.setValue(text).then(() => setSaved(true));
+      notesStore.setValue(text).then(() => {
+        unsavedRef.current = null;
+        setSaved(true);
+      });
     }, 500);
     return () => clearTimeout(id);
   }, [text]);

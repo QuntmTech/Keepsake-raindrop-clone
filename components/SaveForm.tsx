@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import {
   saveBookmark,
   listCollections,
@@ -43,9 +43,11 @@ export function SaveForm({ onSaved }: { onSaved?: () => void }) {
   const [newFolder, setNewFolder] = useState('');
   const [showUpgrade, setShowUpgrade] = useState(false);
 
+  const folderBusyRef = useRef(false);
   async function createFolder() {
     const name = newFolder.trim();
-    if (!name) return;
+    if (!name || folderBusyRef.current) return; // double-Enter → duplicate folders
+    folderBusyRef.current = true;
     try {
       const c = await createCollection({ name });
       setCollections((prev) => [...prev, c].sort((a, b) => a.name.localeCompare(b.name)));
@@ -55,6 +57,8 @@ export function SaveForm({ onSaved }: { onSaved?: () => void }) {
       toast(`Folder “${name}” created`, 'success');
     } catch {
       toast('Could not create folder', 'error');
+    } finally {
+      folderBusyRef.current = false;
     }
   }
 
@@ -133,17 +137,24 @@ export function SaveForm({ onSaved }: { onSaved?: () => void }) {
   }, []);
 
   async function save() {
-    if (!url) return;
+    // Gate BEFORE the awaited cap check — a double-click in that window saved
+    // the page twice (two bookmarks, two screenshots).
+    if (busy) return;
+    setBusy(true);
+    if (!url) {
+      setBusy(false);
+      return;
+    }
     // Cloud bookmark cap (Free) — a guardrail; PocketBase is the real enforcer.
     // Re-saving an already-existing bookmark isn't blocked (not a new one).
     if (!existing) {
-      const cap = await canSaveBookmark();
+      const cap = await canSaveBookmark().catch(() => ({ allowed: true }));
       if (!cap.allowed) {
+        setBusy(false);
         setShowUpgrade(true);
         return;
       }
     }
-    setBusy(true);
     try {
       const settings = await getSettings();
       let screenshotBlob: Blob | undefined;

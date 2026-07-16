@@ -65,6 +65,19 @@ function blobToDataUrl(blob: Blob): Promise<string> {
   });
 }
 
+// Every mutation below is a read-modify-write of a whole stored array, and
+// popup / new tab / dashboard / background each run their own LocalBackend —
+// two concurrent mutations (e.g. a popup save landing while a tile click's
+// markVisited is between its get and set) would clobber each other and
+// silently lose the earlier write. Web Locks span all extension contexts of
+// the same origin, so this serializes them properly.
+async function withVaultLock<T>(fn: () => Promise<T>): Promise<T> {
+  const locks = (globalThis as { navigator?: { locks?: { request: (n: string, cb: () => Promise<T>) => Promise<T> } } })
+    .navigator?.locks;
+  if (!locks?.request) return fn();
+  return locks.request('ks-local-vault', fn);
+}
+
 export class LocalBackend implements Backend {
   readonly kind = 'local' as const;
   private user: AuthUser | null = null;
@@ -197,14 +210,20 @@ export class LocalBackend implements Backend {
       created: nowIso(),
       updated: nowIso(),
     };
-    const all = await bookmarksStore.getValue();
-    await bookmarksStore.setValue([bm, ...all]);
+    await withVaultLock(async () => {
+      const all = await bookmarksStore.getValue();
+      await bookmarksStore.setValue([bm, ...all]);
+    });
     return bm;
   }
 
   // Bulk import: build all records and write the store once (fast for big files).
   async bulkSave(inputs: SaveBookmarkInput[]): Promise<number> {
     const uid = this.uid();
+    return withVaultLock(() => this.bulkSaveLocked(inputs, uid));
+  }
+
+  private async bulkSaveLocked(inputs: SaveBookmarkInput[], uid: string): Promise<number> {
     const all = await bookmarksStore.getValue();
     const now = nowIso();
     const existing = new Set(all.filter((b) => b.user === uid).map((b) => b.url));
@@ -229,6 +248,11 @@ export class LocalBackend implements Backend {
         type: input.type ?? inferType(input.url),
         favorite: Boolean(input.favorite),
         pinned: Boolean(input.pinned),
+        // Keep parity with saveBookmark: dropping these silently lost imported
+        // full-page text (search misses) and Home tile placement in local mode.
+        content: input.content,
+        homeOnly: Boolean(input.homeOnly),
+        sort: input.sort,
         readingTime: input.readingTime,
         user: uid,
         created: now,
@@ -240,23 +264,27 @@ export class LocalBackend implements Backend {
   }
 
   async updateBookmark(id: string, patch: Partial<Bookmark>): Promise<Bookmark> {
-    const all = await bookmarksStore.getValue();
-    let updated: Bookmark | undefined;
-    const next = all.map((b) => {
-      if (b.id === id && b.user === this.uid()) {
-        updated = { ...b, ...patch, updated: nowIso() };
-        return updated;
-      }
-      return b;
+    return withVaultLock(async () => {
+      const all = await bookmarksStore.getValue();
+      let updated: Bookmark | undefined;
+      const next = all.map((b) => {
+        if (b.id === id && b.user === this.uid()) {
+          updated = { ...b, ...patch, updated: nowIso() };
+          return updated;
+        }
+        return b;
+      });
+      if (!updated) throw new Error('Bookmark not found');
+      await bookmarksStore.setValue(next);
+      return updated;
     });
-    if (!updated) throw new Error('Bookmark not found');
-    await bookmarksStore.setValue(next);
-    return updated;
   }
 
   async deleteBookmark(id: string): Promise<void> {
-    const all = await bookmarksStore.getValue();
-    await bookmarksStore.setValue(all.filter((b) => !(b.id === id && b.user === this.uid())));
+    await withVaultLock(async () => {
+      const all = await bookmarksStore.getValue();
+      await bookmarksStore.setValue(all.filter((b) => !(b.id === id && b.user === this.uid())));
+    });
   }
 
   async searchBookmarks(query: string, opts: SearchOpts = {}): Promise<Bookmark[]> {
@@ -353,34 +381,40 @@ export class LocalBackend implements Backend {
       created: nowIso(),
       updated: nowIso(),
     };
-    const all = await collectionsStore.getValue();
-    await collectionsStore.setValue([...all, c]);
+    await withVaultLock(async () => {
+      const all = await collectionsStore.getValue();
+      await collectionsStore.setValue([...all, c]);
+    });
     return c;
   }
 
   async updateCollection(id: string, patch: Partial<Collection>): Promise<Collection> {
-    const all = await collectionsStore.getValue();
-    let updated: Collection | undefined;
-    const next = all.map((c) => {
-      if (c.id === id && c.user === this.uid()) {
-        updated = { ...c, ...patch, updated: nowIso() };
-        return updated;
-      }
-      return c;
+    return withVaultLock(async () => {
+      const all = await collectionsStore.getValue();
+      let updated: Collection | undefined;
+      const next = all.map((c) => {
+        if (c.id === id && c.user === this.uid()) {
+          updated = { ...c, ...patch, updated: nowIso() };
+          return updated;
+        }
+        return c;
+      });
+      if (!updated) throw new Error('Collection not found');
+      await collectionsStore.setValue(next);
+      return updated;
     });
-    if (!updated) throw new Error('Collection not found');
-    await collectionsStore.setValue(next);
-    return updated;
   }
 
   async deleteCollection(id: string): Promise<void> {
-    // Detach bookmarks (keep them), then drop the collection.
-    const bms = await bookmarksStore.getValue();
-    await bookmarksStore.setValue(
-      bms.map((b) => (b.collection === id ? { ...b, collection: undefined } : b)),
-    );
-    const all = await collectionsStore.getValue();
-    await collectionsStore.setValue(all.filter((c) => !(c.id === id && c.user === this.uid())));
+    await withVaultLock(async () => {
+      // Detach bookmarks (keep them), then drop the collection.
+      const bms = await bookmarksStore.getValue();
+      await bookmarksStore.setValue(
+        bms.map((b) => (b.collection === id ? { ...b, collection: undefined } : b)),
+      );
+      const all = await collectionsStore.getValue();
+      await collectionsStore.setValue(all.filter((c) => !(c.id === id && c.user === this.uid())));
+    });
   }
 
   // ---- highlights ----
@@ -397,8 +431,10 @@ export class LocalBackend implements Backend {
       created: nowIso(),
       updated: nowIso(),
     };
-    const all = await highlightsStore.getValue();
-    await highlightsStore.setValue([...all, h]);
+    await withVaultLock(async () => {
+      const all = await highlightsStore.getValue();
+      await highlightsStore.setValue([...all, h]);
+    });
     return h;
   }
 
@@ -416,14 +452,18 @@ export class LocalBackend implements Backend {
   }
 
   async deleteHighlight(id: string): Promise<void> {
-    const all = await highlightsStore.getValue();
-    await highlightsStore.setValue(all.filter((h) => !(h.id === id && h.user === this.uid())));
+    await withVaultLock(async () => {
+      const all = await highlightsStore.getValue();
+      await highlightsStore.setValue(all.filter((h) => !(h.id === id && h.user === this.uid())));
+    });
   }
 
   async updateHighlight(id: string, patch: { note?: string; color?: HighlightColor }): Promise<void> {
-    const all = await highlightsStore.getValue();
-    await highlightsStore.setValue(
-      all.map((h) => (h.id === id && h.user === this.uid() ? { ...h, ...patch, updated: nowIso() } : h)),
-    );
+    await withVaultLock(async () => {
+      const all = await highlightsStore.getValue();
+      await highlightsStore.setValue(
+        all.map((h) => (h.id === id && h.user === this.uid() ? { ...h, ...patch, updated: nowIso() } : h)),
+      );
+    });
   }
 }

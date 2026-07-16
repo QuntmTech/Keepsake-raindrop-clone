@@ -66,8 +66,14 @@ export default function App() {
   const uidRef = useRef<string | null>(null);
 
   // Stale-while-revalidate: keep showing current items while refreshing.
+  // The sequence token drops OUT-OF-ORDER responses: the backend retries
+  // transient failures with multi-second backoff, so an old query's response
+  // could land after a newer one and paint the wrong list (and even overwrite
+  // the cached snapshot with it).
+  const searchSeq = useRef(0);
   const runSearch = useCallback(async () => {
     if (!authed || filter.kind === 'highlights') return;
+    const seq = ++searchSeq.current;
     try {
       const opts: Parameters<typeof searchBookmarks>[1] = { sort, perPage: 200 };
       if (filter.kind === 'collection') opts.collection = filter.id;
@@ -75,6 +81,7 @@ export default function App() {
       else if (filter.kind === 'untagged') opts.untagged = true;
       else if (filter.kind === 'tag') opts.tag = filter.tag;
       const list = await searchBookmarks(debouncedQuery, opts);
+      if (seq !== searchSeq.current) return; // superseded by a newer search
       setItems(list);
       if (filter.kind === 'all' && !debouncedQuery.trim()) {
         writeSnapshot({ uid: uidRef.current ?? '', bookmarks: list, collections: collectionsApi.collections, counts: collectionsApi.counts });
@@ -82,7 +89,7 @@ export default function App() {
     } catch {
       /* keep stale items */
     } finally {
-      setLoading(false);
+      if (seq === searchSeq.current) setLoading(false);
     }
   }, [authed, filter, debouncedQuery, sort, collectionsApi.collections, collectionsApi.counts]);
 

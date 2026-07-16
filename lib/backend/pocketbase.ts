@@ -8,7 +8,7 @@ import {
   type HighlightColor,
   type VaultStats,
 } from '../types';
-import { faviconFor, inferType, parseTags, safeDomain, SORT_FILTER, escFilter } from '../util';
+import { faviconFor, genId, inferType, parseTags, safeDomain, SORT_FILTER, escFilter } from '../util';
 import { HOSTED, HOSTED_PB_URL, PB_CHECKOUT_ROUTE, PB_PORTAL_ROUTE } from '../config';
 import { mark } from '../boottrace';
 import {
@@ -429,6 +429,13 @@ export class PocketBaseBackend implements Backend {
     const user = this.uid();
     const domain = input.domain ?? safeDomain(input.url);
     const form = new FormData();
+    // Client-generated id makes the create IDEMPOTENT: req() retries on
+    // timeout/network-blip, but the server may have already committed the
+    // first attempt — without a fixed id the retry files the page twice. With
+    // it, the retry 400s as "id not unique", which we resolve below by
+    // fetching the row the first attempt created.
+    const recId = genId();
+    form.set('id', recId);
     form.set('url', input.url);
     form.set('title', input.title || input.url);
     form.set('description', input.description ?? '');
@@ -449,8 +456,19 @@ export class PocketBaseBackend implements Backend {
     if (typeof input.readingTime === 'number') form.set('readingTime', String(input.readingTime));
     form.set('user', user);
     if (input.screenshotBlob) form.set('screenshot', input.screenshotBlob, `${Date.now()}.jpg`);
-    const rec = await this.req(() => this.pb.collection('bookmarks').create(form), 1);
-    return this.normalize(rec);
+    try {
+      const rec = await this.req(() => this.pb.collection('bookmarks').create(form), 1);
+      return this.normalize(rec);
+    } catch (e) {
+      // "id not unique" here can only mean OUR first attempt committed before
+      // the retry — fetch that row and treat the save as the success it was.
+      const idErr = (e as { data?: { data?: { id?: { code?: string } } } })?.data?.data?.id?.code;
+      if (idErr === 'validation_not_unique') {
+        const rec = await this.req(() => this.pb.collection('bookmarks').getOne(recId));
+        return this.normalize(rec);
+      }
+      throw e;
+    }
   }
 
   // Bulk import via the server's atomic /api/batch endpoint: one request per
@@ -521,8 +539,11 @@ export class PocketBaseBackend implements Backend {
     for (const [k, v] of Object.entries(patch)) {
       body[k] = v === undefined ? '' : v;
     }
-    if (patch.tags) body.tags = JSON.stringify(patch.tags);
-    if (patch.aiTags) body.aiTags = JSON.stringify(patch.aiTags);
+    // tags/aiTags pass through as NATIVE arrays: update() sends a JSON body
+    // (no Blob → the SDK JSON.stringifies the whole body), so pre-stringifying
+    // them here double-encoded the column into a JSON *string* — exactly what
+    // the bulkSave comment warns about. Only the FormData create path needs
+    // JSON.stringify.
     const rec = await this.req(() => this.pb.collection('bookmarks').update(id, body));
     return this.normalize(rec);
   }
@@ -541,7 +562,16 @@ export class PocketBaseBackend implements Backend {
       );
     }
     if (opts.collection) filters.push(`collection = "${escFilter(opts.collection)}"`);
-    if (opts.tag) filters.push(`tags ~ "${escFilter(opts.tag)}"`);
+    if (opts.tag) {
+      // Exact element match, not substring: `tags ~ "art"` LIKE-matches the
+      // serialized JSON, so the `art` view would also show `smart`/`cartography`.
+      // Matching the quoted JSON element ("art", incl. quotes) is exact. The
+      // second variant matches rows written double-encoded by the old
+      // updateBookmark bug (column = JSON *string*, elements serialized \"art\").
+      const el = escFilter(`"${opts.tag}"`);
+      const legacy = escFilter(`\\"${opts.tag}\\"`);
+      filters.push(`(tags ~ "${el}" || tags ~ "${legacy}")`);
+    }
     if (opts.type) filters.push(`type = "${escFilter(opts.type)}"`);
     if (opts.favorite) filters.push('favorite = true');
     if (opts.untagged) filters.push('tags = "[]"');
@@ -644,8 +674,19 @@ export class PocketBaseBackend implements Backend {
   }
 
   async deleteCollection(id: string): Promise<void> {
-    const inside = await this.searchBookmarks('', { collection: id, perPage: 200 });
-    await Promise.all(inside.map((b) => this.updateBookmark(b.id, { collection: undefined })));
+    // Detach EVERY bookmark before deleting the collection — a single capped
+    // page (200) left the rest pointing at a deleted collection id forever
+    // (invisible in views, ghost counts). Loop pages until none remain, in
+    // modest chunks so 200+ parallel PATCHes don't trip the rate limiter; if a
+    // detach fails after retries, abort so we never delete a collection that
+    // still has members.
+    for (let guard = 0; guard < 100; guard++) {
+      const inside = await this.searchBookmarks('', { collection: id, perPage: 200 });
+      if (inside.length === 0) break;
+      for (let i = 0; i < inside.length; i += 25) {
+        await Promise.all(inside.slice(i, i + 25).map((b) => this.updateBookmark(b.id, { collection: undefined })));
+      }
+    }
     await this.del(() => this.pb.collection('collections').delete(id));
   }
 

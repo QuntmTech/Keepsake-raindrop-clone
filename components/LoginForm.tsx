@@ -34,6 +34,7 @@ export function LoginForm({ onLogin, onSignup, compact, defaultMode }: Props) {
   }, []);
 
   async function sendReset() {
+    if (busy) return; // double-Enter must not fire two reset emails
     if (!email) {
       setError('Enter your email first, then tap “Send reset link”.');
       return;
@@ -51,6 +52,10 @@ export function LoginForm({ onLogin, onSignup, compact, defaultMode }: Props) {
   }
 
   async function submit() {
+    // A second Enter during a slow signup fired onSignup twice — the second
+    // attempt then "failed" with "email already in use" shown to a user whose
+    // account had just been created successfully.
+    if (busy) return;
     if (!email || !password) {
       setError('Email and password are required');
       return;
@@ -88,7 +93,10 @@ export function LoginForm({ onLogin, onSignup, compact, defaultMode }: Props) {
         autoComplete="email"
         value={email}
         onChange={(e) => setEmail(e.target.value)}
-        onKeyDown={(e) => e.key === 'Enter' && submit()}
+        // In the reset form there is no password field — Enter must send the
+        // reset email, not trip login validation ("password required" on a
+        // screen with no password box).
+        onKeyDown={(e) => e.key === 'Enter' && (reset === 'form' ? sendReset() : submit())}
       />
       {reset === 'idle' && (
         <input

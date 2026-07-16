@@ -117,8 +117,12 @@ function Vault() {
 
   // Stale-while-revalidate: don't flash a skeleton while refreshing in the
   // background — only show "loading" on the very first paint.
+  // Sequence token drops out-of-order responses (the backend retries with
+  // backoff, so an old query can resolve after a newer one).
+  const runSeq = useRef(0);
   const run = useCallback(async () => {
     if (filter.kind === 'highlights') return;
+    const seq = ++runSeq.current;
     try {
       const opts: Parameters<typeof searchBookmarks>[1] = { perPage: 100 };
       if (filter.kind === 'collection') opts.collection = filter.id;
@@ -126,6 +130,7 @@ function Vault() {
       else if (filter.kind === 'untagged') opts.untagged = true;
       else if (filter.kind === 'tag') opts.tag = filter.tag;
       const list = await searchBookmarks(query, opts);
+      if (seq !== runSeq.current) return; // superseded
       setItems(list);
       // Cache the default view for instant next-open.
       if (filter.kind === 'all' && !query.trim()) {
@@ -134,7 +139,7 @@ function Vault() {
     } catch {
       /* keep stale items */
     } finally {
-      setLoading(false);
+      if (seq === runSeq.current) setLoading(false);
     }
   }, [filter, query, c.collections, c.counts]);
 

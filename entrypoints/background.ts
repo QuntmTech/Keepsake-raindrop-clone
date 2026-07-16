@@ -15,12 +15,12 @@ import { inferType, safeDomain } from '@/lib/util';
 import { type UiSurface } from '@/lib/types';
 import { migrateToSaves, pruneStudioItems, stashStudioItem } from '@/lib/save';
 import { saveCaptureToLibrary } from '@/lib/captureSave';
-import { searchBookmarks, updateBookmark } from '@/lib/bookmarks';
+import { fetchAllBookmarks, searchBookmarks, updateBookmark } from '@/lib/bookmarks';
 import { agoLabel, autofileSave, findDuplicate, undoFiling, type FiledResult } from '@/lib/autofile';
 import { processQueueTick, scheduleQueue, QUEUE_ALARM } from '@/lib/aiQueue';
 import { matchPage, recallAllowed, type RecallResult } from '@/lib/recall';
 import { ensureOffscreen } from '@/lib/embedder';
-import { checkOnVisit, scheduleWatchAlarm, startWatch, stopWatch, watchTick, WATCH_ALARM, type WatchConfig } from '@/lib/watch';
+import { checkOnVisit, scheduleWatchAlarm, startWatch, stopWatch, watchTick, BADGE_CLEAR_ALARM, WATCH_ALARM, type WatchConfig } from '@/lib/watch';
 import { onboardingStage } from '@/lib/onboarding';
 import { applyOverlayWrite, applyOverlayForget, syncHomeOverlay } from '@/lib/home';
 import { canSaveBookmark, storageRemaining, refreshEntitlements } from '@/lib/entitlements';
@@ -82,6 +82,10 @@ export default defineBackground(() => {
       // The watch fetch/parse runs in the offscreen document — make sure it exists.
       await ensureOffscreenDocument().catch(() => {});
       watchTick().catch(() => {});
+    }
+    if (alarm.name === BADGE_CLEAR_ALARM) {
+      // Watch-alert badge cleanup — an alarm because setTimeout dies with the SW.
+      browser.action?.setBadgeText({ text: '' }).catch(() => {});
     }
     if (alarm.name === AUTH_REFRESH_ALARM) {
       // Keep long-lived sessions alive even if the user never opens a surface
@@ -240,8 +244,9 @@ async function handleMessage(msg: Message): Promise<unknown> {
 
     case 'SAVE_CURRENT_PAGE': {
       const [tab] = await browser.tabs.query({ active: true, currentWindow: true });
-      if (tab) await saveTab(tab, msg.collection);
-      return { ok: true };
+      const outcome = tab ? await saveTab(tab, msg.collection) : 'failed';
+      // Callers (Quick Bar) need the truth: 'capped' must not paint a ✓.
+      return { ok: outcome !== 'capped' && outcome !== 'failed', outcome };
     }
 
     case 'OPEN_DASHBOARD':
@@ -312,6 +317,7 @@ async function handleMessage(msg: Message): Promise<unknown> {
     // preview/trim recordings, then copy/download/save from there.
 
     case 'KS_CAPTURE_VISIBLE': {
+      await tileGate(); // shares the quota cadence with full-page tiling
       const dataUrl = await browser.tabs.captureVisibleTab(undefined as any, { format: 'png' });
       const [tab] = await browser.tabs.query({ active: true, currentWindow: true });
       await openStudio({
@@ -451,7 +457,7 @@ async function pollEntitlementsAfterCheckout(): Promise<void> {
 // Mirror the vault into the IndexedDB Save store (idempotent, additive; the
 // legacy chrome.storage stores get a one-time versioned backup first).
 async function runMigration() {
-  await migrateToSaves(() => searchBookmarks('', { perPage: 2000, homeTiles: 'include' })).catch(() => 0);
+  await migrateToSaves(fetchAllBookmarks).catch(() => 0);
   await pruneStudioItems().catch(() => {});
 }
 
@@ -471,12 +477,22 @@ async function warmCatalogIcons() {
 // ---- capture plumbing ----
 
 // Minimum spacing between captureVisibleTab calls (Chrome quota ≈ 2/sec).
+// A promise CHAIN, not a shared timestamp: concurrent callers (a full-page
+// tile loop racing a popup capture or an auto-screenshot save) each computed
+// their wait from the same lastTileAt and then fired together — blowing the
+// quota and leaving silent blank bands in the stitched image. The chain
+// serializes every caller through one 600ms cadence.
 let lastTileAt = 0;
-async function tileGate(): Promise<void> {
+let tileChain: Promise<void> = Promise.resolve();
+function tileGate(): Promise<void> {
   const MIN_GAP = 600;
-  const wait = lastTileAt + MIN_GAP - Date.now();
-  if (wait > 0) await new Promise((r) => setTimeout(r, wait));
-  lastTileAt = Date.now();
+  const next = tileChain.then(async () => {
+    const wait = lastTileAt + MIN_GAP - Date.now();
+    if (wait > 0) await new Promise((r) => setTimeout(r, wait));
+    lastTileAt = Date.now();
+  });
+  tileChain = next.catch(() => {});
+  return next;
 }
 
 // Run the scroll-and-stitch capture and return the stitched image data URL.
@@ -622,6 +638,7 @@ function notifyUpgrade(idPrefix: string, title: string, message: string) {
 }
 
 async function captureVisibleTab(): Promise<string> {
+  await tileGate(); // all captureVisibleTab callers share one quota cadence
   return browser.tabs.captureVisibleTab(undefined as any, { format: 'jpeg', quality: 70 });
 }
 
@@ -650,8 +667,12 @@ const filedNotifs = storage.defineItem<Record<string, string>>('session:filed_no
 // Full save pipeline used by the context menu + keyboard shortcut.
 // Phase 1 UX: dedupe → INSTANT save → background AI pass (extract/embed/file)
 // → "Filed: …" notification with Undo. The user never waits on AI.
-async function saveTab(tab: chrome.tabs.Tab, collection?: string) {
-  if (!tab.url) return;
+// The outcome matters to callers: the Quick Bar painted an unconditional ✓,
+// telling over-cap users their save worked when nothing was saved.
+type SaveTabOutcome = 'saved' | 'duplicate' | 'capped' | 'queued' | 'skipped';
+
+async function saveTab(tab: chrome.tabs.Tab, collection?: string): Promise<SaveTabOutcome> {
+  if (!tab.url) return 'skipped';
   await getBackend();
   const settings = await getSettings();
 
@@ -668,7 +689,7 @@ async function saveTab(tab: chrome.tabs.Tab, collection?: string) {
       await flash('∃', '#6366f1');
       notify('Already saved', `You saved this ${agoLabel(dup.timestamps.createdAt)}. Open the dashboard to view it.`);
     }
-    return;
+    return 'duplicate';
   }
 
   // Cloud bookmark cap (Free plan) — a guardrail only; PocketBase enforces the
@@ -682,7 +703,7 @@ async function saveTab(tab: chrome.tabs.Tab, collection?: string) {
       "You've reached your Free plan's bookmark limit",
       `${cap.used}/${cap.limit} cloud bookmarks used. Upgrade to Pro for unlimited bookmarks, the full Capture Studio, and 25 watches.`,
     );
-    return;
+    return 'capped';
   }
 
   const meta = settings.enableMetadata ? await extractMeta(tab.id) : null;
@@ -731,11 +752,11 @@ async function saveTab(tab: chrome.tabs.Tab, collection?: string) {
         "You've reached your Free plan's bookmark limit",
         'Upgrade to Pro for unlimited cloud bookmarks, the full Capture Studio, and 25 watches.',
       );
-      return;
+      return 'capped';
     }
     await enqueueSave(input);
     await flash('…', '#f59e0b'); // queued offline
-    return;
+    return 'queued';
   }
 
   // Background AI pass — embed locally, auto-file. Awaited so the service
@@ -743,6 +764,7 @@ async function saveTab(tab: chrome.tabs.Tab, collection?: string) {
   // extracted above is passed through so the page isn't re-injected.
   const result = await autofileSave(saved.id, { tabId: tab.id, meta }).catch(() => null);
   if (result) await announceFiling(result);
+  return 'saved';
 }
 
 async function announceFiling(result: FiledResult) {

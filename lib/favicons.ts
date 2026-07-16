@@ -28,7 +28,14 @@ interface IconRow {
   ts: number;
 }
 
+// Entries older than this are dropped on first open per context — without ANY
+// eviction the cache grew forever (each row is a base64 data URI, up to
+// ~340KB), plus the same again in the per-tab memory mirror. Anything still in
+// use is simply re-fetched once and re-cached with a fresh timestamp.
+const MAX_AGE_MS = 90 * 24 * 3600_000;
+
 let dbp: Promise<IDBDatabase> | null = null;
+let pruned = false;
 function idb(): Promise<IDBDatabase> {
   if (dbp) return dbp;
   dbp = new Promise<IDBDatabase>((resolve, reject) => {
@@ -42,6 +49,23 @@ function idb(): Promise<IDBDatabase> {
     dbp = null; // let a later call retry if the open failed
     throw e;
   });
+  dbp.then((db) => {
+    if (pruned) return;
+    pruned = true;
+    try {
+      const cutoff = Date.now() - MAX_AGE_MS;
+      const tx = db.transaction(STORE, 'readwrite');
+      const cur = tx.objectStore(STORE).openCursor();
+      cur.onsuccess = () => {
+        const c = cur.result;
+        if (!c) return;
+        if (((c.value as IconRow).ts ?? 0) < cutoff) c.delete();
+        c.continue();
+      };
+    } catch {
+      /* pruning is best-effort */
+    }
+  }).catch(() => {});
   return dbp;
 }
 

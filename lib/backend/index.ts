@@ -47,6 +47,13 @@ export async function getBackend(): Promise<Backend> {
     instance = backend;
     initPromise = null;
     return backend;
-  })();
+  })().catch((e) => {
+    // A failed init (e.g. a transient chrome.storage read error) must NOT stay
+    // memoized: every later getBackend() would return the same rejected promise,
+    // bricking every surface — and in the background SW, the entire message
+    // router — until the context is torn down. Reset so the next call retries.
+    initPromise = null;
+    throw e;
+  });
   return initPromise;
 }

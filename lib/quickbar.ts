@@ -29,6 +29,7 @@ const SVG = {
   chevronR: '<path d="M9 6l6 6-6 6"/>',
   chevronL: '<path d="M15 6l-6 6 6 6"/>',
   plus: '<path d="M12 5v14M5 12h14"/>',
+  star: '<path d="M12 3l2.7 5.6 6.1.9-4.4 4.3 1 6.1L12 17l-5.4 2.9 1-6.1-4.4-4.3 6.1-.9z"/>',
 };
 
 function icon(name: keyof typeof SVG, fill = false): string {
@@ -228,10 +229,25 @@ export async function mountQuickBar(): Promise<QuickBarApi | null> {
       return;
     }
     saveBtn.innerHTML = `<span style="display:inline-block;width:16px;height:16px;border:2px solid rgba(255,255,255,.4);border-top-color:#fff;border-radius:50%;animation:spin .6s linear infinite"></span>`;
+    let outcome = 'saved';
     try {
-      await send({ type: 'SAVE_CURRENT_PAGE', collection });
+      const resp = (await send({ type: 'SAVE_CURRENT_PAGE', collection })) as
+        | { ok?: boolean; outcome?: string }
+        | undefined;
+      outcome = resp?.outcome ?? (resp?.ok === false ? 'capped' : 'saved');
     } catch {
-      /* background queues on failure */
+      outcome = 'queued'; // transport hiccup — the background queues offline saves
+    }
+    // Tell the truth: an over-cap save was REJECTED — a ✓ here told free users
+    // at their limit that the page was saved when nothing happened.
+    if (outcome === 'capped') {
+      saveBtn.innerHTML = icon('star');
+      saveBtn.title = 'Bookmark limit reached — upgrade to Pro for unlimited saves';
+      setTimeout(() => {
+        saveBtn.innerHTML = icon('bookmark');
+        saveBtn.title = 'Save to Keepsake';
+      }, 2600);
+      return;
     }
     saveBtn.classList.add('ok');
     saveBtn.innerHTML = icon('check');

@@ -37,8 +37,15 @@ export function AddDialog({ collections, allTags, defaultCollection, favorite, p
   useEscape(onClose);
 
   async function add() {
+    // Gate FIRST: the cap check below awaits storage/network, and a
+    // double-click or double-Enter in that window fired two saves.
+    if (busy) return;
+    setBusy(true);
     let clean = url.trim();
-    if (!clean) return;
+    if (!clean) {
+      setBusy(false);
+      return;
+    }
     if (!/^https?:\/\//i.test(clean)) clean = `https://${clean}`;
     // From Home, a link is a launcher tile (homeOnly) unless the user opts to
     // also keep it in the library.
@@ -46,13 +53,13 @@ export function AddDialog({ collections, allTags, defaultCollection, favorite, p
     // Home launcher tiles never count toward the cloud bookmark cap — only
     // gate when this add will land a real library bookmark.
     if (!homeOnly) {
-      const cap = await canSaveBookmark();
+      const cap = await canSaveBookmark().catch(() => ({ allowed: true }));
       if (!cap.allowed) {
+        setBusy(false);
         setShowUpgrade(true);
         return;
       }
     }
-    setBusy(true);
     try {
       const domain = safeDomain(clean);
       await saveBookmark({
@@ -70,8 +77,12 @@ export function AddDialog({ collections, allTags, defaultCollection, favorite, p
       toast(homeContext ? 'Added to Home' : 'Added to your vault', 'success');
       onAdded();
       onClose();
-    } catch {
-      toast('Could not add bookmark', 'error');
+    } catch (e) {
+      // The server enforces the plan cap authoritatively (402) — that's the
+      // paywall, not a generic failure. (Reachable when the client-side count
+      // was unavailable and canSaveBookmark failed open.)
+      if ((e as { status?: number })?.status === 402) setShowUpgrade(true);
+      else toast('Could not add bookmark', 'error');
     } finally {
       setBusy(false);
     }

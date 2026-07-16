@@ -147,30 +147,61 @@ export default function App() {
     setWallOpen(false);
   }
 
+  // True once a LIVE fetch has resolved — from then on the cached snapshot must
+  // never apply, or tiles unpinned on another device would resurrect over a
+  // legitimately-empty fresh result (and get re-persisted, forever).
+  const freshLoadedRef = useRef(false);
+
   const reloadAll = useCallback(() => {
     // Keep current links on screen if the request is slow/fails — never blank out.
     // home: true fetches ONLY launcher rows (pinned || homeOnly), projected light
     // (no cached page content), so a new tab loads a few small tiles instead of
     // the whole library. Home only ever renders pinned items anyway.
-    searchBookmarks('', { home: true, perPage: 500 }).then(setAll).catch(() => {});
+    searchBookmarks('', { home: true, perPage: 500 })
+      .then((items) => {
+        freshLoadedRef.current = true;
+        setAll(items);
+      })
+      .catch(() => {});
     getAllTags().then((t) => setAllTags(t.map((x) => x.tag))).catch(() => {});
   }, []);
 
-  // Paint cached links instantly on open, then refresh.
+  // Paint cached links instantly on open, then refresh. Home has its OWN
+  // snapshot scope: its working set is launcher tiles only, and writing those
+  // into the shared vault snapshot poisoned the popup/dashboard instant paint.
   useEffect(() => {
     (async () => {
       uidRef.current = (await currentUser())?.id ?? null;
-      const snap = await readSnapshot(uidRef.current);
-      if (snap && snap.bookmarks.length) setAll((cur) => (cur.length ? cur : snap.bookmarks));
+      const snap = await readSnapshot(uidRef.current, 'home');
+      if (snap && snap.bookmarks.length && !freshLoadedRef.current) {
+        setAll((cur) => (cur.length ? cur : snap.bookmarks));
+      }
     })();
   }, []);
 
-  // Keep the snapshot fresh for the next instant open.
+  // Keep the snapshot fresh for the next instant open. The uid is re-resolved
+  // per write — a mount-time ref would key the snapshot under the PREVIOUS
+  // account after a logout→login on this open tab, caching user B's tiles
+  // where user A's next new tab instant-paints them.
   useEffect(() => {
-    if (all.length) {
-      writeSnapshot({ uid: uidRef.current ?? '', bookmarks: all, collections: c.collections, counts: c.counts });
+    if (!all.length || !authed) return;
+    currentUser()
+      .then((u) => {
+        if (u?.id) writeSnapshot({ uid: u.id, bookmarks: all, collections: c.collections, counts: c.counts }, 'home');
+      })
+      .catch(() => {});
+  }, [all, c.collections, c.counts, authed]);
+
+  // Account switched away / signed out on this tab: drop the previous user's
+  // tiles immediately — never render them under the login form or to the next
+  // account.
+  useEffect(() => {
+    if (ready && !authed) {
+      setAll([]);
+      setResults(null);
+      uidRef.current = null;
     }
-  }, [all, c.collections, c.counts]);
+  }, [ready, authed]);
 
   useEffect(() => {
     const id = setInterval(() => setNow(new Date()), 30_000);
@@ -188,9 +219,13 @@ export default function App() {
 
   // Boot diagnostics: the moment the first real frame paints, log the boot as
   // OK. If this never fires, the BootSplash watchdog logs a stall instead.
+  // Cached tiles painting counts as a successful boot too (local-first path) —
+  // otherwise a boot where tiles rendered fine but auth hung would record
+  // nothing at all, hiding exactly the pathological case diagnostics exist for.
+  const painted = ready || all.length > 0;
   useEffect(() => {
-    if (ready) requestAnimationFrame(() => finishBoot('ok'));
-  }, [ready]);
+    if (painted) requestAnimationFrame(() => finishBoot('ok'));
+  }, [painted]);
 
   // Fresh install → the sign-up form comes pre-selected on the login screen.
   useEffect(() => {
@@ -222,6 +257,11 @@ export default function App() {
     // Next stop: the extension dropdown shows its own mini-tour on first open.
     onboardingStage.setValue('home-done').catch(() => {});
   }, []);
+  // Depend on the STABLE c.refresh callback, not the `c` object — useCollections
+  // returns a fresh object literal every render, so depending on `c` tore down
+  // and re-created both watchers on every keystroke/drag frame, and a save
+  // completing in another surface during the unsubscribe→resubscribe gap was
+  // silently dropped (Home never refreshed that tile).
   useEffect(() => {
     if (!authed) return;
     const unVault = watchVault(() => {
@@ -235,29 +275,54 @@ export default function App() {
       unVault();
       unOverlay();
     };
-  }, [authed, reloadAll, c]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [authed, reloadAll, c.refresh]);
 
+  // Monotonic sequence guards against out-of-order responses: without it, a
+  // slow response for an OLD query (retried after a 429, say) can land after
+  // the fresh one and paint the wrong results under the current heading.
+  const searchSeq = useRef(0);
+  const searchPending = useRef(false);
   useEffect(() => {
     if (!authed) return;
     const id = setTimeout(() => {
       const q = query.trim();
-      if (!q) return setResults(null);
-      searchBookmarks(q, { perPage: 40, homeTiles: 'include' }).then(setResults).catch(() => setResults([]));
+      if (!q) {
+        searchPending.current = false;
+        setResults(null);
+        return;
+      }
+      const seq = ++searchSeq.current;
+      searchPending.current = true;
+      searchBookmarks(q, { perPage: 40, homeTiles: 'include' })
+        .then((r) => {
+          if (seq !== searchSeq.current) return; // a newer query superseded this one
+          searchPending.current = false;
+          setResults(r);
+        })
+        .catch(() => {
+          if (seq !== searchSeq.current) return;
+          searchPending.current = false;
+          setResults([]);
+        });
     }, 150);
     return () => clearTimeout(id);
   }, [query, authed]);
 
-  // Escape closes any open Home popover (folder popup, wallpaper picker).
+  // Escape closes any open Home popover (folder popup, wallpaper picker) —
+  // but NOT while a dialog/inline-editor sits on top: those own their Escape,
+  // and this global handler firing too closed two layers with one keypress
+  // (e.g. cancelling a folder rename also dismissed the folder popup).
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') {
-        setOpenFolder(null);
-        setWallOpen(false);
-      }
+      if (e.key !== 'Escape') return;
+      if (editing || addTo || catalogOpen || renaming || help || tour) return;
+      setOpenFolder(null);
+      setWallOpen(false);
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, []);
+  }, [editing, addTo, catalogOpen, renaming, help, tour]);
 
   const byOrder = (a: Bookmark, b: Bookmark) =>
     (a.sort ?? 1e9) - (b.sort ?? 1e9) || b.created.localeCompare(a.created);
@@ -293,6 +358,10 @@ export default function App() {
   const [layout, setLayout] = useState<string[]>([]);
   useEffect(() => {
     layoutStore.getValue().then(setLayout);
+    // Watch for writes from OTHER new-tab pages: each drag persists the whole
+    // array, so a tab holding a stale copy would silently revert the other
+    // tab's rearrangement on its next drop.
+    return layoutStore.watch((v) => setLayout(v ?? []));
   }, []);
   const gridEntries = useMemo<GridEntry[]>(() => {
     const pool = new Map<string, GridEntry>();
@@ -443,12 +512,18 @@ export default function App() {
   }
 
   async function removeFromHome(b: Bookmark) {
-    if (b.homeOnly) {
-      // Catalog app tiles exist only for Home — removing the tile deletes it.
-      await deleteBookmark(b.id);
-    } else {
-      // Unpin from Home only — the bookmark stays in your library untouched.
-      await updateBookmark(b.id, { pinned: false });
+    try {
+      if (b.homeOnly) {
+        // Catalog app tiles exist only for Home — removing the tile deletes it.
+        await deleteBookmark(b.id);
+      } else {
+        // Unpin from Home only — the bookmark stays in your library untouched.
+        await updateBookmark(b.id, { pinned: false });
+      }
+    } catch {
+      // Offline / server error: the tile visibly stays — say why instead of
+      // silently doing nothing (and leaking an unhandled rejection).
+      toast('Could not remove that tile — check your connection', 'error');
     }
     reloadAll();
   }
@@ -867,7 +942,22 @@ export default function App() {
                     onKeyDown={(e) => {
                       if (e.key === 'Enter') {
                         const v = (e.target as HTMLInputElement).value.trim();
-                        update({ wallpaper: v ? `url:${v}` : '' });
+                        // Settings live in ONE chrome.storage.sync item with an
+                        // ~8KB quota — a pasted data: URI (common from "copy
+                        // image address" on canvas-rendered pages) would make
+                        // every settings write fail silently. Store big values
+                        // in the local upload slot instead.
+                        if (v.startsWith('data:')) {
+                          wallpaperUpload
+                            .setValue(v)
+                            .then(() => update({ wallpaper: 'upload' }))
+                            .catch(() => toast('Could not use that image', 'error'));
+                        } else if (v.length > 2000) {
+                          toast('That URL is too long — upload the image instead', 'error');
+                          return;
+                        } else {
+                          update({ wallpaper: v ? `url:${v}` : '' });
+                        }
                         setWallOpen(false);
                       }
                     }}
@@ -925,7 +1015,16 @@ export default function App() {
             autoFocus
             onChange={(e) => setQuery(e.target.value)}
             onKeyDown={(e) => {
-              if (e.key === 'Enter' && query.trim() && (!results || results.length === 0)) webSearch();
+              // While a vault lookup is still in flight, `results` is the
+              // PREVIOUS query's list — deciding on it made Enter do nothing at
+              // all mid-debounce. Pending ⇒ honor the placeholder's promise and
+              // search the web.
+              if (
+                e.key === 'Enter' &&
+                query.trim() &&
+                (searchPending.current || !results || results.length === 0)
+              )
+                webSearch();
             }}
           />
           <select

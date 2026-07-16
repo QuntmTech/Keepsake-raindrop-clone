@@ -256,6 +256,11 @@ export const ImageEditor = forwardRef<ImageEditorHandle, { blob: Blob; onEdited:
 
     useEffect(() => {
       const onKey = (e: KeyboardEvent) => {
+        // Typing in an input (e.g. the text-annotation box) owns its own
+        // Ctrl+Z/Escape — hijacking them here removed the previous canvas
+        // annotation while the field did its native undo.
+        const t = e.target as HTMLElement | null;
+        if (t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.isContentEditable)) return;
         if (e.key === 'Escape') {
           setCropPending(null);
           setTextDraft(null);
