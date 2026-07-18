@@ -11,24 +11,45 @@ export interface LlmRequest {
   system?: string;
   prompt: string;
   maxTokens?: number;
-  tier?: 'fast' | 'smart'; // fast = tagging/filing (default); smart = ask-your-library
+  tier?: 'fast' | 'smart'; // fast = tagging/filing; smart = ask-your-library
 }
 
-// Sensible default models per provider (used when the stored model id belongs
-// to a different provider than the one selected).
-export const PROVIDER_DEFAULTS: Record<LlmProvider, { fast: string; label: string; keyHint: string }> = {
-  anthropic: { fast: 'claude-haiku-4-5', label: 'Anthropic (Claude)', keyHint: 'sk-ant-…' },
-  openai: { fast: 'gpt-4o-mini', label: 'OpenAI (GPT)', keyHint: 'sk-…' },
-  google: { fast: 'gemini-2.0-flash', label: 'Google (Gemini)', keyHint: 'AIza…' },
+// Defaults are provider-specific for both tiers. This prevents a smart request
+// from silently falling back to the provider's cheap tagging model when the
+// stored model belongs to a different provider.
+export const PROVIDER_DEFAULTS: Record<
+  LlmProvider,
+  { fast: string; smart: string; label: string; keyHint: string }
+> = {
+  anthropic: {
+    fast: 'claude-haiku-4-5',
+    smart: 'claude-opus-4-8',
+    label: 'Anthropic (Claude)',
+    keyHint: 'sk-ant-…',
+  },
+  openai: {
+    fast: 'gpt-4o-mini',
+    smart: 'gpt-4o',
+    label: 'OpenAI (GPT)',
+    keyHint: 'sk-…',
+  },
+  google: {
+    fast: 'gemini-2.5-flash',
+    smart: 'gemini-2.5-pro',
+    label: 'Google (Gemini)',
+    keyHint: 'AIza…',
+  },
 };
 
-function modelFor(provider: LlmProvider, stored: string): string {
-  // A Claude model id configured while on the OpenAI provider (etc.) would 404.
+function modelFor(provider: LlmProvider, stored: string, tier: 'fast' | 'smart'): string {
   const looksRight =
     (provider === 'anthropic' && stored.startsWith('claude')) ||
     (provider === 'openai' && /^(gpt|o\d)/.test(stored)) ||
     (provider === 'google' && stored.startsWith('gemini'));
-  return looksRight ? stored : PROVIDER_DEFAULTS[provider].fast;
+  // Gemini 2.0 has been retired. Existing users who stored that model are
+  // migrated at request time without mutating their settings behind their back.
+  const retiredGoogleModel = provider === 'google' && /^gemini-2\.0(?:-|$)/.test(stored);
+  return looksRight && !retiredGoogleModel ? stored : PROVIDER_DEFAULTS[provider][tier];
 }
 
 async function callAnthropic(key: string, model: string, req: LlmRequest): Promise<string> {
@@ -85,7 +106,7 @@ async function callGoogle(key: string, model: string, req: LlmRequest): Promise<
   );
   if (!res.ok) throw await httpError(res);
   const data = (await res.json()) as {
-    candidates?: Array<{ content?: { parts?: Array<{ text?: string }> } }>;
+    candidates?: Array<{ content?: { parts?: Array<{ text?: string }> }>;
   };
   return (data.candidates?.[0]?.content?.parts ?? []).map((p) => p.text ?? '').join('').trim();
 }
@@ -94,6 +115,7 @@ async function httpError(res: Response): Promise<Error> {
   const detail = await res.text().catch(() => '');
   if (res.status === 401 || res.status === 403) return new Error('Invalid API key');
   if (res.status === 429) return new Error('Rate limited — try again shortly');
+  if (res.status === 404) return new Error('The selected AI model is not available. Choose another model in Settings.');
   return new Error(`LLM request failed (${res.status}) ${detail.slice(0, 140)}`);
 }
 
@@ -112,13 +134,14 @@ export async function llmComplete(req: LlmRequest): Promise<string> {
   const s = await getAiSettings();
   if (!s.enabled || !s.apiKey.trim()) throw new Error('No API key configured');
   const provider = (s.provider ?? 'anthropic') as LlmProvider;
-  const stored = req.tier === 'smart' ? s.smartModel : s.fastModel;
-  return ADAPTERS[provider](s.apiKey.trim(), modelFor(provider, stored), req);
+  const tier = req.tier ?? 'fast';
+  const stored = tier === 'smart' ? s.smartModel : s.fastModel;
+  return ADAPTERS[provider](s.apiKey.trim(), modelFor(provider, stored, tier), req);
 }
 
 // Pull the first JSON value out of a model response. Handles ```json fences
-// AND trailing prose after the JSON ("{"a":1} Hope this helps!") by scanning
-// for the balanced end of the first JSON value instead of parsing to EOF.
+// AND trailing prose after the JSON by scanning for the balanced end of the
+// first JSON value instead of parsing to EOF.
 export function extractJson<T>(text: string): T | null {
   const fenced = text.match(/```(?:json)?\s*([\s\S]*?)```/);
   const raw = fenced ? fenced[1] : text;
