@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { WIDGETS, type WidgetKey, widgetLayoutStore } from '@/lib/widgets';
+import { WIDGETS, type WidgetKey, widgetCollapsedStore, widgetLayoutStore } from '@/lib/widgets';
 import { Icon } from '@/components/Icon';
 import { useToast } from '@/components/Toast';
 
@@ -8,9 +8,9 @@ import { useToast } from '@/components/Toast';
 const CARD_COLORS = ['', '#ffffff', '#0f172a', '#1e293b', '#312e81', '#0c4a6e', '#134e4a', '#4a044e'];
 
 // A small popover to turn dashboard widgets on/off, recolor the cards, and
-// reset their positions. Widgets that need an optional host permission
-// (weather) request it on enable and only stick if the user grants it — so a
-// default install makes zero external calls.
+// reset their layout. Widgets that need an optional host permission (weather)
+// request it on enable and only stick if the user grants it — so a default
+// install makes zero external calls.
 export function WidgetPicker({
   enabled,
   onChange,
@@ -56,6 +56,19 @@ export function WidgetPicker({
       }
     }
     onChange([...enabled, k]);
+  }
+
+  async function resetLayout() {
+    try {
+      // Reset both coordinates and collapsed state. Previously the button reset
+      // positions only, so minimized widgets could still make a supposedly
+      // fresh layout look broken or incomplete.
+      await Promise.all([widgetLayoutStore.setValue({}), widgetCollapsedStore.setValue([])]);
+      toast('Widget layout reset', 'success');
+      setOpen(false);
+    } catch {
+      toast('Could not reset the widget layout', 'error');
+    }
   }
 
   return (
@@ -117,13 +130,9 @@ export function WidgetPicker({
 
             <button
               className="mt-3 w-full rounded-lg border border-line py-1.5 text-xs text-ink-soft hover:border-brand/50 hover:text-brand"
-              onClick={async () => {
-                await widgetLayoutStore.setValue({});
-                toast('Widget layout reset', 'success');
-                setOpen(false);
-              }}
+              onClick={resetLayout}
             >
-              Reset widget positions
+              Reset widget layout
             </button>
             <p className="px-2 pb-1 pt-2 text-[11px] leading-tight text-ink-faint">
               Tip: hover a widget and drag its <b>grip</b> (top-right) to move it anywhere.
