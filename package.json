@@ -1,8 +1,8 @@
 {
   "name": "keepsake",
-  "description": "Keepsake \u2014 an AI-powered MV3 bookmark manager. Local-first, with an optional PocketBase backend.",
+  "description": "Keepsake — an AI-powered MV3 bookmark manager. Local-first, with an optional PocketBase backend.",
   "private": true,
-  "version": "8.9.4",
+  "version": "8.9.13",
   "type": "module",
   "scripts": {
     "dev": "wxt",
@@ -11,6 +11,8 @@
     "build:firefox": "wxt build -b firefox",
     "zip": "wxt zip",
     "compile": "tsc --noEmit",
+    "check:version": "node scripts/check-version.mjs",
+    "check": "npm run check:version && npm run compile && npm run build",
     "postinstall": "wxt prepare",
     "zip:store": "WXT_STORE=1 wxt zip"
   },
