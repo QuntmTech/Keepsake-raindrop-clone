@@ -106,7 +106,7 @@ async function callGoogle(key: string, model: string, req: LlmRequest): Promise<
   );
   if (!res.ok) throw await httpError(res);
   const data = (await res.json()) as {
-    candidates?: Array<{ content?: { parts?: Array<{ text?: string }> }>;
+    candidates?: Array<{ content?: { parts?: Array<{ text?: string }> } }>;
   };
   return (data.candidates?.[0]?.content?.parts ?? []).map((p) => p.text ?? '').join('').trim();
 }
