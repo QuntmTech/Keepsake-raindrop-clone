@@ -22,32 +22,39 @@ export default defineConfig({
         }),
 
     permissions: [
-      'storage',
-      'unlimitedStorage',
-      'activeTab',
-      'tabs',
-      'contextMenus',
-      'sidePanel',
-      'scripting',
-      'downloads',
-      'offscreen',
-      'tabCapture',
-      'desktopCapture',
-      'notifications',
-      'alarms',
-      'webNavigation',
-      'clipboardWrite',
-      'topSites',
-      'sessions',
+      'storage', // settings + local data + cached auth
+      'unlimitedStorage', // local-first vault + preview screenshots without the 10MB cap
+      'activeTab', // read the current tab's URL/title on demand
+      'tabs', // capture screenshots + open dashboard tab
+      'contextMenus', // right-click "Save to Keepsake"
+      'sidePanel', // the side-panel UI surface
+      'scripting', // inject metadata extractor + highlight logic
+      'downloads', // save screenshots + recordings to Downloads/Keepsake
+      'offscreen', // MV3 recorder + local AI model host (survives popup close)
+      'tabCapture', // "record this tab" stream ids
+      'desktopCapture', // screen/window picker for recording
+      'notifications', // capture failures + "Filed:" toasts + watch alerts
+      'alarms', // AI batch queue + Living Bookmarks watch scheduler
+      'webNavigation', // Ambient Recall: match the library on navigation (local-only)
+      'clipboardWrite', // copy screenshots to the clipboard
+      'topSites', // Home "Most visited" widget
+      'sessions', // Home "Recently closed" widget (reopen tabs)
     ],
 
+    // Full-fidelity MHTML page snapshots are invasive → opt-in only.
+    // The weather widget's network hosts are requested only if the user turns
+    // that widget on — a default install makes no external calls.
     optional_permissions: ['pageCapture'],
     optional_host_permissions: ['https://api.open-meteo.com/*', 'https://ipapi.co/*'],
 
+    // transformers.js runs the local embedding model as WASM inside the
+    // offscreen document — MV3 requires the wasm-unsafe-eval opt-in.
     content_security_policy: {
       extension_pages: "script-src 'self' 'wasm-unsafe-eval'; object-src 'self';",
     },
 
+    // <all_urls>: content script (highlights) + captureVisibleTab + metadata extraction.
+    // api.anthropic.com: optional AI features (auto-tag, summarize, ask-your-library).
     host_permissions: ['<all_urls>', 'https://api.anthropic.com/*'],
 
     icons: {
@@ -71,6 +78,7 @@ export default defineConfig({
       },
     },
 
+    // Keyboard shortcuts. Chrome lets users remap these at chrome://extensions/shortcuts.
     commands: {
       'save-page': {
         suggested_key: { default: 'Ctrl+Shift+S' },
