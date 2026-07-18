@@ -143,6 +143,21 @@ function validSourceIndexes(value: unknown, length: number): number[] {
   return out;
 }
 
+function citedSourceIndexes(answer: string, length: number): number[] {
+  return validSourceIndexes(
+    [...answer.matchAll(/\[(\d+)\]/g)].map((match) => Number(match[1])),
+    length,
+  );
+}
+
+function remapCitations(answer: string, sourceIndexes: number[]): string {
+  const display = new Map(sourceIndexes.map((sourceNumber, index) => [sourceNumber, index + 1]));
+  return answer.replace(/\[(\d+)\]/g, (full, raw: string) => {
+    const mapped = display.get(Number(raw));
+    return mapped ? `[${mapped}]` : full;
+  });
+}
+
 // Hybrid retrieval: deterministic full-library scoring first, then the user's
 // fast model reranks only the strongest candidates. A provider failure falls
 // back to deterministic results instead of turning search into an error.
@@ -201,9 +216,12 @@ export async function askLibrary(question: string, corpus: Bookmark[]): Promise<
   if (!parsed?.answer?.trim()) {
     return { answer: out.trim() || 'I couldn’t produce an answer from your saved sources.', sources: [] };
   }
-  const indexes = validSourceIndexes(parsed.sources, candidates.length).slice(0, 8);
+  const indexes = validSourceIndexes(
+    [...citedSourceIndexes(parsed.answer, candidates.length), ...(parsed.sources ?? [])],
+    candidates.length,
+  ).slice(0, 8);
   return {
-    answer: parsed.answer.trim(),
+    answer: remapCitations(parsed.answer.trim(), indexes),
     sources: indexes.map((n) => candidates[n - 1].bookmark),
   };
 }
