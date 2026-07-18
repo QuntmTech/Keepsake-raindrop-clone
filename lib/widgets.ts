@@ -1,6 +1,7 @@
 import { storage } from 'wxt/utils/storage';
-import { searchBookmarks } from './bookmarks';
+import { searchBookmarks, updateBookmark } from './bookmarks';
 import { saveHomeBookmark } from './home';
+import { findSaveByUrl } from './save';
 import { type Bookmark } from './types';
 
 // Home dashboard widgets. Each widget is independent and degrades gracefully:
@@ -96,8 +97,16 @@ export async function rediscoverSaves(limit = 8): Promise<Bookmark[]> {
   return (stale.length ? stale : fresh).slice(0, limit);
 }
 
-// Pin any URL straight to Home (used by the Most-visited widget).
+// Pin any URL straight to Home (used by the Most-visited widget). Canonical URL
+// matching makes this idempotent: pinning the same site again reuses the saved
+// bookmark instead of creating a duplicate Home-only tile. A real library
+// bookmark keeps its title, collection, notes, and tags; only `pinned` changes.
 export async function pinToHome(url: string, title: string, favicon?: string): Promise<void> {
+  const existing = await findSaveByUrl(url, { homeOnly: 'include' }).catch(() => null);
+  if (existing) {
+    await updateBookmark(existing.id, { pinned: true });
+    return;
+  }
   await saveHomeBookmark({ url, title: title || url, favicon, pinned: true, homeOnly: true, sort: Date.now() });
 }
 
@@ -122,13 +131,23 @@ export interface ClosedTab {
   title: string;
   sessionId?: string;
 }
+
+function isReopenableUrl(url: string): boolean {
+  try {
+    const protocol = new URL(url).protocol;
+    return protocol === 'http:' || protocol === 'https:' || protocol === 'file:';
+  } catch {
+    return false;
+  }
+}
+
 export async function getRecentlyClosed(limit = 8): Promise<ClosedTab[]> {
   try {
     if (!browser.sessions) return [];
-    const sessions = await browser.sessions.getRecentlyClosed({ maxResults: limit + 4 });
+    const sessions = await browser.sessions.getRecentlyClosed({ maxResults: limit + 8 });
     const out: ClosedTab[] = [];
     for (const s of sessions) {
-      if (s.tab?.url && !s.tab.url.startsWith('chrome')) {
+      if (s.tab?.url && isReopenableUrl(s.tab.url)) {
         out.push({ url: s.tab.url, title: s.tab.title || s.tab.url, sessionId: s.tab.sessionId });
       }
       if (out.length >= limit) break;
@@ -179,17 +198,24 @@ export function weatherLook(code: number): { label: string; icon: string } {
   return WEATHER_CODES[code] ?? { label: 'Weather', icon: '🌡️' };
 }
 
+async function fetchJson(url: string, timeoutMs = 8_000): Promise<any> {
+  const res = await fetch(url, { signal: AbortSignal.timeout(timeoutMs) });
+  if (!res.ok) throw new Error(`Weather request failed (${res.status})`);
+  return res.json();
+}
+
 // Fetch weather, using an anonymous IP-based location (no GPS prompt). Cached
-// for an hour. Returns null on any failure — the widget then simply hides.
+// for an hour. Both network calls have hard deadlines, so a slow provider can
+// never leave a Home widget spinning indefinitely. Any failure returns cache.
 export async function fetchWeather(force = false): Promise<Weather | null> {
   const cached = await weatherCache.getValue();
   if (!force && cached && Date.now() - cached.fetchedAt < 3600_000) return cached;
   try {
-    const loc = await fetch('https://ipapi.co/json/').then((r) => r.json());
-    if (typeof loc?.latitude !== 'number') return cached;
-    const w = await fetch(
+    const loc = await fetchJson('https://ipapi.co/json/');
+    if (typeof loc?.latitude !== 'number' || typeof loc?.longitude !== 'number') return cached;
+    const w = await fetchJson(
       `https://api.open-meteo.com/v1/forecast?latitude=${loc.latitude}&longitude=${loc.longitude}&current=temperature_2m,weather_code&temperature_unit=celsius`,
-    ).then((r) => r.json());
+    );
     const cur = w?.current;
     if (typeof cur?.temperature_2m !== 'number') return cached;
     const tempC = Math.round(cur.temperature_2m);
