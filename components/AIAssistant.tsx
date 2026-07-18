@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
-import { searchBookmarks, markVisited } from '@/lib/bookmarks';
-import { aiAvailable, askLibrary, type LibraryAnswer } from '@/lib/ai';
+import { markVisited, vaultStats } from '@/lib/bookmarks';
+import { aiAvailable, askLibrary, loadAiCorpus, type LibraryAnswer } from '@/lib/ai';
 import { type Bookmark } from '@/lib/types';
 import { Icon } from './Icon';
 import { Favicon } from './Favicon';
@@ -11,18 +11,29 @@ interface Turn {
   error?: string;
 }
 
-// "Ask your library" — natural-language Q&A grounded in the user's own bookmarks.
+// "Ask your library" — retrieves relevant snippets across the complete vault,
+// then sends only those sources to the configured AI provider.
 export function AIAssistant({ onClose }: { onClose?: () => void }) {
   const [available, setAvailable] = useState<boolean | null>(null);
   const [corpus, setCorpus] = useState<Bookmark[]>([]);
+  const [corpusLoading, setCorpusLoading] = useState(true);
+  const [libraryTotal, setLibraryTotal] = useState<number | null>(null);
   const [q, setQ] = useState('');
   const [turns, setTurns] = useState<Turn[]>([]);
   const [busy, setBusy] = useState(false);
   const scrollRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
-    aiAvailable().then(setAvailable);
-    searchBookmarks('', { perPage: 200 }).then(setCorpus).catch(() => {});
+    let cancelled = false;
+    aiAvailable().then((value) => !cancelled && setAvailable(value));
+    vaultStats().then((stats) => !cancelled && setLibraryTotal(stats.total)).catch(() => {});
+    loadAiCorpus()
+      .then((items) => !cancelled && setCorpus(items))
+      .catch(() => !cancelled && setCorpus([]))
+      .finally(() => !cancelled && setCorpusLoading(false));
+    return () => {
+      cancelled = true;
+    };
   }, []);
 
   useEffect(() => {
@@ -31,17 +42,16 @@ export function AIAssistant({ onClose }: { onClose?: () => void }) {
 
   async function ask(preset?: string) {
     const question = (preset ?? q).trim();
-    if (!question || busy) return;
+    if (!question || busy || corpusLoading) return;
     setQ('');
     setTurns((t) => [...t, { q: question }]);
     setBusy(true);
     try {
       const answer = await askLibrary(question, corpus);
       setTurns((t) => t.map((x, i) => (i === t.length - 1 ? { ...x, a: answer } : x)));
-    } catch (e: any) {
-      setTurns((t) =>
-        t.map((x, i) => (i === t.length - 1 ? { ...x, error: e?.message ?? 'Failed' } : x)),
-      );
+    } catch (e: unknown) {
+      const message = e instanceof Error ? e.message : 'Failed';
+      setTurns((t) => t.map((x, i) => (i === t.length - 1 ? { ...x, error: message } : x)));
     } finally {
       setBusy(false);
     }
@@ -62,7 +72,13 @@ export function AIAssistant({ onClose }: { onClose?: () => void }) {
           </span>
           <div>
             <p className="text-sm font-semibold text-ink">Ask your library</p>
-            <p className="text-[11px] text-ink-faint">{corpus.length} bookmarks in context</p>
+            <p className="text-[11px] text-ink-faint">
+              {corpusLoading
+                ? 'Preparing library search…'
+                : libraryTotal != null
+                  ? `${libraryTotal} bookmarks searchable`
+                  : 'Searches your complete library'}
+            </p>
           </div>
         </div>
         {onClose && (
@@ -77,15 +93,22 @@ export function AIAssistant({ onClose }: { onClose?: () => void }) {
           <div className="rounded-xl border border-line bg-surface-sunken p-4 text-sm text-ink-soft">
             <p className="mb-1 font-medium text-ink">AI isn’t set up yet</p>
             <p className="text-xs">
-              Add your Anthropic API key in Settings → AI to ask questions across everything you’ve
-              saved.
+              Choose Anthropic, OpenAI, or Google and add your API key in Settings → AI. Your key stays on this device.
             </p>
           </div>
         )}
 
-        {turns.length === 0 && available && (
+        {available && corpusLoading && (
+          <div className="rounded-xl border border-line bg-surface-sunken p-4 text-sm text-ink-soft">
+            Preparing your complete library for search…
+          </div>
+        )}
+
+        {turns.length === 0 && available && !corpusLoading && (
           <div className="space-y-2">
-            <p className="text-xs text-ink-faint">Try asking:</p>
+            <p className="text-xs text-ink-faint">
+              Keepsake searches your full vault first and sends only the most relevant saved sources to your AI provider.
+            </p>
             {samples.map((s) => (
               <button
                 key={s}
@@ -114,7 +137,7 @@ export function AIAssistant({ onClose }: { onClose?: () => void }) {
                 </div>
                 {t.a.sources.length > 0 && (
                   <div className="space-y-1">
-                    {t.a.sources.map((b) => (
+                    {t.a.sources.map((b, sourceIndex) => (
                       <button
                         key={b.id}
                         className="flex w-full items-center gap-2 rounded-lg border border-line bg-surface-raised px-2.5 py-1.5 text-left transition hover:border-brand/40"
@@ -123,6 +146,9 @@ export function AIAssistant({ onClose }: { onClose?: () => void }) {
                           window.open(b.url, '_blank', 'noreferrer');
                         }}
                       >
+                        <span className="grid h-5 w-5 shrink-0 place-items-center rounded bg-brand/10 text-[10px] font-semibold text-brand">
+                          {sourceIndex + 1}
+                        </span>
                         <Favicon src={b.favicon} size={16} />
                         <span className="truncate text-xs text-ink-soft">{b.title}</span>
                         <Icon name="external" size={12} className="ml-auto text-ink-faint" />
@@ -147,12 +173,13 @@ export function AIAssistant({ onClose }: { onClose?: () => void }) {
           <div className="flex items-center gap-2">
             <input
               className="input"
-              placeholder="Ask anything about your saves…"
+              placeholder={corpusLoading ? 'Loading your library…' : 'Ask anything about your saves…'}
               value={q}
               onChange={(e) => setQ(e.target.value)}
               onKeyDown={(e) => e.key === 'Enter' && ask()}
+              disabled={corpusLoading}
             />
-            <button className="btn-primary px-3" onClick={() => ask()} disabled={busy || !q.trim()}>
+            <button className="btn-primary px-3" onClick={() => ask()} disabled={busy || corpusLoading || !q.trim()}>
               <Icon name="sparkles" size={16} />
             </button>
           </div>
