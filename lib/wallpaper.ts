@@ -31,11 +31,27 @@ export const WALLPAPERS: Wallpaper[] = [
   { key: 'charcoal', label: 'Charcoal', css: 'linear-gradient(135deg,#0b0f17 0%,#374151 100%)' },
 ];
 
+function remoteWallpaper(raw: string): string {
+  try {
+    const url = new URL(raw.trim());
+    if (url.protocol !== 'https:' && url.protocol !== 'http:') return '';
+    // JSON string quoting safely escapes quotes/newlines before the value is
+    // placed inside CSS url(...). Invalid or non-web schemes are ignored.
+    return `center / cover no-repeat fixed url(${JSON.stringify(url.href)})`;
+  } catch {
+    return '';
+  }
+}
+
 export function wallpaperCss(value: string, uploaded?: string): string {
   if (!value) return '';
-  if (value === 'upload') return uploaded ? `center / cover no-repeat fixed url("${uploaded}")` : '';
-  if (value.startsWith('url:')) return `center / cover no-repeat fixed url("${value.slice(4)}")`;
-  if (value.startsWith('color:')) return value.slice(6);
+  if (value === 'upload') {
+    return uploaded?.startsWith('data:image/')
+      ? `center / cover no-repeat fixed url(${JSON.stringify(uploaded)})`
+      : '';
+  }
+  if (value.startsWith('url:')) return remoteWallpaper(value.slice(4));
+  if (value.startsWith('color:')) return /^#[0-9a-f]{6}$/i.test(value.slice(6)) ? value.slice(6) : '';
   return WALLPAPERS.find((w) => w.key === value)?.css ?? '';
 }
 
@@ -43,40 +59,56 @@ export function hasWallpaper(value: string, uploaded?: string): boolean {
   return Boolean(wallpaperCss(value, uploaded));
 }
 
-// Relative luminance (0=black, 1=white) of a #rrggbb color — used to pick
-// readable text over a solid-color background.
+// WCAG-style relative luminance (0=black, 1=white) of a #rrggbb color — used
+// to pick readable text over a solid-color background.
 export function colorLuminance(hex: string): number {
   const m = /^#?([0-9a-f]{6})$/i.exec(hex.trim());
   if (!m) return 0;
   const n = parseInt(m[1], 16);
-  const r = (n >> 16) & 255;
-  const g = (n >> 8) & 255;
-  const b = n & 255;
-  return (0.299 * r + 0.587 * g + 0.114 * b) / 255;
+  const channels = [(n >> 16) & 255, (n >> 8) & 255, n & 255].map((value) => {
+    const s = value / 255;
+    return s <= 0.04045 ? s / 12.92 : Math.pow((s + 0.055) / 1.055, 2.4);
+  });
+  return 0.2126 * channels[0] + 0.7152 * channels[1] + 0.0722 * channels[2];
+}
+
+function encodeWallpaper(canvas: HTMLCanvasElement): string {
+  // WebP is supported by Chrome and Firefox, keeps photo uploads compact, and
+  // preserves transparency unlike JPEG. Reduce quality only when a very complex
+  // image still produces an oversized local-storage payload.
+  let quality = 0.86;
+  let data = canvas.toDataURL('image/webp', quality);
+  while (data.length > 4_000_000 && quality > 0.56) {
+    quality -= 0.1;
+    data = canvas.toDataURL('image/webp', quality);
+  }
+  return data;
 }
 
 // Downscale + encode an uploaded image so it stays reasonable in storage and
 // renders fast, without needing any network.
 export function imageFileToDataUrl(file: File, maxDim = 2560): Promise<string> {
   return new Promise((resolve, reject) => {
+    if (!file.type.startsWith('image/')) return reject(new Error('not an image'));
     const reader = new FileReader();
     reader.onerror = () => reject(new Error('read failed'));
     reader.onload = () => {
       const img = new Image();
       img.onerror = () => reject(new Error('decode failed'));
       img.onload = () => {
-        const scale = Math.min(1, maxDim / Math.max(img.width, img.height));
-        const w = Math.round(img.width * scale);
-        const h = Math.round(img.height * scale);
+        const width = img.naturalWidth || img.width;
+        const height = img.naturalHeight || img.height;
+        if (!width || !height) return reject(new Error('empty image'));
+        const scale = Math.min(1, maxDim / Math.max(width, height));
+        const w = Math.max(1, Math.round(width * scale));
+        const h = Math.max(1, Math.round(height * scale));
         const canvas = document.createElement('canvas');
         canvas.width = w;
         canvas.height = h;
         const ctx = canvas.getContext('2d');
-        if (!ctx) return resolve(reader.result as string);
+        if (!ctx) return reject(new Error('canvas unavailable'));
         ctx.drawImage(img, 0, 0, w, h);
-        // JPEG keeps big photos small; PNG uploads with transparency are rare
-        // for a full-page background.
-        resolve(canvas.toDataURL('image/jpeg', 0.85));
+        resolve(encodeWallpaper(canvas));
       };
       img.src = reader.result as string;
     };
