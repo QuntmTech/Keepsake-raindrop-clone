@@ -54,8 +54,13 @@ export default defineConfig({
     },
 
     // <all_urls>: content script (highlights) + captureVisibleTab + metadata extraction.
-    // api.anthropic.com: optional AI features (auto-tag, summarize, ask-your-library).
-    host_permissions: ['<all_urls>', 'https://api.anthropic.com/*'],
+    // Provider API hosts are used only when the user enables BYOK AI.
+    host_permissions: [
+      '<all_urls>',
+      'https://api.anthropic.com/*',
+      'https://api.openai.com/*',
+      'https://generativelanguage.googleapis.com/*',
+    ],
 
     icons: {
       16: 'icon/16.png',
