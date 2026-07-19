@@ -7,6 +7,7 @@ import { useCollections } from '@/hooks/useCollections';
 import { useEscape } from '@/hooks/useEscape';
 import { LoginForm } from '@/components/LoginForm';
 import { BookmarkGrid } from '@/components/BookmarkGrid';
+import { BulkActionBar } from '@/components/BulkActionBar';
 import { CollectionSidebar, type LibraryFilter } from '@/components/CollectionSidebar';
 import { CommandPalette } from '@/components/CommandPalette';
 import { AIAssistant } from '@/components/AIAssistant';
@@ -27,7 +28,9 @@ import {
   watchVault,
   homeOnlyCollectionIds,
 } from '@/lib/bookmarks';
-import { aiAvailable, semanticFind } from '@/lib/ai';
+import { semanticFind } from '@/lib/ai';
+import { mergeBookmarkTags, runBulkTasks, selectedBookmarks } from '@/lib/bulk';
+import { send } from '@/lib/messaging';
 import { type Bookmark, type Plan, type SortMode, type ViewMode, type VaultStats } from '@/lib/types';
 
 export default function App() {
@@ -56,12 +59,21 @@ export default function App() {
   const [addOpen, setAddOpen] = useState(false);
   const [editing, setEditing] = useState<Bookmark | null>(null);
   const [reading, setReading] = useState<Bookmark | null>(null);
-  const [aiOn, setAiOn] = useState(false);
   const [aiResults, setAiResults] = useState<Bookmark[] | null>(null);
   const [aiSearching, setAiSearching] = useState(false);
+  const [selectionMode, setSelectionMode] = useState(false);
+  const [selectedIds, setSelectedIds] = useState<Set<string>>(() => new Set());
+  const [bulkBusy, setBulkBusy] = useState<string | null>(null);
 
   const view = settings.view;
   const sort = settings.sort;
+  const visibleItems = useMemo(() => aiResults ?? items, [aiResults, items]);
+  const visibleCollections = useMemo(
+    () => collectionsApi.collections.filter((collection) => !homeOnlyCols.includes(collection.id)),
+    [collectionsApi.collections, homeOnlyCols],
+  );
+  const allVisibleSelected =
+    visibleItems.length > 0 && visibleItems.every((bookmark) => selectedIds.has(bookmark.id));
 
   const uidRef = useRef<string | null>(null);
 
@@ -77,7 +89,12 @@ export default function App() {
       const list = await searchBookmarks(debouncedQuery, opts);
       setItems(list);
       if (filter.kind === 'all' && !debouncedQuery.trim()) {
-        writeSnapshot({ uid: uidRef.current ?? '', bookmarks: list, collections: collectionsApi.collections, counts: collectionsApi.counts });
+        writeSnapshot({
+          uid: uidRef.current ?? '',
+          bookmarks: list,
+          collections: collectionsApi.collections,
+          counts: collectionsApi.counts,
+        });
       }
     } catch {
       /* keep stale items */
@@ -135,18 +152,33 @@ export default function App() {
     return () => window.removeEventListener('keydown', onKey);
   }, []);
 
-  // Escape closes the AI slide-over.
+  // Escape closes the AI slide-over or exits bulk selection.
   useEscape(() => setAiOpen(false), aiOpen);
+  useEscape(
+    () => {
+      setSelectionMode(false);
+      setSelectedIds(new Set<string>());
+    },
+    selectionMode && !aiOpen,
+  );
 
-  useEffect(() => {
-    aiAvailable().then(setAiOn);
-  }, []);
-  // Leaving a filter exits AI-search results.
+  // Leaving a filter exits smart-search results and bulk selection.
   useEffect(() => {
     setAiResults(null);
+    setSelectionMode(false);
+    setSelectedIds(new Set<string>());
   }, [filter]);
 
-  async function runAiSearch() {
+  // Remove selections that disappeared after a live refresh or bulk action.
+  useEffect(() => {
+    const visible = new Set(visibleItems.map((bookmark) => bookmark.id));
+    setSelectedIds((previous) => {
+      const next = new Set([...previous].filter((id) => visible.has(id)));
+      return next.size === previous.size ? previous : next;
+    });
+  }, [visibleItems]);
+
+  async function runSmartSearch() {
     const q = query.trim();
     if (!q) {
       toast('Type something to search for first', 'info');
@@ -154,10 +186,14 @@ export default function App() {
     }
     setAiSearching(true);
     try {
+      // semanticFind always has a deterministic local fallback. A configured
+      // provider improves the reranking, but is no longer required to use it.
       const corpus = await searchBookmarks('', { perPage: 300 });
       setAiResults(await semanticFind(q, corpus));
+      setSelectionMode(false);
+      setSelectedIds(new Set<string>());
     } catch {
-      toast('AI search failed', 'error');
+      toast('Smart search failed', 'error');
     } finally {
       setAiSearching(false);
     }
@@ -176,16 +212,23 @@ export default function App() {
     await deleteBookmark(id);
     setItems((p) => p.filter((b) => b.id !== id));
     setAiResults((p) => (p ? p.filter((b) => b.id !== id) : p));
+    setSelectedIds((previous) => {
+      const next = new Set(previous);
+      next.delete(id);
+      return next;
+    });
     toast('Deleted', 'info');
     refreshMeta();
     collectionsApi.refresh();
   }
+
   async function fav(b: Bookmark) {
     const updated = await toggleFavorite(b.id, !b.favorite);
     setItems((p) => p.map((x) => (x.id === b.id ? updated : x)));
     setAiResults((p) => (p ? p.map((x) => (x.id === b.id ? updated : x)) : p));
     refreshMeta();
   }
+
   function onEdited(b: Bookmark) {
     setItems((p) => p.map((x) => (x.id === b.id ? b : x)));
     setAiResults((p) => (p ? p.map((x) => (x.id === b.id ? b : x)) : p));
@@ -209,8 +252,117 @@ export default function App() {
     toast(name ? `Moved to ${name}` : 'Removed from collection', 'success');
   }
 
-  const allTagNames = useMemo(() => tags.map((t) => t.tag), [tags]);
+  function toggleSelected(bookmark: Bookmark) {
+    setSelectedIds((previous) => {
+      const next = new Set(previous);
+      if (next.has(bookmark.id)) next.delete(bookmark.id);
+      else next.add(bookmark.id);
+      return next;
+    });
+  }
 
+  function toggleSelectionMode() {
+    setSelectionMode((enabled) => {
+      if (enabled) setSelectedIds(new Set<string>());
+      return !enabled;
+    });
+  }
+
+  function toggleAllVisible() {
+    if (allVisibleSelected) {
+      setSelectedIds(new Set<string>());
+      return;
+    }
+    setSelectedIds(new Set(visibleItems.map((bookmark) => bookmark.id)));
+  }
+
+  function finishSelection() {
+    setSelectionMode(false);
+    setSelectedIds(new Set<string>());
+  }
+
+  async function afterBulkAction() {
+    setAiResults(null);
+    await runSearch();
+    await refreshMeta();
+    await Promise.resolve(collectionsApi.refresh());
+    finishSelection();
+  }
+
+  async function runBulkAction(
+    busyLabel: string,
+    worker: (bookmark: Bookmark) => Promise<unknown>,
+    successLabel: string,
+  ) {
+    const selected = selectedBookmarks(visibleItems, selectedIds);
+    if (!selected.length || bulkBusy) return;
+
+    setBulkBusy(busyLabel);
+    try {
+      const result = await runBulkTasks(selected, worker);
+      await afterBulkAction();
+      if (result.failed) {
+        toast(`${result.completed} completed · ${result.failed} failed`, 'error');
+      } else {
+        toast(`${successLabel} ${result.completed} bookmark${result.completed === 1 ? '' : 's'}`, 'success');
+      }
+    } finally {
+      setBulkBusy(null);
+    }
+  }
+
+  async function bulkMove(collectionId: string | undefined) {
+    const collectionName = collectionId
+      ? visibleCollections.find((collection) => collection.id === collectionId)?.name ?? 'collection'
+      : 'No collection';
+    await runBulkAction(
+      `Moving to ${collectionName}…`,
+      (bookmark) => updateBookmark(bookmark.id, { collection: collectionId }),
+      `Moved to ${collectionName}:`,
+    );
+  }
+
+  async function bulkAddTag() {
+    const raw = prompt('Tag to add to every selected bookmark');
+    if (raw == null) return;
+    const sample = mergeBookmarkTags([], raw)[0];
+    if (!sample) {
+      toast('Enter a valid tag', 'info');
+      return;
+    }
+    await runBulkAction(
+      `Adding #${sample}…`,
+      (bookmark) => updateBookmark(bookmark.id, { tags: mergeBookmarkTags(bookmark.tags, sample) }),
+      `Added #${sample} to`,
+    );
+  }
+
+  async function bulkFavorite() {
+    await runBulkAction(
+      'Adding favorites…',
+      (bookmark) => toggleFavorite(bookmark.id, true),
+      'Favorited',
+    );
+  }
+
+  async function bulkRetryAi() {
+    await runBulkAction(
+      'Retrying AI filing…',
+      async (bookmark) => {
+        const response = await send<{ ok: boolean; error?: string }>({ type: 'KS_AUTOFILE', id: bookmark.id });
+        if (!response?.ok) throw new Error(response?.error || 'AI filing failed');
+      },
+      'Reprocessed',
+    );
+  }
+
+  async function bulkDelete() {
+    const count = selectedIds.size;
+    if (!count || !confirm(`Delete ${count} selected bookmark${count === 1 ? '' : 's'}? This cannot be undone.`)) return;
+    await runBulkAction('Deleting…', (bookmark) => deleteBookmark(bookmark.id), 'Deleted');
+  }
+
+  const allTagNames = useMemo(() => tags.map((t) => t.tag), [tags]);
   const isHighlights = filter.kind === 'highlights';
 
   const heading = useMemo(() => {
@@ -232,6 +384,7 @@ export default function App() {
       </div>
     );
 
+  const inbox = collectionsApi.collections.find((collection) => collection.name.toLowerCase() === 'inbox');
   const paletteCommands = [
     { id: 'new', label: 'New bookmark', icon: 'plus' as IconName, run: () => setAddOpen(true) },
     {
@@ -243,7 +396,23 @@ export default function App() {
         if (n?.trim()) collectionsApi.create({ name: n.trim() });
       },
     },
-    { id: 'ask', label: 'Ask your library (AI)', icon: 'sparkles' as IconName, run: () => setAiOpen(true) },
+    { id: 'ask', label: 'Ask your library', icon: 'sparkles' as IconName, run: () => setAiOpen(true) },
+    {
+      id: 'select',
+      label: 'Select visible bookmarks',
+      icon: 'check' as IconName,
+      run: () => setSelectionMode(true),
+    },
+    ...(inbox
+      ? [
+          {
+            id: 'inbox',
+            label: 'Review Inbox',
+            icon: 'inbox' as IconName,
+            run: () => setFilter({ kind: 'collection' as const, id: inbox.id }),
+          },
+        ]
+      : []),
     { id: 'all', label: 'Go to: All bookmarks', icon: 'grid' as IconName, run: () => setFilter({ kind: 'all' }) },
     { id: 'fav', label: 'Go to: Favorites', icon: 'star' as IconName, run: () => setFilter({ kind: 'favorites' }) },
     { id: 'settings', label: 'Open settings', icon: 'settings' as IconName, run: () => browser.runtime.openOptionsPage() },
@@ -300,27 +469,34 @@ export default function App() {
         {/* Toolbar */}
         <div className="flex items-center gap-3 border-b border-line bg-surface px-5 py-2.5">
           <h1 className="text-sm font-semibold text-ink">{heading}</h1>
-          {!isHighlights && <span className="text-xs text-ink-faint">{items.length} items</span>}
+          {!isHighlights && <span className="text-xs text-ink-faint">{visibleItems.length} items</span>}
 
           {!isHighlights && (
             <>
+              <button
+                className={`btn-outline ml-auto px-2.5 py-1.5 ${selectionMode ? 'border-brand/50 text-brand' : ''}`}
+                onClick={toggleSelectionMode}
+                disabled={Boolean(bulkBusy)}
+                title="Select bookmarks for bulk cleanup"
+              >
+                <Icon name="check" size={14} /> {selectionMode ? 'Selecting' : 'Select'}
+              </button>
+
               <input
-                className="ml-auto w-48 rounded-lg border border-line bg-surface-raised px-2.5 py-1.5 text-sm outline-none focus:border-brand/50"
+                className="w-48 rounded-lg border border-line bg-surface-raised px-2.5 py-1.5 text-sm outline-none focus:border-brand/50"
                 placeholder="Filter results…"
                 value={query}
                 onChange={(e) => setQuery(e.target.value)}
-                onKeyDown={(e) => e.key === 'Enter' && aiOn && runAiSearch()}
+                onKeyDown={(e) => e.key === 'Enter' && runSmartSearch()}
               />
-              {aiOn && (
-                <button
-                  className="btn-outline px-2.5 py-1.5"
-                  onClick={runAiSearch}
-                  disabled={aiSearching}
-                  title="AI search — find by meaning, not just keywords"
-                >
-                  <Icon name="sparkles" size={15} />
-                </button>
-              )}
+              <button
+                className="btn-outline px-2.5 py-1.5"
+                onClick={runSmartSearch}
+                disabled={aiSearching}
+                title="Smart search — local relevance with optional AI reranking"
+              >
+                <Icon name="sparkles" size={15} />
+              </button>
 
               <select
                 className="rounded-lg border border-line bg-surface-raised px-2 py-1.5 text-sm outline-none"
@@ -350,6 +526,23 @@ export default function App() {
           )}
         </div>
 
+        {selectionMode && !isHighlights && (
+          <BulkActionBar
+            selectedCount={selectedIds.size}
+            visibleCount={visibleItems.length}
+            allVisibleSelected={allVisibleSelected}
+            collections={visibleCollections}
+            busy={bulkBusy}
+            onToggleAll={toggleAllVisible}
+            onMove={bulkMove}
+            onAddTag={bulkAddTag}
+            onFavorite={bulkFavorite}
+            onRetryAi={bulkRetryAi}
+            onDelete={bulkDelete}
+            onDone={finishSelection}
+          />
+        )}
+
         {/* Body */}
         <main className="flex-1 overflow-y-auto p-5">
           {isHighlights ? (
@@ -358,7 +551,7 @@ export default function App() {
             <>
               <div className="mb-3 flex items-center gap-2 rounded-lg bg-brand/10 px-3 py-2 text-sm text-brand">
                 <Icon name="sparkles" size={15} />
-                AI results for “{query}” · {aiResults.length}
+                Smart results for “{query}” · {aiResults.length}
                 <button className="ml-auto text-xs underline hover:no-underline" onClick={() => setAiResults(null)}>
                   Clear
                 </button>
@@ -371,7 +564,10 @@ export default function App() {
                 onToggleFavorite={fav}
                 onEdit={setEditing}
                 onRead={setReading}
-                emptyHint="No AI matches — try rephrasing your search."
+                selectionMode={selectionMode}
+                selectedIds={selectedIds}
+                onToggleSelected={toggleSelected}
+                emptyHint="No smart matches — try rephrasing your search."
               />
             </>
           ) : (
@@ -383,6 +579,9 @@ export default function App() {
               onToggleFavorite={fav}
               onEdit={setEditing}
               onRead={setReading}
+              selectionMode={selectionMode}
+              selectedIds={selectedIds}
+              onToggleSelected={toggleSelected}
               emptyHint={
                 filter.kind === 'all'
                   ? 'Click “Add”, use the toolbar icon, or right-click any page → “Save page to Keepsake”.'
@@ -397,8 +596,14 @@ export default function App() {
       <CommandPalette open={paletteOpen} onClose={() => setPaletteOpen(false)} commands={paletteCommands} />
 
       {aiOpen && (
-        <div className="fixed inset-0 z-[2147483645] flex justify-end bg-black/30 backdrop-blur-sm animate-fade-in" onClick={() => setAiOpen(false)}>
-          <div className="h-full w-full max-w-md border-l border-line bg-surface animate-slide-up" onClick={(e) => e.stopPropagation()}>
+        <div
+          className="fixed inset-0 z-[2147483645] flex justify-end bg-black/30 backdrop-blur-sm animate-fade-in"
+          onClick={() => setAiOpen(false)}
+        >
+          <div
+            className="h-full w-full max-w-md border-l border-line bg-surface animate-slide-up"
+            onClick={(e) => e.stopPropagation()}
+          >
             <AIAssistant onClose={() => setAiOpen(false)} />
           </div>
         </div>
