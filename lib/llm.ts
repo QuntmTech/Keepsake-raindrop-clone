@@ -41,6 +41,8 @@ export const PROVIDER_DEFAULTS: Record<
   },
 };
 
+const REQUEST_TIMEOUT_MS = 45_000;
+
 function modelFor(provider: LlmProvider, stored: string, tier: 'fast' | 'smart'): string {
   const looksRight =
     (provider === 'anthropic' && stored.startsWith('claude')) ||
@@ -52,9 +54,20 @@ function modelFor(provider: LlmProvider, stored: string, tier: 'fast' | 'smart')
   return looksRight && !retiredGoogleModel ? stored : PROVIDER_DEFAULTS[provider][tier];
 }
 
+function requestSignal(): AbortSignal {
+  return AbortSignal.timeout(REQUEST_TIMEOUT_MS);
+}
+
+function requireText(value: string): string {
+  const text = value.trim();
+  if (!text) throw new Error('The AI provider returned an empty response. Try again or choose another model.');
+  return text;
+}
+
 async function callAnthropic(key: string, model: string, req: LlmRequest): Promise<string> {
   const res = await fetch('https://api.anthropic.com/v1/messages', {
     method: 'POST',
+    signal: requestSignal(),
     headers: {
       'content-type': 'application/json',
       'x-api-key': key,
@@ -70,16 +83,21 @@ async function callAnthropic(key: string, model: string, req: LlmRequest): Promi
   });
   if (!res.ok) throw await httpError(res);
   const data = (await res.json()) as { content?: Array<{ type: string; text?: string }> };
-  return (data.content ?? []).filter((b) => b.type === 'text').map((b) => b.text ?? '').join('').trim();
+  return requireText((data.content ?? []).filter((b) => b.type === 'text').map((b) => b.text ?? '').join(''));
 }
 
 async function callOpenAI(key: string, model: string, req: LlmRequest): Promise<string> {
+  const tokenLimit = req.maxTokens ?? 1024;
+  const modernTokenField = /^(gpt-5|o\d)/.test(model)
+    ? { max_completion_tokens: tokenLimit }
+    : { max_tokens: tokenLimit };
   const res = await fetch('https://api.openai.com/v1/chat/completions', {
     method: 'POST',
+    signal: requestSignal(),
     headers: { 'content-type': 'application/json', authorization: `Bearer ${key}` },
     body: JSON.stringify({
       model,
-      max_tokens: req.maxTokens ?? 1024,
+      ...modernTokenField,
       messages: [
         ...(req.system ? [{ role: 'system', content: req.system }] : []),
         { role: 'user', content: req.prompt },
@@ -88,7 +106,7 @@ async function callOpenAI(key: string, model: string, req: LlmRequest): Promise<
   });
   if (!res.ok) throw await httpError(res);
   const data = (await res.json()) as { choices?: Array<{ message?: { content?: string } }> };
-  return (data.choices?.[0]?.message?.content ?? '').trim();
+  return requireText(data.choices?.[0]?.message?.content ?? '');
 }
 
 async function callGoogle(key: string, model: string, req: LlmRequest): Promise<string> {
@@ -96,6 +114,7 @@ async function callGoogle(key: string, model: string, req: LlmRequest): Promise<
     `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:generateContent?key=${encodeURIComponent(key)}`,
     {
       method: 'POST',
+      signal: requestSignal(),
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({
         ...(req.system ? { systemInstruction: { parts: [{ text: req.system }] } } : {}),
@@ -108,14 +127,17 @@ async function callGoogle(key: string, model: string, req: LlmRequest): Promise<
   const data = (await res.json()) as {
     candidates?: Array<{ content?: { parts?: Array<{ text?: string }> } }>;
   };
-  return (data.candidates?.[0]?.content?.parts ?? []).map((p) => p.text ?? '').join('').trim();
+  return requireText((data.candidates?.[0]?.content?.parts ?? []).map((p) => p.text ?? '').join(''));
 }
 
 async function httpError(res: Response): Promise<Error> {
   const detail = await res.text().catch(() => '');
+  if (res.status === 400) return new Error(`The AI provider rejected this request. ${detail.slice(0, 120)}`.trim());
   if (res.status === 401 || res.status === 403) return new Error('Invalid API key');
-  if (res.status === 429) return new Error('Rate limited — try again shortly');
   if (res.status === 404) return new Error('The selected AI model is not available. Choose another model in Settings.');
+  if (res.status === 408 || res.status === 504) return new Error('The AI provider timed out — try again.');
+  if (res.status === 429) return new Error('Rate limited — try again shortly');
+  if (res.status >= 500) return new Error('The AI provider is temporarily unavailable — try again shortly.');
   return new Error(`LLM request failed (${res.status}) ${detail.slice(0, 140)}`);
 }
 
@@ -136,7 +158,18 @@ export async function llmComplete(req: LlmRequest): Promise<string> {
   const provider = (s.provider ?? 'anthropic') as LlmProvider;
   const tier = req.tier ?? 'fast';
   const stored = tier === 'smart' ? s.smartModel : s.fastModel;
-  return ADAPTERS[provider](s.apiKey.trim(), modelFor(provider, stored, tier), req);
+  try {
+    return await ADAPTERS[provider](s.apiKey.trim(), modelFor(provider, stored, tier), req);
+  } catch (error) {
+    const name = (error as { name?: string })?.name;
+    if (name === 'AbortError' || name === 'TimeoutError') {
+      throw new Error('The AI request timed out — try again.');
+    }
+    if (error instanceof TypeError) {
+      throw new Error('Could not reach the AI provider. Check your connection and try again.');
+    }
+    throw error;
+  }
 }
 
 // Pull the first JSON value out of a model response. Handles ```json fences
