@@ -1,7 +1,7 @@
 import { type Bookmark } from './types';
 
 const STOP_WORDS = new Set([
-  'a', 'an', 'and', 'are', 'as', 'at', 'be', 'been', 'but', 'by', 'did', 'do', 'does', 'for', 'from',
+  'a', 'about', 'an', 'and', 'are', 'as', 'at', 'be', 'been', 'but', 'by', 'did', 'do', 'does', 'for', 'from',
   'had', 'has', 'have', 'how', 'i', 'in', 'into', 'is', 'it', 'me', 'my', 'of', 'on', 'or', 'that',
   'the', 'this', 'to', 'was', 'were', 'what', 'when', 'where', 'which', 'who', 'why', 'with', 'you',
   'your', 'find', 'show', 'tell', 'saved', 'save', 'bookmark', 'bookmarks', 'article', 'page',
