@@ -26,11 +26,11 @@ Create an account in the extension and start saving. Local mode needs no server.
 ### Validation and production builds
 
 ```bash
-npm run test:retrieval  # ranking/snippet regression tests
-npm run compile         # TypeScript check
-npm run build           # .output/chrome-mv3
-npm run check           # version + tests + type-check + build
-npm run zip:store       # Chrome Web Store ZIP with development key removed
+npm test              # retrieval + bulk-workflow regression tests
+npm run compile       # TypeScript check
+npm run build         # .output/chrome-mv3
+npm run check         # version + tests + type-check + build
+npm run zip:store     # Chrome Web Store ZIP with development key removed
 ```
 
 ### Loading it into Chrome
@@ -46,7 +46,7 @@ Use `npm run zip:store` for a Web Store upload. Do not upload the normal develop
 
 ### Turning on AI
 
-Ask Your Library works without an API key by returning the strongest matching saves locally. For synthesized answers with numbered citations, open Settings → **AI**, enable AI, select a provider, paste its API key, and click **Test key**.
+Ask Your Library and dashboard Smart Search both work without an API key by returning the strongest local matches. For synthesized answers, smarter reranking, and automated filing, open Settings → **AI**, enable AI, select a provider, paste its API key, and click **Test key**.
 
 Default model tiers:
 
@@ -75,8 +75,9 @@ The key is stored in `chrome.storage.local`, never synced, and only sent to the 
 - **Ask Your Library** — hybrid full-library retrieval, source snippets, numbered citations, follow-up context, and local fallback matches
 - **Ambient Recall** — surfaces related saved pages while browsing, with local matching and a domain blocklist
 - **Living Bookmarks** — content, price, and availability watches with notifications
-- **Organize** — collections, nested folders, tags, favorites, smart filters, and duplicate cleanup
-- **Find** — instant text search, AI semantic search, command palette, multiple sorts, and grid/list/masonry views
+- **Bulk library control** — select visible or individual saves, then move, tag, favorite, delete, or retry AI filing in bounded batches
+- **Organize** — collections, nested folders, tags, favorites, smart filters, Inbox review, and duplicate cleanup
+- **Find** — instant text search, keyless Smart Search with optional AI reranking, command palette, multiple sorts, and grid/list/masonry views
 - **Highlights** — quote-and-context anchored annotations that survive many page changes
 - **Portable** — imports from browser HTML, Raindrop, Pocket, and Keepsake JSON; exports JSON backups
 - **Resilient** — offline save queue, PocketBase request retries, cached startup data, and Home-field fallback storage
@@ -92,13 +93,15 @@ entrypoints/
   newtab/           Home launcher and widgets
   popup/            quick save and compact library/settings surfaces
   sidepanel/        docked Save / Library / Ask surfaces
-  dashboard/        complete bookmark library and AI search
+  dashboard/        complete bookmark library, bulk cleanup, and smart search
   options/          account, AI, capture, appearance, import/export, billing
 components/
+  BulkActionBar.tsx  bounded multi-bookmark cleanup controls
   home/              Home widgets and customization controls
 lib/
   backend/           local and PocketBase implementations behind one interface
   ai.ts              tags, summaries, hybrid retrieval, and grounded library Q&A
+  bulk.ts            pure selection, tag normalization, and bounded batch helpers
   llm.ts             Anthropic/OpenAI/Google adapters and provider safety
   retrieval.ts       deterministic ranking and evidence-snippet selection
   embedder.ts        local semantic embeddings
@@ -107,7 +110,7 @@ lib/
   wallpaper.ts       safe and optimized Home backgrounds
   watch.ts           Living Bookmarks scheduler and comparison logic
 pocketbase/          schema and server-side setup material
-scripts/             release checks and retrieval regression tests
+scripts/             release, retrieval, and bulk-workflow regression tests
 ```
 
 ---
@@ -121,6 +124,7 @@ The UI calls `lib/bookmarks`, `lib/highlights`, and `lib/auth`. Those facades de
 - AI keys remain in local extension storage and are never committed or synced.
 - AI requests have hard timeouts and provider-specific error handling.
 - Saved webpage text is isolated as untrusted source material in AI prompts.
+- Bulk operations use bounded batches instead of flooding storage or the background worker.
 - PocketBase rules must enforce per-user access with `user = @request.auth.id`.
 - Local-mode passwords are salted and hashed for on-device profile separation; use PocketBase for real hosted authentication.
 - `<all_urls>` is required for user-triggered capture, metadata, highlights, and in-page features.
