@@ -31,11 +31,11 @@ jobs:
           set -o pipefail
           npm run check:version 2>&1 | tee /tmp/version.log
 
-      - name: Test retrieval behavior
+      - name: Run regression tests
         shell: bash
         run: |
           set -o pipefail
-          npm run test:retrieval 2>&1 | tee /tmp/retrieval-tests.log
+          npm test 2>&1 | tee /tmp/tests.log
 
       - name: Type-check
         shell: bash
@@ -82,7 +82,7 @@ jobs:
           name: keepsake-ci-diagnostics
           path: |
             /tmp/version.log
-            /tmp/retrieval-tests.log
+            /tmp/tests.log
             /tmp/compile.log
             /tmp/build.log
             /tmp/store-zip.log
