@@ -9,7 +9,7 @@ export default defineConfig({
     name: 'Keepsake — bookmarks on steroids',
     description:
       'Save, tag, search, highlight, and preview pages — an AI-powered bookmark vault that goes far beyond raindrop.io.',
-    version: '8.9.12',
+    version: '8.9.13',
 
     // Pins a stable extension ID across reloads / loading from a new folder, so
     // your locally-stored bookmarks survive updates instead of being wiped.
@@ -54,8 +54,13 @@ export default defineConfig({
     },
 
     // <all_urls>: content script (highlights) + captureVisibleTab + metadata extraction.
-    // api.anthropic.com: optional AI features (auto-tag, summarize, ask-your-library).
-    host_permissions: ['<all_urls>', 'https://api.anthropic.com/*'],
+    // Provider API hosts are used only when the user enables BYOK AI.
+    host_permissions: [
+      '<all_urls>',
+      'https://api.anthropic.com/*',
+      'https://api.openai.com/*',
+      'https://generativelanguage.googleapis.com/*',
+    ],
 
     icons: {
       16: 'icon/16.png',

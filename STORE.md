@@ -46,8 +46,10 @@ synced to their account.
 - host permission `<all_urls>`: required so "save this page" and highlighting work on
   any website the user visits. Page content is only read when the user explicitly saves
   or highlights that page.
-- host permission `https://api.anthropic.com/*`: only used when the user enables optional
-  AI features with their own API key.
+- host permissions for `api.anthropic.com`, `api.openai.com`, and
+  `generativelanguage.googleapis.com`: only used when the user enables optional BYOK AI
+  and chooses that provider. The user's key is stored locally and sent only to the
+  selected provider.
 
 ## New-tab override (chrome_url_overrides.newtab) — review note
 The extension replaces the New Tab page with "Keepsake Home", a start page showing the
@@ -61,13 +63,13 @@ default new tab. Disclose this clearly in the listing (Chrome flags new-tab over
 ## Privacy policy URL
 [https://yourdomain.com/keepsake-privacy]  (host the contents of PRIVACY.md)
 
-## Assets needed (you provide)
+## Assets needed
 - Store icon: 128×128 (already in the build: public/icon/128.png).
 - At least 1 screenshot, 1280×800 or 640×400 (popup + dashboard recommended).
 - Optional: small promo tile 440×280.
 
 ## Before uploading
-- Remove the dev `key` from wxt.config.ts manifest (let the Store assign the ID),
-  OR keep it if you want a fixed ID — but the Store-assigned key is recommended for
-  a first public listing.
-- Bump version as needed and run `npm run zip` → upload `.output/keepsake-*-chrome.zip`.
+- Run `npm run zip:store`. This strips the development-only manifest `key`, builds the
+  Chrome Web Store ZIP, and leaves the upload package in `.output/`.
+- Do not upload a regular development ZIP; CI verifies the store package has no `key`
+  and that its manifest version matches `package.json`.
