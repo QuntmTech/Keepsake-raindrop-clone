@@ -46,7 +46,7 @@ Use `npm run zip:store` for a Web Store upload. Do not upload the normal develop
 
 ### Turning on AI
 
-Open Settings → **AI**, enable AI, select a provider, paste its API key, and click **Test key**.
+Ask Your Library works without an API key by returning the strongest matching saves locally. For synthesized answers with numbered citations, open Settings → **AI**, enable AI, select a provider, paste its API key, and click **Test key**.
 
 Default model tiers:
 
