@@ -1,9 +1,10 @@
 import { useEffect, useRef, useState } from 'react';
-import { markVisited, vaultStats } from '@/lib/bookmarks';
+import { markVisited, vaultStats, watchVault } from '@/lib/bookmarks';
 import {
   aiAvailable,
   askLibrary,
   loadAiCorpus,
+  watchAiSettings,
   type LibraryAnswer,
   type LibraryTurnContext,
 } from '@/lib/ai';
@@ -18,7 +19,8 @@ interface Turn {
 }
 
 // "Ask your library" — retrieves relevant snippets across the complete vault,
-// then sends only those sources to the configured AI provider.
+// then sends only those sources to the configured AI provider. Without a key,
+// the same retrieval layer still returns useful local matches.
 export function AIAssistant({ onClose }: { onClose?: () => void }) {
   const [available, setAvailable] = useState<boolean | null>(null);
   const [corpus, setCorpus] = useState<Bookmark[]>([]);
@@ -39,6 +41,33 @@ export function AIAssistant({ onClose }: { onClose?: () => void }) {
       .finally(() => !cancelled && setCorpusLoading(false));
     return () => {
       cancelled = true;
+    };
+  }, []);
+
+  // Settings can change from another Keepsake surface while this panel remains
+  // open. Reflect key/provider changes immediately instead of requiring reload.
+  useEffect(
+    () =>
+      watchAiSettings(() => {
+        aiAvailable().then(setAvailable).catch(() => setAvailable(false));
+      }),
+    [],
+  );
+
+  // Keep the searchable seed and count current if saves are added/edited/deleted
+  // from the Quick Bar, popup, dashboard, or another tab.
+  useEffect(() => {
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const unwatch = watchVault(() => {
+      clearTimeout(timer);
+      timer = setTimeout(() => {
+        loadAiCorpus().then(setCorpus).catch(() => {});
+        vaultStats().then((stats) => setLibraryTotal(stats.total)).catch(() => {});
+      }, 250);
+    });
+    return () => {
+      clearTimeout(timer);
+      unwatch();
     };
   }, []);
 
@@ -119,23 +148,23 @@ export function AIAssistant({ onClose }: { onClose?: () => void }) {
       <div ref={scrollRef} className="flex-1 space-y-4 overflow-y-auto p-4">
         {available === false && (
           <div className="rounded-xl border border-line bg-surface-sunken p-4 text-sm text-ink-soft">
-            <p className="mb-1 font-medium text-ink">AI isn’t set up yet</p>
+            <p className="mb-1 font-medium text-ink">Local library search is ready</p>
             <p className="text-xs">
-              Choose Anthropic, OpenAI, or Google and add your API key in Settings → AI. Your key stays on this device.
+              Ask anything now and Keepsake will show the strongest matching saves. Add an Anthropic, OpenAI, or Google key in Settings → AI for synthesized answers with citations.
             </p>
           </div>
         )}
 
-        {available && corpusLoading && (
+        {corpusLoading && (
           <div className="rounded-xl border border-line bg-surface-sunken p-4 text-sm text-ink-soft">
             Preparing your complete library for search…
           </div>
         )}
 
-        {turns.length === 0 && available && !corpusLoading && (
+        {turns.length === 0 && !corpusLoading && (
           <div className="space-y-2">
             <p className="text-xs text-ink-faint">
-              Keepsake searches your full vault first and sends only the most relevant saved sources to your AI provider.
+              Keepsake searches your full vault first and sends only the most relevant saved sources to your selected AI provider when one is configured.
             </p>
             {samples.map((sample) => (
               <button
@@ -170,7 +199,7 @@ export function AIAssistant({ onClose }: { onClose?: () => void }) {
                 </div>
                 {turn.a.degraded && (
                   <p className="px-1 text-[11px] text-amber-600 dark:text-amber-400">
-                    Showing local matches because the configured AI provider was unavailable.
+                    Showing local matches. Add or check your AI provider in Settings for a synthesized answer.
                   </p>
                 )}
                 {turn.a.sources.length > 0 && (
@@ -216,7 +245,7 @@ export function AIAssistant({ onClose }: { onClose?: () => void }) {
         ))}
       </div>
 
-      {available && (
+      {available !== null && (
         <div className="border-t border-line p-3">
           <div className="flex items-center gap-2">
             <input
