@@ -11,8 +11,9 @@
     "build:firefox": "wxt build -b firefox",
     "zip": "wxt zip",
     "compile": "tsc --noEmit",
+    "test:retrieval": "node --test scripts/test-retrieval.mjs",
     "check:version": "node scripts/check-version.mjs",
-    "check": "npm run check:version && npm run compile && npm run build",
+    "check": "npm run check:version && npm run test:retrieval && npm run compile && npm run build",
     "postinstall": "wxt prepare",
     "zip:store": "WXT_STORE=1 wxt zip"
   },
