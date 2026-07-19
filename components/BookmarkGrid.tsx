@@ -11,6 +11,9 @@ interface Props {
   onEdit?: (b: Bookmark) => void;
   onRead?: (b: Bookmark) => void;
   emptyHint?: string;
+  selectionMode?: boolean;
+  selectedIds?: ReadonlySet<string>;
+  onToggleSelected?: (b: Bookmark) => void;
 }
 
 export function BookmarkGrid({
@@ -22,6 +25,9 @@ export function BookmarkGrid({
   onEdit,
   onRead,
   emptyHint,
+  selectionMode = false,
+  selectedIds = new Set<string>(),
+  onToggleSelected,
 }: Props) {
   if (loading) {
     return (
@@ -47,40 +53,34 @@ export function BookmarkGrid({
     );
   }
 
+  const card = (bookmark: Bookmark, layout: ViewMode) => (
+    <BookmarkCard
+      key={bookmark.id}
+      bookmark={bookmark}
+      layout={layout}
+      onDelete={onDelete}
+      onToggleFavorite={onToggleFavorite}
+      onEdit={onEdit}
+      onRead={onRead}
+      selectionMode={selectionMode}
+      selected={selectedIds.has(bookmark.id)}
+      onToggleSelected={onToggleSelected}
+    />
+  );
+
   if (view === 'masonry') {
     return (
       <div className="columns-2 gap-4 [column-fill:_balance] sm:columns-3 lg:columns-4">
-        {items.map((b) => (
-          <div key={b.id} className="mb-4 break-inside-avoid">
-            <BookmarkCard
-              bookmark={b}
-              layout="masonry"
-              onDelete={onDelete}
-              onToggleFavorite={onToggleFavorite}
-              onEdit={onEdit}
-            onRead={onRead}
-            />
+        {items.map((bookmark) => (
+          <div key={bookmark.id} className="mb-4 break-inside-avoid">
+            {card(bookmark, 'masonry')}
           </div>
         ))}
       </div>
     );
   }
 
-  return (
-    <div className={containerClass(view)}>
-      {items.map((b) => (
-        <BookmarkCard
-          key={b.id}
-          bookmark={b}
-          layout={view}
-          onDelete={onDelete}
-          onToggleFavorite={onToggleFavorite}
-          onEdit={onEdit}
-        onRead={onRead}
-        />
-      ))}
-    </div>
-  );
+  return <div className={containerClass(view)}>{items.map((bookmark) => card(bookmark, view))}</div>;
 }
 
 function containerClass(view: ViewMode): string {
