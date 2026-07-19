@@ -21,13 +21,30 @@ interface Props {
   onToggleFavorite?: (b: Bookmark) => void;
   onEdit?: (b: Bookmark) => void;
   onRead?: (b: Bookmark) => void;
+  selectionMode?: boolean;
+  selected?: boolean;
+  onToggleSelected?: (b: Bookmark) => void;
 }
 
-export function BookmarkCard({ bookmark, layout = 'grid', onDelete, onToggleFavorite, onEdit, onRead }: Props) {
+export function BookmarkCard({
+  bookmark,
+  layout = 'grid',
+  onDelete,
+  onToggleFavorite,
+  onEdit,
+  onRead,
+  selectionMode = false,
+  selected = false,
+  onToggleSelected,
+}: Props) {
   const [copied, setCopied] = useState(false);
   const open = () => {
     markVisited(bookmark.id);
     window.open(bookmark.url, '_blank', 'noreferrer');
+  };
+  const handleCardClick = () => {
+    if (selectionMode && onToggleSelected) onToggleSelected(bookmark);
+    else open();
   };
   const copyLink = () => {
     navigator.clipboard?.writeText(bookmark.url).then(() => {
@@ -36,10 +53,15 @@ export function BookmarkCard({ bookmark, layout = 'grid', onDelete, onToggleFavo
     });
   };
 
-  // Drag a card onto a collection in the sidebar to file it there.
+  // Drag a card onto a collection in the sidebar to file it there. Selection
+  // mode disables dragging so a cleanup click cannot accidentally move a card.
   const dragProps = {
-    draggable: true,
+    draggable: !selectionMode,
     onDragStart: (e: React.DragEvent) => {
+      if (selectionMode) {
+        e.preventDefault();
+        return;
+      }
       e.dataTransfer.setData('text/plain', bookmark.id);
       e.dataTransfer.effectAllowed = 'move';
     },
@@ -53,7 +75,7 @@ export function BookmarkCard({ bookmark, layout = 'grid', onDelete, onToggleFavo
         loading="lazy"
         draggable={false}
         className={`${className} object-cover`}
-        onError={(e) => ((e.currentTarget.style.display = 'none'))}
+        onError={(e) => (e.currentTarget.style.display = 'none')}
       />
     ) : (
       <div className={`${className} grid place-items-center bg-surface-sunken text-ink-faint`}>
@@ -61,78 +83,105 @@ export function BookmarkCard({ bookmark, layout = 'grid', onDelete, onToggleFavo
       </div>
     );
 
-  const Actions = () => (
-    <div className="flex items-center gap-0.5">
+  const SelectControl = ({ overlay = false }: { overlay?: boolean }) =>
+    selectionMode && onToggleSelected ? (
       <button
-        className={`rounded-md p-1.5 opacity-0 transition hover:bg-surface-sunken group-hover:opacity-100 ${copied ? 'text-emerald-500' : 'text-ink-faint hover:text-ink'}`}
+        className={`${overlay ? 'absolute left-2 top-2 z-10' : 'shrink-0'} grid h-6 w-6 place-items-center rounded-md border shadow-sm transition ${
+          selected
+            ? 'border-brand bg-brand text-white'
+            : 'border-line bg-surface-raised/90 text-transparent hover:border-brand/50'
+        }`}
         onClick={(e) => {
           e.stopPropagation();
-          copyLink();
+          onToggleSelected(bookmark);
         }}
-        title={copied ? 'Copied!' : 'Copy link'}
+        aria-label={selected ? `Deselect ${bookmark.title}` : `Select ${bookmark.title}`}
+        aria-pressed={selected}
       >
-        <Icon name={copied ? 'check' : 'copy'} size={15} />
+        <Icon name="check" size={13} />
       </button>
-      {onRead && bookmark.content && (
+    ) : null;
+
+  const Actions = () => {
+    if (selectionMode) return null;
+    return (
+      <div className="flex items-center gap-0.5">
         <button
-          className="rounded-md p-1.5 text-ink-faint opacity-0 transition hover:bg-surface-sunken hover:text-ink group-hover:opacity-100"
-          onClick={(e) => {
-            e.stopPropagation();
-            onRead(bookmark);
-          }}
-          title="Read saved copy"
-        >
-          <Icon name="doc" size={15} />
-        </button>
-      )}
-      {onToggleFavorite && (
-        <button
-          className={`rounded-md p-1.5 transition hover:bg-surface-sunken ${
-            bookmark.favorite ? 'text-amber-400' : 'text-ink-faint opacity-0 group-hover:opacity-100'
+          className={`rounded-md p-1.5 opacity-0 transition hover:bg-surface-sunken group-hover:opacity-100 ${
+            copied ? 'text-emerald-500' : 'text-ink-faint hover:text-ink'
           }`}
           onClick={(e) => {
             e.stopPropagation();
-            onToggleFavorite(bookmark);
+            copyLink();
           }}
-          title="Favorite"
+          title={copied ? 'Copied!' : 'Copy link'}
         >
-          <Icon name={bookmark.favorite ? 'star-fill' : 'star'} size={15} />
+          <Icon name={copied ? 'check' : 'copy'} size={15} />
         </button>
-      )}
-      {onEdit && (
-        <button
-          className="rounded-md p-1.5 text-ink-faint opacity-0 transition hover:bg-surface-sunken hover:text-ink group-hover:opacity-100"
-          onClick={(e) => {
-            e.stopPropagation();
-            onEdit(bookmark);
-          }}
-          title="Edit"
-        >
-          <Icon name="edit" size={15} />
-        </button>
-      )}
-      {onDelete && (
-        <button
-          className="rounded-md p-1.5 text-ink-faint opacity-0 transition hover:bg-red-500/10 hover:text-red-500 group-hover:opacity-100"
-          onClick={(e) => {
-            e.stopPropagation();
-            onDelete(bookmark.id);
-          }}
-          title="Delete"
-        >
-          <Icon name="trash" size={15} />
-        </button>
-      )}
-    </div>
-  );
+        {onRead && bookmark.content && (
+          <button
+            className="rounded-md p-1.5 text-ink-faint opacity-0 transition hover:bg-surface-sunken hover:text-ink group-hover:opacity-100"
+            onClick={(e) => {
+              e.stopPropagation();
+              onRead(bookmark);
+            }}
+            title="Read saved copy"
+          >
+            <Icon name="doc" size={15} />
+          </button>
+        )}
+        {onToggleFavorite && (
+          <button
+            className={`rounded-md p-1.5 transition hover:bg-surface-sunken ${
+              bookmark.favorite ? 'text-amber-400' : 'text-ink-faint opacity-0 group-hover:opacity-100'
+            }`}
+            onClick={(e) => {
+              e.stopPropagation();
+              onToggleFavorite(bookmark);
+            }}
+            title="Favorite"
+          >
+            <Icon name={bookmark.favorite ? 'star-fill' : 'star'} size={15} />
+          </button>
+        )}
+        {onEdit && (
+          <button
+            className="rounded-md p-1.5 text-ink-faint opacity-0 transition hover:bg-surface-sunken hover:text-ink group-hover:opacity-100"
+            onClick={(e) => {
+              e.stopPropagation();
+              onEdit(bookmark);
+            }}
+            title="Edit"
+          >
+            <Icon name="edit" size={15} />
+          </button>
+        )}
+        {onDelete && (
+          <button
+            className="rounded-md p-1.5 text-ink-faint opacity-0 transition hover:bg-red-500/10 hover:text-red-500 group-hover:opacity-100"
+            onClick={(e) => {
+              e.stopPropagation();
+              onDelete(bookmark.id);
+            }}
+            title="Delete"
+          >
+            <Icon name="trash" size={15} />
+          </button>
+        )}
+      </div>
+    );
+  };
 
   if (layout === 'list') {
     return (
       <div
-        className="group flex cursor-pointer items-center gap-3 rounded-xl border border-line bg-surface-raised px-3 py-2.5 transition hover:border-brand/30 hover:shadow-card"
-        onClick={open}
+        className={`group flex cursor-pointer items-center gap-3 rounded-xl border bg-surface-raised px-3 py-2.5 transition hover:shadow-card ${
+          selected ? 'border-brand/60 bg-brand/5 ring-2 ring-brand/10' : 'border-line hover:border-brand/30'
+        }`}
+        onClick={handleCardClick}
         {...dragProps}
       >
+        <SelectControl />
         <Cover className="h-11 w-11 shrink-0 rounded-lg" />
         <div className="min-w-0 flex-1">
           <div className="flex items-center gap-1.5">
@@ -157,13 +206,20 @@ export function BookmarkCard({ bookmark, layout = 'grid', onDelete, onToggleFavo
   // grid / masonry card
   return (
     <div
-      className="group flex cursor-pointer flex-col overflow-hidden rounded-2xl border border-line bg-surface-raised shadow-card transition hover:-translate-y-0.5 hover:border-brand/30 hover:shadow-float"
-      onClick={open}
+      className={`group flex cursor-pointer flex-col overflow-hidden rounded-2xl border bg-surface-raised shadow-card transition hover:-translate-y-0.5 hover:shadow-float ${
+        selected ? 'border-brand/60 bg-brand/5 ring-2 ring-brand/10' : 'border-line hover:border-brand/30'
+      }`}
+      onClick={handleCardClick}
       {...dragProps}
     >
       <div className="relative">
         <Cover className={layout === 'masonry' ? 'h-auto max-h-64 w-full' : 'h-32 w-full'} />
-        <span className="absolute left-2 top-2 grid h-6 w-6 place-items-center rounded-md bg-black/45 text-white backdrop-blur-sm">
+        <SelectControl overlay />
+        <span
+          className={`absolute top-2 grid h-6 w-6 place-items-center rounded-md bg-black/45 text-white backdrop-blur-sm ${
+            selectionMode ? 'left-10' : 'left-2'
+          }`}
+        >
           <Icon name={TYPE_ICON[bookmark.type]} size={13} />
         </span>
         <div className="absolute right-1.5 top-1.5 rounded-lg bg-surface-raised/85 backdrop-blur-sm">
@@ -176,9 +232,7 @@ export function BookmarkCard({ bookmark, layout = 'grid', onDelete, onToggleFavo
           <span className="truncate text-xs text-ink-faint">{bookmark.domain}</span>
         </div>
         <span className="line-clamp-2 text-sm font-medium text-ink">{bookmark.title}</span>
-        {bookmark.summary && (
-          <p className="line-clamp-2 text-xs text-ink-soft">{bookmark.summary}</p>
-        )}
+        {bookmark.summary && <p className="line-clamp-2 text-xs text-ink-soft">{bookmark.summary}</p>}
         {bookmark.tags.length > 0 && (
           <div className="mt-auto flex flex-wrap gap-1 pt-1">
             {bookmark.tags.slice(0, 4).map((t) => (
