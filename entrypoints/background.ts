@@ -25,6 +25,7 @@ import { onboardingStage } from '@/lib/onboarding';
 import { applyOverlayWrite, applyOverlayForget, syncHomeOverlay } from '@/lib/home';
 import { canSaveBookmark, storageRemaining, refreshEntitlements } from '@/lib/entitlements';
 import { storage } from 'wxt/utils/storage';
+import { normalizeQuickBarUrl } from '@/lib/quickbarConfig';
 
 // The background "service worker" is event-driven and can be killed at any time by Chrome.
 // Never rely on long-lived in-memory state here — read from storage when you need it.
@@ -143,8 +144,8 @@ export default defineBackground(() => {
   });
 
   // Message hub.
-  browser.runtime.onMessage.addListener((msg: Message, _sender, sendResponse) => {
-    handleMessage(msg).then(sendResponse).catch((e) => sendResponse({ ok: false, error: String(e) }));
+  browser.runtime.onMessage.addListener((msg: Message, sender, sendResponse) => {
+    handleMessage(msg, sender).then(sendResponse).catch((e) => sendResponse({ ok: false, error: String(e) }));
     return true; // keep the channel open for the async response
   });
 
@@ -218,7 +219,7 @@ async function runRecall(tabId: number, url: string): Promise<void> {
   }
 }
 
-async function handleMessage(msg: Message): Promise<unknown> {
+async function handleMessage(msg: Message, sender?: { tab?: { id?: number; windowId?: number } }): Promise<unknown> {
   await getBackend(); // restore session
   switch (msg.type) {
     case 'PING':
@@ -244,9 +245,21 @@ async function handleMessage(msg: Message): Promise<unknown> {
       await openDashboard();
       return { ok: true };
 
+    case 'OPEN_POPUP':
+      await openToolbarPopup(sender?.tab?.id, sender?.tab?.windowId);
+      return { ok: true };
+
+    case 'OPEN_URL': {
+      const url = normalizeQuickBarUrl(msg.url);
+      if (!url) return { ok: false, error: 'Only valid http:// or https:// URLs can be opened.' };
+      await browser.tabs.create({ url });
+      return { ok: true };
+    }
+
     case 'OPEN_SURFACE':
       if (msg.surface === 'dashboard') await openDashboard();
       else if (msg.surface === 'sidepanel') await openSidePanel();
+      else await openToolbarPopup(sender?.tab?.id, sender?.tab?.windowId);
       return { ok: true };
 
     case 'FLUSH_QUEUE': {
@@ -752,6 +765,27 @@ async function flash(text: string, color: string) {
   await browser.action.setBadgeText({ text });
   await browser.action.setBadgeBackgroundColor({ color });
   setTimeout(() => browser.action.setBadgeText({ text: '' }), 1600);
+}
+
+async function openToolbarPopup(tabId?: number, windowId?: number) {
+  const action = browser.action as typeof browser.action & {
+    openPopup?: (options?: { windowId?: number }) => Promise<void>;
+  };
+  if (typeof action.openPopup !== 'function') {
+    throw new Error('Opening the toolbar dropdown requires Chrome 127 or newer.');
+  }
+
+  const currentPopup = await browser.action.getPopup({ tabId }).catch(() => '');
+  const needsTemporaryPopup = !currentPopup;
+  if (needsTemporaryPopup) await browser.action.setPopup({ popup: 'popup.html', tabId });
+
+  try {
+    await action.openPopup(windowId == null ? undefined : { windowId });
+  } finally {
+    if (needsTemporaryPopup) {
+      setTimeout(() => browser.action.setPopup({ popup: '', tabId }).catch(() => {}), 1000);
+    }
+  }
 }
 
 async function openDashboard() {
