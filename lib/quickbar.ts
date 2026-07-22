@@ -433,8 +433,8 @@ export async function mountQuickBar(initialSettings?: Settings): Promise<QuickBa
   });
   resizeHandle.addEventListener('keydown', (event) => {
     let next = railWidth;
-    if (event.key === 'ArrowLeft') next -= side === 'right' ? 2 : -2;
-    else if (event.key === 'ArrowRight') next += side === 'right' ? 2 : -2;
+    if (event.key === 'ArrowLeft') next += side === 'right' ? 2 : -2;
+    else if (event.key === 'ArrowRight') next += side === 'right' ? -2 : 2;
     else if (event.key === 'Home') next = 34;
     else if (event.key === 'End') next = 86;
     else return;

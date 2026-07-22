@@ -558,8 +558,9 @@ export class PocketBaseBackend implements Backend {
         this.pb.collection('bookmarks').getFirstListItem(`user = "${this.uid()}" && url = "${escFilter(url)}"`),
       );
       return this.normalize(rec);
-    } catch {
-      return null;
+    } catch (error) {
+      if ((error as { status?: number })?.status === 404) return null;
+      throw error;
     }
   }
 

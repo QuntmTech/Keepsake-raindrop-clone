@@ -39,3 +39,10 @@ test('collection launcher opens inward with searchable bookmark drill-down', () 
   assert.doesNotMatch(source, /countByCollection/);
   assert.match(source, /input\.placeholder = 'Search ' \+ label\.toLowerCase\(\)/);
 });
+
+
+test('highlight toolbar stays inside the visible viewport', async () => {
+  const content = await readFile(new URL('../entrypoints/content.ts', import.meta.url), 'utf8');
+  assert.match(content, /position: fixed/);
+  assert.match(content, /window\.innerWidth - toolbarWidth/);
+});

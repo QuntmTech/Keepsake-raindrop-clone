@@ -394,8 +394,9 @@ function wrapRange(start: number, length: number, segs: Seg[], full: string, bac
 function buildToolbar(rect: DOMRect, onPick: (color: HighlightColor) => void): HTMLDivElement {
   const bar = document.createElement('div');
   bar.className = 'ks-toolbar';
-  bar.style.top = `${window.scrollY + rect.top - 46}px`;
-  bar.style.left = `${window.scrollX + rect.left}px`;
+  const toolbarWidth = 150;
+  bar.style.top = `${Math.max(8, rect.top - 46)}px`;
+  bar.style.left = `${Math.max(8, Math.min(rect.left, window.innerWidth - toolbarWidth - 8))}px`;
   (Object.keys(COLORS) as HighlightColor[]).forEach((color) => {
     const dot = document.createElement('button');
     dot.className = 'ks-dot';
@@ -455,7 +456,7 @@ async function reapplyHighlights() {
 function injectStyles() {
   const style = document.createElement('style');
   style.textContent = `
-    .ks-toolbar { position: absolute; z-index: 2147483647; display: flex; gap: 6px;
+    .ks-toolbar { position: fixed; z-index: 2147483647; display: flex; gap: 6px;
       padding: 7px 9px; background: #1f2937; border-radius: 10px;
       box-shadow: 0 6px 20px rgba(0,0,0,.35); }
     .ks-dot { width: 20px; height: 20px; border-radius: 50%;

@@ -197,12 +197,7 @@ export default defineBackground(() => {
     const intelligenceTimer = pageIntelligenceTimers.get(tabId);
     if (intelligenceTimer) clearTimeout(intelligenceTimer);
     pageIntelligenceTimers.delete(tabId);
-    recallCache.getValue().then((cache) => {
-      if (cache[tabId]) {
-        delete cache[tabId];
-        recallCache.setValue(cache);
-      }
-    });
+    mutateRecallCache((cache) => { delete cache[tabId]; }).catch(() => {});
     // Stripe Checkout/Portal tab closed — re-read entitlements. The redirect
     // itself proves nothing (the webhook is the source of truth), so this is
     // just "a good moment to check," backstopped by the poll below.
@@ -218,6 +213,16 @@ export default defineBackground(() => {
 // Per-tab recall results; session-scoped so the side panel can read them and
 // nothing persists across browser restarts.
 const recallCache = storage.defineItem<Record<number, RecallResult>>('session:recall_cache', { fallback: {} });
+let recallCacheMutation: Promise<unknown> = Promise.resolve();
+function mutateRecallCache(mutator: (cache: Record<number, RecallResult>) => void): Promise<void> {
+  const next = recallCacheMutation.then(async () => {
+    const cache = await recallCache.getValue();
+    mutator(cache);
+    await recallCache.setValue(cache);
+  });
+  recallCacheMutation = next.catch(() => undefined);
+  return next;
+}
 
 async function runRecall(tabId: number, url: string): Promise<void> {
   if (!(await recallAllowed(url))) return;
@@ -240,9 +245,9 @@ async function runRecall(tabId: number, url: string): Promise<void> {
   }
 
   const result = await matchPage({ url, title: tab.title, description });
-  const fresh = await recallCache.getValue();
-  fresh[tabId] = result;
-  await recallCache.setValue(fresh);
+  const liveTab = await browser.tabs.get(tabId).catch(() => null);
+  if (!liveTab || liveTab.url !== url) return;
+  await mutateRecallCache((cache) => { cache[tabId] = result; });
 
   // Badge: count of related saves; exact matches get the distinct green.
   try {

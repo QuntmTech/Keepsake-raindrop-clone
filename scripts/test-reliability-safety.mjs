@@ -18,7 +18,8 @@ test('offline queue serializes mutations and deduplicates ambiguous creates', ()
   assert.match(queue, /withQueueLock/);
   assert.match(queue, /findByUrl\(input\.url\)/);
   assert.match(queue, /sameDestination/);
-  assert.match(queue, /queue\.slice\(-100\)/);
+  assert.doesNotMatch(queue, /queue\.slice\(-100\)/);
+  assert.match(queue, /remaining\.push\(item, \.\.\.queue\.slice\(index \+ 1\)\)/);
 });
 
 test('create operations are not replayed after ambiguous failures', () => {
@@ -37,4 +38,10 @@ test('highlight storage stays out of the every-page bundle', () => {
   assert.doesNotMatch(content, /@\/lib\/highlights/);
   assert.match(background, /KS_HIGHLIGHT_CREATE/);
   assert.match(background, /KS_HIGHLIGHTS_FOR_URL/);
+});
+
+
+test('Recall cache writes are serialized and stale tabs cannot reappear', () => {
+  assert.match(background, /mutateRecallCache/);
+  assert.match(background, /liveTab\.url !== url/);
 });
