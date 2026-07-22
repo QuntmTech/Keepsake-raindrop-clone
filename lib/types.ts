@@ -3,11 +3,11 @@
 export interface Collection {
   id: string;
   name: string;
-  color?: string;
-  icon?: string;       // emoji or icon key
-  parent?: string;     // collection id, for nesting
-  sort?: number;       // manual ordering within a parent
-  user: string;        // owner relation
+  color?: string;       // emoji or icon key
+  icon?: string;
+  parent?: string;      // collection id, for nesting
+  sort?: number;        // manual ordering within a parent
+  user: string;         // owner relation
   created: string;
   updated: string;
 }
@@ -87,29 +87,38 @@ export type QuickBarCustomIcon = 'link' | 'globe' | 'bolt' | 'star';
 export type Accent = 'ocean' | 'violet' | 'emerald' | 'sunset' | 'rose' | 'slate';
 
 // AI provider config. The key lives in chrome.storage.local (never synced,
-// never leaves the device except in calls to the model API).
-export type LlmProvider = 'anthropic' | 'openai' | 'google';
+// never leaves the device except in calls to the selected provider).
+export type LlmProvider = 'novita' | 'anthropic' | 'openai' | 'google';
+export type AiRouteMode = 'auto' | 'economy' | 'balanced' | 'best';
 
 export interface AiSettings {
   enabled: boolean;
   provider: LlmProvider;     // which provider the BYOK key belongs to
   apiKey: string;
+  routeMode: AiRouteMode;    // auto routes by task; other modes pin a quality/cost profile
+  showUsage: boolean;        // show model, latency, tokens and estimated cost after a request
   autoTag: boolean;          // suggest tags on save
   autoSummarize: boolean;    // generate a TL;DR on save
   autoFile: boolean;         // zero-organization auto-filing on save
-  fastModel: string;         // tagging/summarizing/filing (cheap + quick)
-  smartModel: string;        // "ask your library" Q&A
+  fastModel: string;         // cheap high-frequency model
+  smartModel: string;        // context-heavy reasoning model
+  bestModel: string;         // expensive escalation model
+  visionModel: string;       // screenshot/document-image understanding
 }
 
 export const DEFAULT_AI_SETTINGS: AiSettings = {
   enabled: false,
-  provider: 'anthropic',
+  provider: 'novita',
   apiKey: '',
+  routeMode: 'auto',
+  showUsage: true,
   autoTag: true,
   autoSummarize: true,
   autoFile: true,
-  fastModel: 'claude-haiku-4-5',
-  smartModel: 'claude-opus-4-8',
+  fastModel: 'openai/gpt-oss-20b',
+  smartModel: 'deepseek/deepseek-v4-flash',
+  bestModel: 'deepseek/deepseek-v4-pro',
+  visionModel: 'qwen/qwen3-vl-235b-a22b-instruct',
 };
 
 export interface Settings {
