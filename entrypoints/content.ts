@@ -5,35 +5,66 @@ import { mountQuickBar, type QuickBarApi } from '@/lib/quickbar';
 import { type Message } from '@/lib/messaging';
 import { type HighlightColor, type TextQuoteAnchor } from '@/lib/types';
 
-// Content scripts run INSIDE the web page. This one powers (1) the draggable
-// Quick Bar for one-click saving and (2) highlights/annotations with robust
-// quote-based anchoring that survives DOM changes and multi-node selections.
-
+// Content scripts run inside web pages. This one powers the draggable Quick Bar
+// and robust quote-based highlights.
 export default defineContentScript({
   matches: ['<all_urls>'],
   runAt: 'document_idle',
 
   async main() {
-    await getBackend();
+    // Authentication/backend startup must never prevent the in-page control from
+    // mounting. The Quick Bar handles signed-out and offline states itself.
+    await getBackend().catch(() => null);
     const settings = await getSettings();
 
-    // Quick Bar — independent of highlights.
+    let quickBarEnabled = settings.enableQuickBar;
     let quickBar: QuickBarApi | null = null;
-    if (settings.enableQuickBar) {
-      quickBar = await mountQuickBar();
-    }
-    // Keyboard shortcut (handled in background) asks us to pop the folder picker.
-    browser.runtime.onMessage.addListener((msg: Message) => {
-      if (msg.type === 'OPEN_QUICKBAR') quickBar?.openFolders();
-    });
-    // Toggle the Quick Bar live when the setting changes (no reload needed).
-    watchSettings(async (s) => {
-      if (s.enableQuickBar && !quickBar) quickBar = await mountQuickBar();
-      else if (!s.enableQuickBar && quickBar) {
-        quickBar.destroy();
-        quickBar = null;
+    let mounting: Promise<QuickBarApi | null> | null = null;
+
+    const ensureQuickBar = async () => {
+      if (!quickBarEnabled) return null;
+      if (quickBar && document.getElementById('keepsake-quickbar')) return quickBar;
+      if (mounting) return mounting;
+      mounting = mountQuickBar()
+        .then((api) => {
+          quickBar = api;
+          return api;
+        })
+        .catch(() => null)
+        .finally(() => {
+          mounting = null;
+        });
+      return mounting;
+    };
+
+    if (quickBarEnabled) await ensureQuickBar();
+
+    browser.runtime.onMessage.addListener((message: Message) => {
+      if (message.type === 'OPEN_QUICKBAR') {
+        ensureQuickBar().then((api) => api?.openFolders()).catch(() => {});
       }
     });
+
+    watchSettings(async (next) => {
+      quickBarEnabled = next.enableQuickBar;
+      if (!quickBarEnabled) {
+        quickBar?.destroy();
+        quickBar = null;
+        return;
+      }
+      const api = await ensureQuickBar();
+      api?.update(next);
+    });
+
+    // Some highly dynamic sites replace documentElement children. If they remove
+    // the host, clean up stale listeners and remount automatically.
+    const observer = new MutationObserver(() => {
+      if (!quickBarEnabled || document.getElementById('keepsake-quickbar')) return;
+      quickBar?.destroy();
+      quickBar = null;
+      ensureQuickBar().catch(() => {});
+    });
+    observer.observe(document.documentElement, { childList: true });
 
     if (!settings.enableHighlights) return;
 
@@ -46,15 +77,12 @@ export default defineContentScript({
       toolbar = null;
     };
 
-    document.addEventListener('mousedown', (e) => {
-      if (toolbar && !toolbar.contains(e.target as Node)) closeToolbar();
+    document.addEventListener('mousedown', (event) => {
+      if (toolbar && !toolbar.contains(event.target as Node)) closeToolbar();
     });
 
-    document.addEventListener('mouseup', (e) => {
-      // Ignore clicks on the toolbar itself — otherwise picking a color would
-      // rebuild the toolbar mid-click and swallow the color button's handler.
-      if (toolbar && toolbar.contains(e.target as Node)) return;
-      // Defer so the selection is finalized.
+    document.addEventListener('mouseup', (event) => {
+      if (toolbar && toolbar.contains(event.target as Node)) return;
       setTimeout(() => {
         const selection = window.getSelection();
         const text = selection?.toString().trim();
@@ -84,22 +112,19 @@ const COLORS: Record<HighlightColor, string> = {
   orange: '#fdba74',
 };
 
-// ---- anchoring -------------------------------------------------------------
-
-// Flatten the page into a single string and remember where each text node sits,
-// so we can map character offsets back to DOM ranges.
 interface Seg {
   node: Text;
   start: number;
 }
+
 function buildIndex(): { text: string; segs: Seg[] } {
   const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT, {
-    acceptNode: (n) => {
-      const p = n.parentElement;
-      if (!p) return NodeFilter.FILTER_REJECT;
-      const tag = p.tagName;
+    acceptNode: (node) => {
+      const parent = node.parentElement;
+      if (!parent) return NodeFilter.FILTER_REJECT;
+      const tag = parent.tagName;
       if (tag === 'SCRIPT' || tag === 'STYLE' || tag === 'NOSCRIPT') return NodeFilter.FILTER_REJECT;
-      if (p.closest('.ks-toolbar')) return NodeFilter.FILTER_REJECT;
+      if (parent.closest('.ks-toolbar')) return NodeFilter.FILTER_REJECT;
       return NodeFilter.FILTER_ACCEPT;
     },
   });
@@ -116,47 +141,44 @@ function buildIndex(): { text: string; segs: Seg[] } {
 function buildAnchor(selection: Selection): TextQuoteAnchor {
   const exact = selection.toString();
   const { text } = buildIndex();
-  const idx = text.indexOf(exact);
-  const CTX = 32;
+  const index = text.indexOf(exact);
+  const context = 32;
   return {
     exact,
-    prefix: idx > 0 ? text.slice(Math.max(0, idx - CTX), idx) : undefined,
-    suffix: idx >= 0 ? text.slice(idx + exact.length, idx + exact.length + CTX) : undefined,
+    prefix: index > 0 ? text.slice(Math.max(0, index - context), index) : undefined,
+    suffix: index >= 0 ? text.slice(index + exact.length, index + exact.length + context) : undefined,
   };
 }
 
-// Locate the global offset of an anchor's quote, disambiguating with context.
 function locate(text: string, anchor: TextQuoteAnchor): number {
   const { exact, prefix = '', suffix = '' } = anchor;
   if (!exact) return -1;
-  // Prefer the occurrence whose surrounding text matches the saved context.
   let from = 0;
   let best = -1;
   let bestScore = -1;
   while (true) {
-    const i = text.indexOf(exact, from);
-    if (i < 0) break;
-    const before = text.slice(Math.max(0, i - prefix.length), i);
-    const after = text.slice(i + exact.length, i + exact.length + suffix.length);
+    const index = text.indexOf(exact, from);
+    if (index < 0) break;
+    const before = text.slice(Math.max(0, index - prefix.length), index);
+    const after = text.slice(index + exact.length, index + exact.length + suffix.length);
     let score = 0;
     if (prefix && before.endsWith(prefix)) score += 2;
     if (suffix && after.startsWith(suffix)) score += 2;
     if (score > bestScore) {
       bestScore = score;
-      best = i;
+      best = index;
     }
-    from = i + 1;
+    from = index + 1;
   }
   return best;
 }
 
-// Wrap the character span [start, start+len) by slicing each intersecting text node.
-function wrapRange(start: number, len: number, segs: Seg[], full: string, bg: string) {
-  const end = start + len;
+function wrapRange(start: number, length: number, segs: Seg[], full: string, background: string) {
+  const end = start + length;
   for (const seg of segs) {
     const nodeStart = seg.start;
     const nodeEnd = seg.start + (seg.node.nodeValue?.length ?? 0);
-    if (nodeEnd <= start || nodeStart >= end) continue; // no overlap
+    if (nodeEnd <= start || nodeStart >= end) continue;
     const from = Math.max(start, nodeStart) - nodeStart;
     const to = Math.min(end, nodeEnd) - nodeStart;
     try {
@@ -165,18 +187,16 @@ function wrapRange(start: number, len: number, segs: Seg[], full: string, bg: st
       range.setEnd(seg.node, to);
       const mark = document.createElement('mark');
       mark.className = 'ks-highlight';
-      mark.style.background = bg;
+      mark.style.background = background;
       range.surroundContents(mark);
     } catch {
-      /* node mutated mid-walk — skip this slice */
+      /* page changed during the walk */
     }
   }
   void full;
 }
 
-// ---- toolbar + persistence -------------------------------------------------
-
-function buildToolbar(rect: DOMRect, onPick: (c: HighlightColor) => void): HTMLDivElement {
+function buildToolbar(rect: DOMRect, onPick: (color: HighlightColor) => void): HTMLDivElement {
   const bar = document.createElement('div');
   bar.className = 'ks-toolbar';
   bar.style.top = `${window.scrollY + rect.top - 46}px`;
@@ -186,9 +206,9 @@ function buildToolbar(rect: DOMRect, onPick: (c: HighlightColor) => void): HTMLD
     dot.className = 'ks-dot';
     dot.style.background = COLORS[color];
     dot.title = `Highlight ${color}`;
-    dot.onclick = (e) => {
-      e.preventDefault();
-      e.stopPropagation();
+    dot.onclick = (event) => {
+      event.preventDefault();
+      event.stopPropagation();
       onPick(color);
     };
     bar.appendChild(dot);
@@ -197,28 +217,27 @@ function buildToolbar(rect: DOMRect, onPick: (c: HighlightColor) => void): HTMLD
 }
 
 async function saveSelection(text: string, anchor: TextQuoteAnchor, color: HighlightColor) {
-  // Visual feedback immediately.
   const { text: full, segs } = buildIndex();
   const start = locate(full, anchor);
   if (start >= 0) wrapRange(start, text.length, segs, full, COLORS[color]);
   try {
     await createHighlight({ url: location.href, text, color, anchor });
   } catch {
-    /* not logged in / offline — visual highlight still shown this session */
+    /* visual highlight remains for this session */
   }
 }
 
 async function reapplyHighlights() {
   try {
     const saved = await highlightsForUrl(location.href);
-    for (const h of saved) {
+    for (const highlight of saved) {
       const { text: full, segs } = buildIndex();
-      const anchor = parseAnchor(h.anchor) ?? { exact: h.text };
+      const anchor = parseAnchor(highlight.anchor) ?? { exact: highlight.text };
       const start = locate(full, anchor);
-      if (start >= 0) wrapRange(start, anchor.exact.length, segs, full, COLORS[h.color]);
+      if (start >= 0) wrapRange(start, anchor.exact.length, segs, full, COLORS[highlight.color]);
     }
   } catch {
-    /* not logged in or offline — skip */
+    /* not logged in or offline */
   }
 }
 
