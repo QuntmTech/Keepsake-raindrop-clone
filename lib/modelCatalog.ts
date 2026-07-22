@@ -90,13 +90,18 @@ function unique(values: Array<string | undefined>): string[] {
   return [...new Set(values.map((value) => value?.trim()).filter((value): value is string => Boolean(value)))];
 }
 
+function novitaId(value: string | undefined, fallback: string): string {
+  const candidate = value?.trim() ?? '';
+  return candidate.includes('/') ? candidate : fallback;
+}
+
 export function routeNovitaModels(request: RouteRequest): ModelRoute {
   const promptLength = Math.max(0, request.promptLength ?? 0);
   const task = request.task ?? 'general';
   const custom = request.customModels ?? {};
-  const economy = custom.fast || NOVITA_MODEL_IDS.economy;
-  const balanced = custom.smart || NOVITA_MODEL_IDS.balanced;
-  const best = custom.best || NOVITA_MODEL_IDS.best;
+  const economy = novitaId(custom.fast, NOVITA_MODEL_IDS.economy);
+  const balanced = novitaId(custom.smart, NOVITA_MODEL_IDS.balanced);
+  const best = novitaId(custom.best, NOVITA_MODEL_IDS.best);
 
   let resolvedMode: Exclude<AiRouteMode, 'auto'>;
   let reason: string;
