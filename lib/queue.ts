@@ -28,7 +28,9 @@ export async function enqueueSave(input: SaveBookmarkInput): Promise<void> {
     const next = { ...rest, queuedAt: Date.now() };
     if (existing >= 0) queue[existing] = next;
     else queue.push(next);
-    await queueStore.setValue(queue.slice(-100));
+    // Never silently discard a user's saved page. Repeated clicks for the same
+    // URL/destination already coalesce above, which naturally bounds the queue.
+    await queueStore.setValue(queue);
   });
 }
 
@@ -43,15 +45,17 @@ export async function flushQueue(): Promise<number> {
   return withQueueLock(async () => {
     const queue = await queueStore.getValue();
     if (queue.length === 0) return 0;
+    if (typeof navigator !== 'undefined' && navigator.onLine === false) return 0;
 
     const remaining: QueuedSave[] = [];
     let saved = 0;
     let dropped = 0;
-    for (const item of queue) {
+    for (let index = 0; index < queue.length; index++) {
+      const item = queue[index];
       try {
         const { queuedAt, ...input } = item;
         void queuedAt;
-        const existing = await findByUrl(input.url).catch(() => null);
+        const existing = await findByUrl(input.url);
         if (existing) {
           const destination = input.collection ?? '';
           if ((existing.collection ?? '') !== destination) {
@@ -64,10 +68,15 @@ export async function flushQueue(): Promise<number> {
         saved++;
       } catch (error) {
         const status = (error as { status?: number })?.status ?? 0;
-        // Permanent client failures can never recover. Timeout/network/429/5xx
-        // remain queued; a later URL check prevents duplicate ambiguous creates.
-        if (status >= 400 && status < 500 && status !== 408 && status !== 429) dropped++;
-        else remaining.push(item);
+        const permanent = status >= 400 && status < 500 && status !== 408 && status !== 429;
+        if (permanent) {
+          dropped++;
+          continue;
+        }
+        // The connection is still unhealthy. Keep this item and every untouched
+        // item, then stop—do not burn another timeout cycle per queued page.
+        remaining.push(item, ...queue.slice(index + 1));
+        break;
       }
     }
     await queueStore.setValue(remaining);
