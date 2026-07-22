@@ -80,6 +80,7 @@ jobs:
         with:
           name: keepsake-chrome-unpacked
           path: .output/chrome-mv3/
+          include-hidden-files: true
           if-no-files-found: error
           retention-days: 14
 
@@ -88,6 +89,7 @@ jobs:
         with:
           name: keepsake-chrome-store-zip
           path: .output/*.zip
+          include-hidden-files: true
           if-no-files-found: error
           retention-days: 14
 
