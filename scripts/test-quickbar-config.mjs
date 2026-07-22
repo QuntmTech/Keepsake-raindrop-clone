@@ -22,18 +22,24 @@ const {
   reorderQuickBarAction,
   normalizeQuickBarColor,
   normalizeQuickBarUrl,
+  rememberRecentCollection,
+  splitRecentCollections,
+  buildRelatedQuery,
+  sameCanonicalUrl,
 } = await import(pathToFileURL(builtFile).href);
+
+const completeOrder = ['popup', 'search', 'related', 'save', 'folder', 'dashboard', 'custom'];
 
 test('Quick Bar order is unique, valid, and always complete', () => {
   assert.deepEqual(normalizeQuickBarOrder(['folder', 'popup', 'folder', 'bad']), [
-    'folder', 'popup', 'save', 'dashboard', 'custom',
+    'folder', 'popup', 'search', 'related', 'save', 'dashboard', 'custom',
   ]);
 });
 
 test('dragging an action before another action persists a deterministic order', () => {
   assert.deepEqual(
-    reorderQuickBarAction(['popup', 'save', 'folder', 'dashboard', 'custom'], 'dashboard', 'save'),
-    ['popup', 'dashboard', 'save', 'folder', 'custom'],
+    reorderQuickBarAction(completeOrder, 'dashboard', 'save'),
+    ['popup', 'search', 'related', 'dashboard', 'save', 'folder', 'custom'],
   );
 });
 
@@ -48,4 +54,31 @@ test('custom shortcuts allow only http and https URLs', () => {
   assert.equal(normalizeQuickBarUrl('https://example.com/path'), 'https://example.com/path');
   assert.equal(normalizeQuickBarUrl('javascript:alert(1)'), '');
   assert.equal(normalizeQuickBarUrl('file:///tmp/test'), '');
+});
+
+test('recent collections are unique, newest-first, and capped', () => {
+  assert.deepEqual(rememberRecentCollection(['one', 'two', 'three'], 'two'), ['two', 'one', 'three']);
+  assert.deepEqual(rememberRecentCollection(['one', 'two', 'three'], 'four'), ['four', 'one', 'two']);
+});
+
+test('recent collections are split from the remaining list without duplicates', () => {
+  const collections = [
+    { id: 'one', name: 'One' },
+    { id: 'two', name: 'Two' },
+    { id: 'three', name: 'Three' },
+  ];
+  const split = splitRecentCollections(collections, ['three', 'one', 'missing']);
+  assert.deepEqual(split.recent.map((item) => item.id), ['three', 'one']);
+  assert.deepEqual(split.rest.map((item) => item.id), ['two']);
+});
+
+test('related query uses useful title and domain terms while dropping filler', () => {
+  assert.equal(buildRelatedQuery('How to Build the Best Chrome Extension', 'https://developer.chrome.com/docs'), 'build best chrome extension developer');
+});
+
+test('canonical URL matching ignores tracking parameters and fragments', () => {
+  assert.equal(
+    sameCanonicalUrl('https://example.com/post/?utm_source=x#section', 'https://example.com/post'),
+    true,
+  );
 });
