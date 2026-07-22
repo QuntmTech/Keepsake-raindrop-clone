@@ -27,6 +27,7 @@ import { canSaveBookmark, storageRemaining, refreshEntitlements } from '@/lib/en
 import { storage } from 'wxt/utils/storage';
 import { normalizeQuickBarUrl, resolveSaveCollection, sameCanonicalUrl } from '@/lib/quickbarConfig';
 import { requestSidepanelTarget } from '@/lib/sidepanelTarget';
+import { setWriterDraft } from '@/lib/aiWriter';
 
 // The background "service worker" is event-driven and can be killed at any time by Chrome.
 // Never rely on long-lived in-memory state here — read from storage when you need it.
@@ -141,7 +142,19 @@ export default defineBackground(() => {
 
   // Right-click context menu.
   browser.contextMenus.onClicked.addListener(async (info, tab) => {
-    if (info.menuItemId === 'save-to-vault' && tab) await saveTab(tab);
+    if (info.menuItemId === 'save-to-vault' && tab) {
+      await saveTab(tab);
+      return;
+    }
+    if ((info.menuItemId === 'ai-rewrite-selection' || info.menuItemId === 'ai-reply-selection') && info.selectionText?.trim()) {
+      await setWriterDraft({
+        input: info.selectionText.trim().slice(0, 48_000),
+        output: '',
+        action: info.menuItemId === 'ai-reply-selection' ? 'reply' : 'improve',
+      });
+      await requestSidepanelTarget('ai');
+      await openSidePanel(tab?.id);
+    }
   });
 
   // Message hub.
@@ -286,6 +299,13 @@ async function handleMessage(msg: Message, sender?: { tab?: { id?: number; windo
       return { ok: true };
 
     case 'OPEN_AI_TOOLS':
+      if (msg.text?.trim()) {
+        await setWriterDraft({
+          input: msg.text.trim().slice(0, 48_000),
+          output: '',
+          action: msg.action ?? 'improve',
+        });
+      }
       await requestSidepanelTarget('ai');
       await openSidePanel(sender?.tab?.id);
       return { ok: true };
@@ -967,5 +987,15 @@ async function ensureContextMenu() {
     id: 'save-to-vault',
     title: 'Save page to Keepsake',
     contexts: ['page', 'link', 'selection'],
+  });
+  browser.contextMenus.create({
+    id: 'ai-rewrite-selection',
+    title: 'Rewrite selection with Keepsake AI',
+    contexts: ['selection', 'editable'],
+  });
+  browser.contextMenus.create({
+    id: 'ai-reply-selection',
+    title: 'Draft a reply with Keepsake AI',
+    contexts: ['selection'],
   });
 }
