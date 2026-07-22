@@ -23,6 +23,7 @@ jobs:
         shell: bash
         run: |
           set -o pipefail
+          python3 scripts/repair-8121-startup-generator.py
           python3 scripts/apply-8121-startup-polish.py 2>&1 | tee /tmp/generator.log
 
       - name: Commit generated source
