@@ -2,7 +2,7 @@
 // that talk only by passing messages. This file is the single typed contract for those messages,
 // so every context agrees on the shape.
 
-import { type HighlightColor } from './types';
+import { type HighlightColor, type TextQuoteAnchor } from './types';
 import { type PageMeta } from './metadata';
 import { type CaptureMessage } from './capture';
 import { type WatchConfig } from './watch';
@@ -48,6 +48,8 @@ export type Message =
   | { type: 'OPEN_SURFACE'; surface: 'popup' | 'sidepanel' | 'dashboard' }
   | { type: 'OPEN_QUICKBAR' } // background -> content: pop the quick-save folder picker
   | { type: 'KS_PAGE_NAVIGATED'; url: string } // background -> content after SPA history navigation
+  | { type: 'KS_HIGHLIGHT_CREATE'; url: string; text: string; color: HighlightColor; anchor?: TextQuoteAnchor }
+  | { type: 'KS_HIGHLIGHTS_FOR_URL'; url: string }
   | { type: 'KS_QUICKBAR_BOOTSTRAP'; url: string }
   | { type: 'KS_QUICKBAR_COLLECTIONS' }
   | { type: 'KS_QUICKBAR_SEARCH'; query: string; collection?: string; unsorted?: boolean; perPage?: number }

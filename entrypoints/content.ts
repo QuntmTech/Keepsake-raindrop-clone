@@ -1,12 +1,11 @@
 import { getSettings, watchSettings } from '@/lib/settings';
-import { createHighlight, highlightsForUrl, parseAnchor } from '@/lib/highlights';
 import { mountQuickBar, type QuickBarApi } from '@/lib/quickbar';
 import {
   type AiSelectionReplaceResult,
   type AiSelectionResult,
   type Message,
 } from '@/lib/messaging';
-import { type HighlightColor, type TextQuoteAnchor } from '@/lib/types';
+import { type Highlight, type HighlightColor, type TextQuoteAnchor } from '@/lib/types';
 
 type TextInput = HTMLInputElement | HTMLTextAreaElement;
 
@@ -204,6 +203,10 @@ export default defineContentScript({
         capturedSelection = null;
         selectionUndo = null;
         quickBar?.refreshPage();
+        if (latestSettings.enableHighlights) {
+          clearAppliedHighlights();
+          ctx.setTimeout(() => reapplyHighlights().catch(() => {}), 300);
+        }
         return undefined;
       }
       if (message.type === 'KS_AI_SELECTION_GET') return Promise.resolve(selectionResult());
@@ -408,28 +411,44 @@ function buildToolbar(rect: DOMRect, onPick: (color: HighlightColor) => void): H
   return bar;
 }
 
-async function saveSelection(text: string, anchor: TextQuoteAnchor, color: HighlightColor) {
-  const { text: full, segs } = buildIndex();
-  const start = locate(full, anchor);
-  if (start >= 0) wrapRange(start, text.length, segs, full, COLORS[color]);
-  try {
-    await createHighlight({ url: location.href, text, color, anchor });
-  } catch {
-    /* visual highlight remains for this session */
+function parseAnchor(raw?: string): TextQuoteAnchor | null {
+  if (!raw) return null;
+  try { return JSON.parse(raw) as TextQuoteAnchor; } catch { return null; }
+}
+
+function clearAppliedHighlights() {
+  for (const mark of document.querySelectorAll('mark.ks-highlight')) {
+    const parent = mark.parentNode;
+    mark.replaceWith(document.createTextNode(mark.textContent ?? ''));
+    parent?.normalize();
   }
 }
 
+async function saveSelection(text: string, anchor: TextQuoteAnchor, color: HighlightColor) {
+  const pageUrl = location.href;
+  const { text: full, segs } = buildIndex();
+  const start = locate(full, anchor);
+  if (start >= 0) wrapRange(start, text.length, segs, full, COLORS[color]);
+  await browser.runtime.sendMessage({
+    type: 'KS_HIGHLIGHT_CREATE',
+    url: pageUrl,
+    text,
+    color,
+    anchor,
+  }).catch(() => null);
+}
+
 async function reapplyHighlights() {
-  try {
-    const saved = await highlightsForUrl(location.href);
-    for (const highlight of saved) {
-      const { text: full, segs } = buildIndex();
-      const anchor = parseAnchor(highlight.anchor) ?? { exact: highlight.text };
-      const start = locate(full, anchor);
-      if (start >= 0) wrapRange(start, anchor.exact.length, segs, full, COLORS[highlight.color]);
-    }
-  } catch {
-    /* not logged in or offline */
+  const pageUrl = location.href;
+  const response = (await browser.runtime
+    .sendMessage({ type: 'KS_HIGHLIGHTS_FOR_URL', url: pageUrl })
+    .catch(() => null)) as { ok?: boolean; highlights?: Highlight[] } | null;
+  if (!response?.ok || location.href !== pageUrl) return;
+  for (const highlight of response.highlights ?? []) {
+    const { text: full, segs } = buildIndex();
+    const anchor = parseAnchor(highlight.anchor) ?? { exact: highlight.text };
+    const start = locate(full, anchor);
+    if (start >= 0) wrapRange(start, anchor.exact.length, segs, full, COLORS[highlight.color]);
   }
 }
 

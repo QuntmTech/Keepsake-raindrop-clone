@@ -38,6 +38,8 @@ test('popup and Home prioritize visual data over secondary metadata', () => {
 test('website bundle delegates data access to the background worker', () => {
   assert.doesNotMatch(quickbar, /from '\.\/backend'/);
   assert.doesNotMatch(quickbar, /from '\.\/bookmarks'/);
+  assert.doesNotMatch(content, /@\/lib\/highlights/);
+  assert.match(content, /KS_HIGHLIGHTS_FOR_URL/);
   assert.match(quickbar, /KS_QUICKBAR_BOOTSTRAP/);
   assert.match(quickbar, /KS_QUICKBAR_SEARCH/);
 });

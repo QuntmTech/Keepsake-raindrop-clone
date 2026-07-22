@@ -31,3 +31,10 @@ test('save UX bounds enrichment and queues transient failures only', () => {
   assert.match(background, /status === 408/);
   assert.match(background, /status: 'blocked'/);
 });
+
+
+test('highlight storage stays out of the every-page bundle', () => {
+  assert.doesNotMatch(content, /@\/lib\/highlights/);
+  assert.match(background, /KS_HIGHLIGHT_CREATE/);
+  assert.match(background, /KS_HIGHLIGHTS_FOR_URL/);
+});

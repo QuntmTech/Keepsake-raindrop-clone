@@ -26,6 +26,7 @@ import { canSaveBookmark, storageRemaining, refreshEntitlements } from '@/lib/en
 import { storage } from 'wxt/utils/storage';
 import { normalizeQuickBarUrl, resolveSaveCollection, sameCanonicalUrl } from '@/lib/quickbarConfig';
 import { requestSidepanelTarget } from '@/lib/sidepanelTarget';
+import { createHighlight, highlightsForUrl } from '@/lib/highlights';
 import { setWriterDraft } from '@/lib/aiWriter';
 
 // The background "service worker" is event-driven and can be killed at any time by Chrome.
@@ -244,6 +245,27 @@ async function handleMessage(msg: Message, sender?: { tab?: { id?: number; windo
   switch (msg.type) {
     case 'PING':
       return { ok: true };
+
+    case 'KS_HIGHLIGHT_CREATE': {
+      if (sender?.tab?.url && !sameCanonicalUrl(sender.tab.url, msg.url)) {
+        return { ok: false, error: 'The page changed before the highlight was saved.' };
+      }
+      const highlight = await createHighlight({
+        url: msg.url,
+        text: msg.text.slice(0, 20_000),
+        color: msg.color,
+        anchor: msg.anchor,
+      });
+      return { ok: true, highlight };
+    }
+
+    case 'KS_HIGHLIGHTS_FOR_URL': {
+      if (sender?.tab?.url && !sameCanonicalUrl(sender.tab.url, msg.url)) {
+        return { ok: false, highlights: [], error: 'The page changed.' };
+      }
+      const highlights = await highlightsForUrl(msg.url);
+      return { ok: true, highlights };
+    }
 
     case 'KS_QUICKBAR_BOOTSTRAP': {
       const requestUrl = msg.url;
