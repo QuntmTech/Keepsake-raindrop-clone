@@ -7,8 +7,22 @@ import { type PageMeta } from './metadata';
 import { type CaptureMessage } from './capture';
 import { type WatchConfig } from './watch';
 
+export type SaveCurrentPageStatus = 'saved' | 'duplicate' | 'queued' | 'blocked';
+
+export interface SaveCurrentPageResult {
+  ok: boolean;
+  status: SaveCurrentPageStatus;
+  id?: string;
+  title?: string;
+  collection?: string;
+  error?: string;
+}
+
 export type Message =
-  | { type: 'SAVE_CURRENT_PAGE'; collection?: string }
+  | { type: 'SAVE_CURRENT_PAGE'; collection?: string; force?: boolean }
+  | { type: 'DELETE_BOOKMARK'; id: string }
+  | { type: 'MOVE_BOOKMARK'; id: string; collection?: string }
+  | { type: 'REFRESH_BOOKMARK'; id: string }
   | { type: 'CAPTURE_SCREENSHOT' }       // background -> JPEG dataURL of the visible tab
   | { type: 'EXTRACT_META'; tabId?: number } // background -> PageMeta for a tab
   | { type: 'OPEN_DASHBOARD' }
