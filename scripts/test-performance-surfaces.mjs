@@ -20,7 +20,10 @@ test('page controls run at document_end without blocking on backend startup', ()
   assert.match(content, /runAt: 'document_end'/);
   assert.doesNotMatch(content, /await getBackend\(\)/);
   assert.match(content, /mountQuickBar\(latestSettings\)/);
-  assert.match(aiEmbed, /runAt: 'document_end'/);
+  assert.match(content, /ctx\.locationWatcher\.run\(\)/);
+  assert.match(content, /ctx\.onInvalidated/);
+  assert.match(aiEmbed, /runAt: 'document_idle'/);
+  assert.match(aiEmbed, /ctx\.onInvalidated/);
 });
 
 test('popup and Home prioritize visual data over secondary metadata', () => {
@@ -29,4 +32,12 @@ test('popup and Home prioritize visual data over secondary metadata', () => {
   assert.match(home, /setTimeout\(reloadTags, 500\)/);
   assert.match(home, /setTimeout\(\(\) => \{\s*syncHomeOverlay/);
   assert.match(home, /await import\('@\/lib\/importer'\)/);
+});
+
+
+test('website bundle delegates data access to the background worker', () => {
+  assert.doesNotMatch(quickbar, /from '\.\/backend'/);
+  assert.doesNotMatch(quickbar, /from '\.\/bookmarks'/);
+  assert.match(quickbar, /KS_QUICKBAR_BOOTSTRAP/);
+  assert.match(quickbar, /KS_QUICKBAR_SEARCH/);
 });

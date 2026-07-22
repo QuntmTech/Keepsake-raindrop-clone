@@ -81,9 +81,9 @@ function snapshot(): PageSnapshot {
 
 export default defineContentScript({
   matches: ['<all_urls>'],
-  runAt: 'document_end',
+  runAt: 'document_idle',
 
-  main() {
+  main(ctx) {
     const host = document.createElement('div');
     host.id = 'keepsake-ai-embed';
     const shadow = host.attachShadow({ mode: 'open' });
@@ -132,7 +132,7 @@ export default defineContentScript({
 
     const schedule = () => {
       window.clearTimeout(timer);
-      timer = window.setTimeout(position, 60);
+      timer = ctx.setTimeout(position, 60);
     };
 
     button.addEventListener('mousedown', (event) => event.preventDefault());
@@ -153,21 +153,26 @@ export default defineContentScript({
       if (!response?.ok) button.style.display = 'inline-flex';
     });
 
-    browser.runtime.onMessage.addListener((message: { type?: string }) => {
+    const onRuntimeMessage = (message: { type?: string }) => {
       if (message.type === 'KS_AI_PAGE_GET') return Promise.resolve({ ok: true, page: snapshot() });
       return undefined;
+    };
+    browser.runtime.onMessage.addListener(onRuntimeMessage);
+    ctx.onInvalidated(() => {
+      browser.runtime.onMessage.removeListener(onRuntimeMessage);
+      host.remove();
     });
 
-    document.addEventListener('selectionchange', schedule, true);
-    document.addEventListener('mouseup', schedule, true);
-    document.addEventListener('keyup', schedule, true);
-    document.addEventListener('focusin', schedule, true);
-    document.addEventListener('input', schedule, true);
-    document.addEventListener('mousedown', (event) => {
+    ctx.addEventListener(document, 'selectionchange', schedule, true);
+    ctx.addEventListener(document, 'mouseup', schedule, true);
+    ctx.addEventListener(document, 'keyup', schedule, true);
+    ctx.addEventListener(document, 'focusin', schedule, true);
+    ctx.addEventListener(document, 'input', schedule, true);
+    ctx.addEventListener(document, 'mousedown', (event) => {
       if (event.composedPath().includes(host)) return;
-      window.setTimeout(schedule, 0);
+      ctx.setTimeout(schedule, 0);
     }, true);
-    window.addEventListener('scroll', hide, true);
-    window.addEventListener('resize', hide);
+    ctx.addEventListener(window, 'scroll', hide, true);
+    ctx.addEventListener(window, 'resize', hide);
   },
 });

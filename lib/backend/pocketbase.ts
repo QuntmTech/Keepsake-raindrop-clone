@@ -95,7 +95,7 @@ export class PocketBaseBackend implements Backend {
     // A request with no timeout can hang a surface forever on a dead
     // connection — abort at 30s so failures surface and the retry logic runs.
     this.pb.beforeSend = (url, options) => {
-      options.signal ??= AbortSignal.timeout(30_000);
+      options.signal ??= AbortSignal.timeout(8_000);
       return { url, options };
     };
     // afterSend fires even for the 429 error response (verified against the SDK),
@@ -349,7 +349,7 @@ export class PocketBaseBackend implements Backend {
   // a 401 means the session died server-side, so flip every surface to the
   // login form (clearing authStore also clears the cross-context mirror).
   // 4xx errors are real answers and never retried.
-  private async req<T>(fn: () => Promise<T>, retries = 2): Promise<T> {
+  private async req<T>(fn: () => Promise<T>, retries = 1): Promise<T> {
     for (let attempt = 0; ; attempt++) {
       try {
         return await fn();
@@ -440,7 +440,7 @@ export class PocketBaseBackend implements Backend {
     if (typeof input.readingTime === 'number') form.set('readingTime', String(input.readingTime));
     form.set('user', user);
     if (input.screenshotBlob) form.set('screenshot', input.screenshotBlob, `${Date.now()}.jpg`);
-    const rec = await this.req(() => this.pb.collection('bookmarks').create(form), 1);
+    const rec = await this.req(() => this.pb.collection('bookmarks').create(form), 0);
     return this.normalize(rec);
   }
 
@@ -487,7 +487,7 @@ export class PocketBaseBackend implements Backend {
       try {
         const batch = this.pb.createBatch();
         for (const input of slice) batch.collection('bookmarks').create(toBody(input));
-        const results = await this.req(() => batch.send());
+        const results = await this.req(() => batch.send(), 0);
         saved += results.filter((r) => r.status >= 200 && r.status < 300).length;
       } catch {
         // Batch unsupported/rejected — per-item so one bad row can't lose the chunk.
@@ -561,7 +561,7 @@ export class PocketBaseBackend implements Backend {
 
   async markVisited(id: string): Promise<void> {
     try {
-      await this.req(() => this.pb.collection('bookmarks').update(id, { lastVisited: new Date().toISOString() }), 1);
+      await this.req(() => this.pb.collection('bookmarks').update(id, { lastVisited: new Date().toISOString() }), 0);
     } catch {
       /* non-critical */
     }
@@ -621,7 +621,7 @@ export class PocketBaseBackend implements Backend {
     icon?: string;
     parent?: string;
   }): Promise<Collection> {
-    const rec = await this.req(() => this.pb.collection('collections').create({ ...data, user: this.uid() }), 1);
+    const rec = await this.req(() => this.pb.collection('collections').create({ ...data, user: this.uid() }), 0);
     return rec as unknown as Collection;
   }
 
@@ -652,7 +652,7 @@ export class PocketBaseBackend implements Backend {
           anchor: input.anchor ? JSON.stringify(input.anchor) : '',
           user: this.uid(),
         }),
-      1,
+      0,
     );
     return this.normalizeHighlight(rec);
   }

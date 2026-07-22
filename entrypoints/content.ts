@@ -167,7 +167,7 @@ export default defineContentScript({
   matches: ['<all_urls>'],
   runAt: 'document_end',
 
-  async main() {
+  async main(ctx) {
     // Read only the tiny synced settings record before painting. Backend/auth
     // startup is deferred inside the Quick Bar and can never block the page UI.
     const settings = await getSettings();
@@ -195,7 +195,7 @@ export default defineContentScript({
 
     if (quickBarEnabled) ensureQuickBar().catch(() => {});
 
-    browser.runtime.onMessage.addListener((message: Message) => {
+    const onRuntimeMessage = (message: Message) => {
       if (message.type === 'OPEN_QUICKBAR') {
         ensureQuickBar().then((api) => api?.openFolders()).catch(() => {});
         return undefined;
@@ -206,16 +206,22 @@ export default defineContentScript({
       }
       if (message.type === 'KS_AI_SELECTION_UNDO') return Promise.resolve(undoCapturedReplacement());
       return undefined;
-    });
+    };
+    browser.runtime.onMessage.addListener(onRuntimeMessage);
+    ctx.onInvalidated(() => browser.runtime.onMessage.removeListener(onRuntimeMessage));
 
-    const rememberSoon = () => window.setTimeout(() => rememberSelection(), 0);
-    document.addEventListener('selectionchange', rememberSelection, true);
-    document.addEventListener('mouseup', rememberSoon, true);
-    document.addEventListener('keyup', rememberSoon, true);
-    document.addEventListener('focusin', rememberSoon, true);
-    document.addEventListener('input', rememberSoon, true);
+    let rememberTimer = 0;
+    const rememberSoon = () => {
+      window.clearTimeout(rememberTimer);
+      rememberTimer = ctx.setTimeout(() => rememberSelection(), 0);
+    };
+    ctx.addEventListener(document, 'selectionchange', rememberSelection, true);
+    ctx.addEventListener(document, 'mouseup', rememberSoon, true);
+    ctx.addEventListener(document, 'keyup', rememberSoon, true);
+    ctx.addEventListener(document, 'focusin', rememberSoon, true);
+    ctx.addEventListener(document, 'input', rememberSoon, true);
 
-    watchSettings(async (next) => {
+    const unwatchSettings = watchSettings(async (next) => {
       latestSettings = next;
       quickBarEnabled = next.enableQuickBar;
       if (!quickBarEnabled) {
@@ -226,6 +232,7 @@ export default defineContentScript({
       const api = await ensureQuickBar();
       api?.update(next);
     });
+    ctx.onInvalidated(unwatchSettings);
 
     // Some highly dynamic sites replace documentElement children. If they remove
     // the host, clean up stale listeners and remount automatically.
@@ -236,6 +243,18 @@ export default defineContentScript({
       ensureQuickBar().catch(() => {});
     });
     observer.observe(document.documentElement, { childList: true });
+
+    ctx.locationWatcher.run();
+    ctx.addEventListener(window, 'wxt:locationchange', () => {
+      capturedSelection = null;
+      selectionUndo = null;
+      quickBar?.refreshPage();
+    });
+    ctx.onInvalidated(() => {
+      observer.disconnect();
+      quickBar?.destroy();
+      quickBar = null;
+    });
 
     if (!settings.enableHighlights) return;
 
@@ -250,13 +269,13 @@ export default defineContentScript({
       toolbar = null;
     };
 
-    document.addEventListener('mousedown', (event) => {
+    ctx.addEventListener(document, 'mousedown', (event) => {
       if (toolbar && !toolbar.contains(event.target as Node)) closeToolbar();
     });
 
-    document.addEventListener('mouseup', (event) => {
+    ctx.addEventListener(document, 'mouseup', (event) => {
       if (toolbar && toolbar.contains(event.target as Node)) return;
-      setTimeout(() => {
+      ctx.setTimeout(() => {
         const selection = window.getSelection();
         const text = selection?.toString().trim();
         if (!text || !selection || selection.rangeCount === 0) {

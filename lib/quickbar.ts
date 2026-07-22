@@ -1,6 +1,4 @@
 import { getSettings, setSettings } from './settings';
-import { getBackend } from './backend';
-import { listCollections, createCollection, findByUrl, searchBookmarks, countByCollection } from './bookmarks';
 import { send, type SaveCurrentPageResult } from './messaging';
 import { ACCENTS } from './theme';
 import { clampQuickBarTop, quickBarFractionFromTop, quickBarSideForPointer } from './uiContext';
@@ -13,11 +11,30 @@ import { type RecallItem, type RecallResult } from './recall';
 // to a visible edge tab instead of disappearing.
 export interface QuickBarApi {
   openFolders: () => void;
+  refreshPage: () => void;
   update: (settings: Settings) => void;
   destroy: () => void;
 }
 
 type QuickBarHost = HTMLDivElement & { __keepsakeApi?: QuickBarApi };
+
+interface QuickBarBootstrapResult {
+  ok?: boolean;
+  loggedIn: boolean;
+  existing?: Bookmark | null;
+  url: string;
+  error?: string;
+}
+
+interface QuickBarCollectionsResult {
+  ok?: boolean;
+  collections?: Collection[];
+  counts?: Record<string, number>;
+  error?: string;
+}
+
+interface QuickBarSearchResult { ok?: boolean; items?: Bookmark[]; error?: string }
+interface QuickBarCreateCollectionResult { ok?: boolean; collection?: Collection; error?: string }
 
 const SVG = {
   grip: '<circle cx="9" cy="6" r="1.4"/><circle cx="15" cy="6" r="1.4"/><circle cx="9" cy="12" r="1.4"/><circle cx="15" cy="12" r="1.4"/><circle cx="9" cy="18" r="1.4"/><circle cx="15" cy="18" r="1.4"/>',
@@ -118,7 +135,7 @@ export async function mountQuickBar(initialSettings?: Settings): Promise<QuickBa
       transform: translate(0,-50%); transition-delay: .08s; transition-property: opacity, transform, visibility; }
     .rail.dragging [data-tooltip]::after, .dragging-action::after { display: none; }
     .actions { width: 100%; display: flex; flex-direction: column; align-items: center; gap: 3px; }
-    .btn svg { width: var(--ks-icon-size, 20px); height: var(--ks-icon-size, 20px); }
+    .btn svg { width: var(--ks-icon-size, 20px); height: var(--ks-icon-size, 20px); max-width: calc(100% - 4px); max-height: calc(100% - 4px); }
     .mini svg, .grip svg { width: calc(var(--ks-icon-size, 20px) - 3px); height: calc(var(--ks-icon-size, 20px) - 3px); }
     .resize-handle { position: absolute; top: 14px; bottom: 14px; width: 8px; z-index: 3; cursor: ew-resize; touch-action: none; opacity: 0; transition: opacity .12s; }
     .resize-handle::after { content: ''; position: absolute; top: 35%; bottom: 35%; width: 2px; border-radius: 99px; background: rgba(255,255,255,.5); }
@@ -126,7 +143,8 @@ export async function mountQuickBar(initialSettings?: Settings): Promise<QuickBa
     .rail.right .resize-handle::after { left: 3px; }
     .rail.left .resize-handle { right: -4px; }
     .rail.left .resize-handle::after { right: 3px; }
-    .rail:hover .resize-handle, .rail.resizing .resize-handle { opacity: .8; }
+    .rail:hover .resize-handle, .rail.resizing .resize-handle, .resize-handle:focus-visible { opacity: .9; }
+    .resize-handle:focus-visible { outline: 2px solid var(--ks-accent); outline-offset: 1px; }
     .action[draggable="true"] { cursor: grab; }
     .action.dragging-action { opacity: .42; transform: scale(.9); }
     .action.drop-target { outline: 2px solid var(--ks-accent); outline-offset: 2px; }
@@ -201,7 +219,7 @@ export async function mountQuickBar(initialSettings?: Settings): Promise<QuickBa
   const rail = document.createElement('div');
   rail.className = 'rail';
   rail.innerHTML = `
-    <div class="resize-handle" role="separator" aria-orientation="vertical" aria-label="Resize Quick Bar horizontally" data-tooltip="Drag to resize width"></div>
+    <div class="resize-handle" role="separator" tabindex="0" aria-orientation="vertical" aria-valuemin="34" aria-valuemax="86" aria-label="Resize Quick Bar horizontally" data-tooltip="Drag to resize width"></div>
     <button class="mini hide" type="button" aria-label="Hide Quick Bar" data-tooltip="Hide Quick Bar">${icon('close')}</button>
     <button class="mini collapse" type="button" aria-label="Collapse Quick Bar" data-tooltip="Collapse Quick Bar"></button>
     <div class="grip" role="button" tabindex="0" aria-label="Drag Quick Bar" data-tooltip="Drag or move sides">${icon('grip')}</div>
@@ -252,8 +270,10 @@ export async function mountQuickBar(initialSettings?: Settings): Promise<QuickBa
   let resizing = false;
   let saving = false;
   let existingBookmark: Bookmark | null = null;
+  let authenticated: boolean | null = null;
+  let authCheckedAt = 0;
   let related: RecallItem[] = [];
-  let collectionCache: { items: Collection[]; at: number } | null = null;
+  let collectionCache: { items: Collection[]; counts: Record<string, number>; at: number } | null = null;
   let searchSequence = 0;
 
   const closePopover = () => {
@@ -411,6 +431,21 @@ export async function mountQuickBar(initialSettings?: Settings): Promise<QuickBa
     applySizing();
     updateFromSettings(await setSettings({ quickBarWidth: railWidth }));
   });
+  resizeHandle.addEventListener('keydown', (event) => {
+    let next = railWidth;
+    if (event.key === 'ArrowLeft') next -= side === 'right' ? 2 : -2;
+    else if (event.key === 'ArrowRight') next += side === 'right' ? 2 : -2;
+    else if (event.key === 'Home') next = 34;
+    else if (event.key === 'End') next = 86;
+    else return;
+    event.preventDefault();
+    railWidth = normalizeQuickBarWidth(next);
+    applySizing();
+  });
+  resizeHandle.addEventListener('keyup', (event) => {
+    if (!['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(event.key)) return;
+    setSettings({ quickBarWidth: railWidth }).catch(() => {});
+  });
 
   let draggedAction: QuickBarAction | null = null;
   for (const button of [popupButton, searchButton, browseButton, aiButton, relatedButton, saveButton, folderButton, dashboardButton, customButton]) {
@@ -492,12 +527,21 @@ export async function mountQuickBar(initialSettings?: Settings): Promise<QuickBa
     shadow.appendChild(popover);
   }
 
+  async function refreshBootstrap(): Promise<boolean> {
+    const pageUrl = location.href;
+    const response = await send<QuickBarBootstrapResult>({ type: 'KS_QUICKBAR_BOOTSTRAP', url: pageUrl }).catch(() => null);
+    if (!response?.ok || response.url !== pageUrl || location.href !== pageUrl) return authenticated ?? false;
+    authenticated = response.loggedIn;
+    authCheckedAt = Date.now();
+    existingBookmark = response.loggedIn ? response.existing ?? null : null;
+    paintSave();
+    return response.loggedIn;
+  }
+
   async function loggedIn(): Promise<boolean> {
-    try {
-      return (await getBackend()).isLoggedIn();
-    } catch {
-      return false;
-    }
+    const ttl = authenticated ? 30_000 : 3_000;
+    if (authenticated != null && Date.now() - authCheckedAt < ttl) return authenticated;
+    return refreshBootstrap();
   }
 
   const saveIcon = icon('bookmark', true);
@@ -511,11 +555,26 @@ export async function mountQuickBar(initialSettings?: Settings): Promise<QuickBa
     saveButton.dataset.tooltip = existingBookmark ? 'Already saved — manage' : 'Save page';
   };
 
-  const loadCollections = async (): Promise<Collection[]> => {
-    if (collectionCache && Date.now() - collectionCache.at < 60_000) return collectionCache.items;
-    const items = await listCollections();
-    collectionCache = { items, at: Date.now() };
-    return items;
+  const loadCollectionData = async (): Promise<{ items: Collection[]; counts: Record<string, number> }> => {
+    if (collectionCache && Date.now() - collectionCache.at < 60_000) return collectionCache;
+    const response = await send<QuickBarCollectionsResult>({ type: 'KS_QUICKBAR_COLLECTIONS' }).catch(() => null);
+    if (!response?.ok) throw new Error(response?.error || 'Collections are unavailable.');
+    collectionCache = { items: response.collections ?? [], counts: response.counts ?? {}, at: Date.now() };
+    return collectionCache;
+  };
+
+  const loadCollections = async (): Promise<Collection[]> => (await loadCollectionData()).items;
+
+  const searchVault = async (query: string, options: { collection?: string; unsorted?: boolean; perPage?: number } = {}) => {
+    const response = await send<QuickBarSearchResult>({
+      type: 'KS_QUICKBAR_SEARCH',
+      query,
+      collection: options.collection,
+      unsorted: options.unsorted,
+      perPage: options.perPage,
+    }).catch(() => null);
+    if (!response?.ok) throw new Error(response?.error || 'Search is unavailable.');
+    return response.items ?? [];
   };
 
   const collectionLabel = async (id?: string): Promise<string> => {
@@ -533,8 +592,7 @@ export async function mountQuickBar(initialSettings?: Settings): Promise<QuickBa
   };
 
   const refreshExisting = async () => {
-    existingBookmark = await findByUrl(location.href).catch(() => null);
-    paintSave();
+    await refreshBootstrap();
   };
 
   async function quickSave(collection?: string, force = false, explicitCollection = false) {
@@ -564,11 +622,15 @@ export async function mountQuickBar(initialSettings?: Settings): Promise<QuickBa
         return;
       }
       if (response.status === 'queued') {
+        authenticated = true;
+        authCheckedAt = Date.now();
         paintSave();
         showMessage('Saved offline — Keepsake will sync it automatically when your connection returns.');
         return;
       }
 
+      authenticated = true;
+      authCheckedAt = Date.now();
       await rememberCollection(collection || response.collection);
       await refreshExisting();
       saveButton.classList.add('ok');
@@ -710,10 +772,11 @@ export async function mountQuickBar(initialSettings?: Settings): Promise<QuickBa
       }
       create.disabled = true;
       try {
-        const created = await createCollection({ name });
+        const response = await send<QuickBarCreateCollectionResult>({ type: 'KS_QUICKBAR_CREATE_COLLECTION', name }).catch(() => null);
+        if (!response?.ok || !response.collection) throw new Error(response?.error || 'Collection creation failed.');
         collectionCache = null;
-        if (moveMode) await moveExisting(created.id);
-        else await quickSave(created.id, false, true);
+        if (moveMode) await moveExisting(response.collection.id);
+        else await quickSave(response.collection.id, false, true);
       } catch {
         showMessage('The collection could not be created. Try again.');
       } finally {
@@ -886,7 +949,7 @@ export async function mountQuickBar(initialSettings?: Settings): Promise<QuickBa
     };
 
     try {
-      const [collections, counts] = await Promise.all([loadCollections(), countByCollection()]);
+      const { items: collections, counts } = await loadCollectionData();
       if (popover !== panel) return;
       list.replaceChildren();
       addCollectionRow('All bookmarks', accent, undefined);
@@ -938,12 +1001,13 @@ export async function mountQuickBar(initialSettings?: Settings): Promise<QuickBa
       const current = ++sequence;
       const query = input.value.trim();
       results.innerHTML = '<div class="empty">Loading bookmarks…</div>';
-      let items = await searchBookmarks(query, {
-        collection: collectionId,
-        perPage: unsorted ? 300 : 50,
-      }).catch(() => []);
-      if (unsorted) items = items.filter((item) => !item.collection);
-      items = items.filter((item) => !item.homeOnly).slice(0, 50);
+      let items: Bookmark[];
+      try {
+        items = await searchVault(query, { collection: collectionId, unsorted, perPage: unsorted ? 300 : 50 });
+      } catch {
+        if (popover === panel && current === sequence) results.innerHTML = '<div class="empty">Bookmarks could not be loaded. Try again.</div>';
+        return;
+      }
       if (popover !== panel || current !== sequence) return;
       addBookmarkRows(results, items, query ? 'No matching bookmarks.' : 'This collection is empty.');
       if (items.length) {
@@ -986,9 +1050,15 @@ export async function mountQuickBar(initialSettings?: Settings): Promise<QuickBa
       const sequence = ++searchSequence;
       const query = input.value.trim();
       results.innerHTML = '<div class="empty">Searching…</div>';
-      const items = await searchBookmarks(query, { perPage: 8 }).catch(() => []);
+      let items: Bookmark[];
+      try {
+        items = await searchVault(query, { perPage: 8 });
+      } catch {
+        if (sequence === searchSequence && popover === panel) results.innerHTML = '<div class="empty">Search is unavailable. Try again.</div>';
+        return;
+      }
       if (sequence !== searchSequence || popover !== panel) return;
-      addBookmarkRows(results, items.filter((item) => !item.homeOnly), query ? 'No matching saves.' : 'Your library is empty.');
+      addBookmarkRows(results, items, query ? 'No matching saves.' : 'Your library is empty.');
     };
     input.addEventListener('input', () => {
       window.clearTimeout(timer);
@@ -1228,23 +1298,31 @@ export async function mountQuickBar(initialSettings?: Settings): Promise<QuickBa
   customButton.onclick = openCustomShortcut;
   customizeButton.onclick = openCustomize;
 
+  const hydratePageState = async () => {
+    const pageUrl = location.href;
+    const yes = await refreshBootstrap();
+    if (!yes || destroyed || location.href !== pageUrl) return;
+    if (currentSettings.recallEnabled) window.setTimeout(() => loadRelated().catch(() => {}), 450);
+  };
+
+  const refreshPage = () => {
+    closePopover();
+    existingBookmark = null;
+    related = [];
+    searchSequence++;
+    paintSave();
+    renderActions();
+    window.setTimeout(() => hydratePageState().catch(() => {}), 0);
+  };
+
   // Paint immediately. Auth, duplicate lookup, and Recall hydrate after the
   // dock is already interactive so a slow cloud backend never delays the UI.
   paintSave();
-  window.setTimeout(() => {
-    loggedIn()
-      .then(async (yes) => {
-        if (!yes || destroyed) return;
-        await refreshExisting();
-        if (currentSettings.recallEnabled && !destroyed) {
-          window.setTimeout(() => loadRelated().catch(() => {}), 500);
-        }
-      })
-      .catch(() => {});
-  }, 0);
+  window.setTimeout(() => hydratePageState().catch(() => {}), 0);
 
   const api: QuickBarApi = {
     openFolders,
+    refreshPage,
     update: updateFromSettings,
     destroy: () => {
       if (destroyed) return;

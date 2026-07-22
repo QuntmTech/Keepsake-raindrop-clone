@@ -1,6 +1,6 @@
 import { getBackend } from '@/lib/backend';
 import { getSettings, watchSettings } from '@/lib/settings';
-import { findByUrl, saveBookmark } from '@/lib/bookmarks';
+import { countByCollection, createCollection, deleteBookmark, findByUrl, listCollections, saveBookmark, searchBookmarks, updateBookmark } from '@/lib/bookmarks';
 import { enqueueSave, flushQueue } from '@/lib/queue';
 import { type Message, type ScreenshotResult, type MetaResult, type SaveCurrentPageResult, dataUrlToBlob } from '@/lib/messaging';
 import { extractPageMeta, type PageMeta } from '@/lib/metadata';
@@ -15,7 +15,6 @@ import { inferType, safeDomain } from '@/lib/util';
 import { type UiSurface } from '@/lib/types';
 import { migrateToSaves, pruneStudioItems, stashStudioItem } from '@/lib/save';
 import { saveCaptureToLibrary } from '@/lib/captureSave';
-import { deleteBookmark, searchBookmarks, updateBookmark } from '@/lib/bookmarks';
 import { agoLabel, autofileSave, undoFiling, type FiledResult } from '@/lib/autofile';
 import { processQueueTick, scheduleQueue, scheduleQueueSoon, QUEUE_ALARM } from '@/lib/aiQueue';
 import { matchPage, recallAllowed, type RecallResult } from '@/lib/recall';
@@ -233,11 +232,48 @@ async function runRecall(tabId: number, url: string): Promise<void> {
   }
 }
 
-async function handleMessage(msg: Message, sender?: { tab?: { id?: number; windowId?: number } }): Promise<unknown> {
-  await getBackend(); // restore session
+async function handleMessage(msg: Message, sender?: { tab?: { id?: number; windowId?: number; url?: string } }): Promise<unknown> {
+  // Do not initialize PocketBase for UI-only messages such as Open URL/Popup.
+  // Data facades initialize the backend only in the cases that actually need it.
   switch (msg.type) {
     case 'PING':
       return { ok: true };
+
+    case 'KS_QUICKBAR_BOOTSTRAP': {
+      const requestUrl = msg.url;
+      if (sender?.tab?.url && !sameCanonicalUrl(sender.tab.url, requestUrl)) {
+        return { ok: false, loggedIn: false, existing: null, url: requestUrl, error: 'The page changed.' };
+      }
+      const backend = await getBackend();
+      const loggedIn = await backend.isLoggedIn();
+      const existing = loggedIn ? await findByUrl(requestUrl).catch(() => null) : null;
+      return { ok: true, loggedIn, existing, url: requestUrl };
+    }
+
+    case 'KS_QUICKBAR_COLLECTIONS': {
+      const backend = await getBackend();
+      if (!(await backend.isLoggedIn())) return { ok: false, collections: [], counts: {}, error: 'Sign in first.' };
+      const [collections, counts] = await Promise.all([listCollections(), countByCollection()]);
+      return { ok: true, collections, counts };
+    }
+
+    case 'KS_QUICKBAR_SEARCH': {
+      const backend = await getBackend();
+      if (!(await backend.isLoggedIn())) return { ok: false, items: [], error: 'Sign in first.' };
+      const query = msg.query.trim().slice(0, 240);
+      const requested = Number.isFinite(msg.perPage) ? Number(msg.perPage) : 50;
+      const perPage = Math.max(1, Math.min(msg.unsorted ? 300 : 60, requested));
+      let items = await searchBookmarks(query, { collection: msg.collection, perPage });
+      if (msg.unsorted) items = items.filter((item) => !item.collection);
+      return { ok: true, items: items.filter((item) => !item.homeOnly).slice(0, 50) };
+    }
+
+    case 'KS_QUICKBAR_CREATE_COLLECTION': {
+      const name = msg.name.trim().slice(0, 80);
+      if (!name) return { ok: false, error: 'Add a collection name.' };
+      const collection = await createCollection({ name });
+      return { ok: true, collection };
+    }
 
     case 'CAPTURE_SCREENSHOT': {
       const dataUrl = await captureVisibleTab();
