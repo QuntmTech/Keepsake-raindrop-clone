@@ -80,7 +80,7 @@ export type SortMode = 'newest' | 'oldest' | 'title' | 'domain' | 'lastVisited';
 export type ThemeMode = 'system' | 'light' | 'dark';
 export type QuickBarSide = 'left' | 'right';
 export type QuickBarSize = 'compact' | 'comfortable';
-export type QuickBarAction = 'popup' | 'save' | 'folder' | 'dashboard' | 'custom';
+export type QuickBarAction = 'popup' | 'search' | 'related' | 'save' | 'folder' | 'dashboard' | 'custom';
 export type QuickBarCustomIcon = 'link' | 'globe' | 'bolt' | 'star';
 
 // Named accent palettes for the UI. Hex values live in lib/theme.ts.
@@ -129,6 +129,7 @@ export interface Settings {
   quickBarCustomUrl: string; // optional http(s) shortcut shown as the custom action
   quickBarCustomLabel: string;
   quickBarCustomIcon: QuickBarCustomIcon;
+  quickBarRecentCollections: string[]; // most recently used save destinations
   theme: ThemeMode;
   accent: Accent;
   view: ViewMode;
@@ -153,12 +154,13 @@ export const DEFAULT_SETTINGS: Settings = {
   quickBarY: 0.5,
   quickBarSide: 'right',
   quickBarCollapsed: false,
-  quickBarOrder: ['popup', 'save', 'folder', 'dashboard', 'custom'],
+  quickBarOrder: ['popup', 'search', 'related', 'save', 'folder', 'dashboard', 'custom'],
   quickBarColor: '',
   quickBarSize: 'comfortable',
   quickBarCustomUrl: '',
   quickBarCustomLabel: 'Open shortcut',
   quickBarCustomIcon: 'link',
+  quickBarRecentCollections: [],
   theme: 'system',
   accent: 'ocean',
   view: 'grid',
