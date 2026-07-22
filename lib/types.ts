@@ -78,6 +78,7 @@ export type ViewMode = 'grid' | 'list' | 'masonry';
 export type SortMode = 'newest' | 'oldest' | 'title' | 'domain' | 'lastVisited';
 
 export type ThemeMode = 'system' | 'light' | 'dark';
+export type QuickBarSide = 'left' | 'right';
 
 // Named accent palettes for the UI. Hex values live in lib/theme.ts.
 export type Accent = 'ocean' | 'violet' | 'emerald' | 'sunset' | 'rose' | 'slate';
@@ -109,14 +110,16 @@ export const DEFAULT_AI_SETTINGS: AiSettings = {
 };
 
 export interface Settings {
-  // Primary surface fired by clicking the extension icon.
+  // Primary surface fired by clicking the toolbar icon.
   primarySurface: UiSurface;
   // Feature toggles — let the user turn pieces on/off.
   enableHighlights: boolean;
   enableAutoScreenshot: boolean;
   enableMetadata: boolean;   // fetch og:image / favicon / reading time on save
   enableQuickBar: boolean;   // draggable in-page quick-save widget
-  quickBarY: number;         // 0..1 vertical position of the quick bar on the edge
+  quickBarY: number;         // 0..1 vertical center position on the chosen edge
+  quickBarSide: QuickBarSide;
+  quickBarCollapsed: boolean;
   theme: ThemeMode;
   accent: Accent;
   view: ViewMode;
@@ -139,6 +142,8 @@ export const DEFAULT_SETTINGS: Settings = {
   enableMetadata: true,
   enableQuickBar: true,
   quickBarY: 0.5,
+  quickBarSide: 'right',
+  quickBarCollapsed: false,
   theme: 'system',
   accent: 'ocean',
   view: 'grid',
