@@ -20,7 +20,10 @@ jobs:
           fetch-depth: 0
 
       - name: Generate Quick Bar collection launcher
-        run: node scripts/apply-collection-launcher.mjs
+        shell: bash
+        run: |
+          set -o pipefail
+          node scripts/apply-collection-launcher.mjs 2>&1 | tee /tmp/generator.log
 
       - name: Commit generated source
         run: |
@@ -118,6 +121,7 @@ jobs:
         with:
           name: keepsake-ci-diagnostics
           path: |
+            /tmp/generator.log
             /tmp/version.log
             /tmp/tests.log
             /tmp/compile.log
