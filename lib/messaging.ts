@@ -18,6 +18,22 @@ export interface SaveCurrentPageResult {
   error?: string;
 }
 
+export interface AiSelectionResult {
+  ok: boolean;
+  text: string;
+  editable: boolean;
+  source: 'input' | 'contenteditable' | 'page' | 'none';
+  pageUrl: string;
+  pageTitle: string;
+  error?: string;
+}
+
+export interface AiSelectionReplaceResult {
+  ok: boolean;
+  undoAvailable?: boolean;
+  error?: string;
+}
+
 export type Message =
   | { type: 'SAVE_CURRENT_PAGE'; collection?: string; explicitCollection?: boolean; force?: boolean }
   | { type: 'DELETE_BOOKMARK'; id: string }
@@ -30,6 +46,9 @@ export type Message =
   | { type: 'OPEN_URL'; url: string } // validated http(s) custom Quick Bar shortcut
   | { type: 'OPEN_SURFACE'; surface: 'popup' | 'sidepanel' | 'dashboard' }
   | { type: 'OPEN_QUICKBAR' } // background -> content: pop the quick-save folder picker
+  | { type: 'KS_AI_SELECTION_GET' }
+  | { type: 'KS_AI_SELECTION_REPLACE'; text: string; expectedOriginal: string }
+  | { type: 'KS_AI_SELECTION_UNDO' }
   | { type: 'CREATE_HIGHLIGHT'; url: string; text: string; color: HighlightColor; anchor?: string }
   | { type: 'FLUSH_QUEUE' }
   | { type: 'PING' }
