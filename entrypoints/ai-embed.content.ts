@@ -81,7 +81,7 @@ function snapshot(): PageSnapshot {
 
 export default defineContentScript({
   matches: ['<all_urls>'],
-  runAt: 'document_idle',
+  runAt: 'document_end',
 
   main() {
     const host = document.createElement('div');

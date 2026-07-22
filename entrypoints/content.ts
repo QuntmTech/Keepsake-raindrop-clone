@@ -1,4 +1,3 @@
-import { getBackend } from '@/lib/backend';
 import { getSettings, watchSettings } from '@/lib/settings';
 import { createHighlight, highlightsForUrl, parseAnchor } from '@/lib/highlights';
 import { mountQuickBar, type QuickBarApi } from '@/lib/quickbar';
@@ -166,13 +165,13 @@ function undoCapturedReplacement(): AiSelectionReplaceResult {
 // selected-text AI actions, and robust quote-based highlights.
 export default defineContentScript({
   matches: ['<all_urls>'],
-  runAt: 'document_idle',
+  runAt: 'document_end',
 
   async main() {
-    // Authentication/backend startup must never prevent the in-page control from
-    // mounting. The Quick Bar handles signed-out and offline states itself.
-    await getBackend().catch(() => null);
+    // Read only the tiny synced settings record before painting. Backend/auth
+    // startup is deferred inside the Quick Bar and can never block the page UI.
     const settings = await getSettings();
+    let latestSettings = settings;
 
     let quickBarEnabled = settings.enableQuickBar;
     let quickBar: QuickBarApi | null = null;
@@ -182,7 +181,7 @@ export default defineContentScript({
       if (!quickBarEnabled) return null;
       if (quickBar && document.getElementById('keepsake-quickbar')) return quickBar;
       if (mounting) return mounting;
-      mounting = mountQuickBar()
+      mounting = mountQuickBar(latestSettings)
         .then((api) => {
           quickBar = api;
           return api;
@@ -194,7 +193,7 @@ export default defineContentScript({
       return mounting;
     };
 
-    if (quickBarEnabled) await ensureQuickBar();
+    if (quickBarEnabled) ensureQuickBar().catch(() => {});
 
     browser.runtime.onMessage.addListener((message: Message) => {
       if (message.type === 'OPEN_QUICKBAR') {
@@ -217,6 +216,7 @@ export default defineContentScript({
     document.addEventListener('input', rememberSoon, true);
 
     watchSettings(async (next) => {
+      latestSettings = next;
       quickBarEnabled = next.enableQuickBar;
       if (!quickBarEnabled) {
         quickBar?.destroy();
@@ -240,7 +240,9 @@ export default defineContentScript({
     if (!settings.enableHighlights) return;
 
     injectStyles();
-    await reapplyHighlights();
+    // Rebuilding quote anchors walks page text; keep it off the critical render
+    // path and let the page/Quick Bar become interactive first.
+    window.setTimeout(() => reapplyHighlights().catch(() => {}), 350);
 
     let toolbar: HTMLDivElement | null = null;
     const closeToolbar = () => {

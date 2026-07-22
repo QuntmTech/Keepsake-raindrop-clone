@@ -21,6 +21,8 @@ const {
   normalizeQuickBarOrder,
   reorderQuickBarAction,
   normalizeQuickBarColor,
+  normalizeQuickBarWidth,
+  normalizeQuickBarIconSize,
   normalizeQuickBarUrl,
   resolveSaveCollection,
   rememberRecentCollection,
@@ -95,4 +97,14 @@ test('canonical URL matching ignores tracking parameters and fragments', () => {
     sameCanonicalUrl('https://example.com/post/?utm_source=x#section', 'https://example.com/post'),
     true,
   );
+});
+
+
+test('dock width and icon sizing are clamped and migration-safe', () => {
+  assert.equal(normalizeQuickBarWidth(undefined), 50);
+  assert.equal(normalizeQuickBarWidth(8), 34);
+  assert.equal(normalizeQuickBarWidth(200), 86);
+  assert.equal(normalizeQuickBarIconSize(undefined), 20);
+  assert.equal(normalizeQuickBarIconSize(5), 14);
+  assert.equal(normalizeQuickBarIconSize(40), 26);
 });

@@ -9,7 +9,7 @@ export default defineConfig({
     name: 'Keepsake — bookmarks on steroids',
     description:
       'Save, tag, search, highlight, transcribe, rewrite, and understand pages with a cost-aware multi-model AI workbench.',
-    version: '8.12.0',
+    version: '8.12.1',
 
     // Pins a stable extension ID across reloads / loading from a new folder, so
     // your locally-stored bookmarks survive updates instead of being wiped.
