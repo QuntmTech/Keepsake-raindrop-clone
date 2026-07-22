@@ -1,6 +1,6 @@
 # Keepsake — bookmarks on steroids
 
-An AI-powered bookmark vault and customizable new-tab Home for Chrome/Firefox (MV3). Save pages with tags and collections, search your full library, highlight text, capture screenshots, monitor saved pages, and ask questions grounded in what you saved.
+An AI-powered bookmark vault and customizable new-tab Home for Chrome/Firefox (MV3). Save pages with tags and collections, search your full library, highlight text, capture screenshots, monitor saved pages, rewrite selected text, and ask questions grounded in what you saved.
 
 > **Local-first.** Keepsake works out of the box with on-device storage. A PocketBase backend is available behind the same interface for cross-device sync and hosted accounts.
 
@@ -26,7 +26,7 @@ Create an account in the extension and start saving. Local mode needs no server.
 ### Validation and production builds
 
 ```bash
-npm test              # retrieval + bulk + UI-context regression tests
+npm test              # retrieval + bulk + UI + Quick Bar + AI Writer regression tests
 npm run compile       # TypeScript check
 npm run build         # .output/chrome-mv3
 npm run check         # version + tests + type-check + build
@@ -44,7 +44,7 @@ Use `npm run zip:store` for a Web Store upload. Do not upload the normal develop
 
 ### Turning on AI
 
-Ask Your Library and dashboard Smart Search both work without an API key by returning the strongest local matches. For synthesized answers, smarter reranking, and automated filing, open Settings → **AI**, enable AI, select a provider, paste its API key, and click **Test key**.
+Ask Your Library and dashboard Smart Search both work without an API key by returning the strongest local matches. AI Writer, synthesized answers, smarter reranking, and automated filing use the configured provider. Open Settings → **AI**, enable AI, select a provider, paste its API key, and click **Test key**.
 
 Default model tiers:
 
@@ -54,7 +54,7 @@ Default model tiers:
 | OpenAI | `gpt-4o-mini` | `gpt-4o` |
 | Google | `gemini-2.5-flash` | `gemini-2.5-pro` |
 
-The key is stored in `chrome.storage.local`, never synced, and only sent to the provider the user selected. Saved source text is treated as untrusted data, and Ask Your Library retrieves a small relevant source set before calling the provider.
+The key is stored in `chrome.storage.local`, never synced, and only sent to the provider the user selected. Selected/page text is treated as untrusted data, and Ask Your Library retrieves a small relevant source set before calling the provider.
 
 ### Switching to PocketBase
 
@@ -67,7 +67,8 @@ The key is stored in `chrome.storage.local`, never synced, and only sent to the 
 ## Features
 
 - **Home launcher** — pinned app tiles, folders, drag-and-drop ordering, wallpapers, and optional dashboard widgets
-- **Quick Bar** — a self-healing in-page save control that drags vertically, snaps to either browser edge, collapses to a visible tab, and reports save failures instead of pretending success
+- **Quick Bar** — a self-healing in-page command dock that drags vertically, snaps to either browser edge, collapses to a visible tab, opens AI Writer, browses collections, and reports failures instead of pretending success
+- **AI Writer** — load selected page or editable-field text, improve grammar, rewrite, shorten, expand, simplify, change tone, run custom instructions, copy, safely replace, undo, and attach results to a saved page
 - **Context-aware saving** — opening Save while browsing a collection preselects that collection; opening it from Unsorted preselects no collection
 - **Capture Studio** — visible/full-page screenshots, recordings, clipboard, and downloads
 - **AI filing** — optional summaries, tags, confidence-based filing, and an Inbox fallback
@@ -81,7 +82,7 @@ The key is stored in `chrome.storage.local`, never synced, and only sent to the 
 - **Portable** — imports from browser HTML, Raindrop, Pocket, and Keepsake JSON; exports JSON backups
 - **Resilient** — offline save queue, PocketBase request retries, cached startup data, durable Quick Bar state, and Home-field fallback storage
 
-The Quick Bar cannot appear on Chrome-owned pages such as `chrome://extensions`, the Chrome Web Store, or some built-in new-tab pages because Chrome blocks content scripts there.
+The Quick Bar and selected-text tools cannot run on Chrome-owned pages such as `chrome://extensions`, the Chrome Web Store, or some built-in new-tab pages because Chrome blocks content scripts there.
 
 ---
 
@@ -90,23 +91,27 @@ The Quick Bar cannot appear on Chrome-owned pages such as `chrome://extensions`,
 ```text
 entrypoints/
   background.ts     service worker, capture, queues, watches, commands, billing handoff
-  content.ts        self-healing Quick Bar, highlights, and Ambient Recall
+  content.ts        self-healing Quick Bar, safe selected-text replacement, and highlights
   newtab/           Home launcher and widgets
   popup/            collection-aware quick save and compact library/settings surfaces
-  sidepanel/        docked Save / Library / Ask surfaces
+  sidepanel/        docked Save / Library / AI Workbench surfaces
   dashboard/        complete bookmark library, bulk cleanup, and smart search
   options/          account, AI, capture, appearance, import/export, billing
 components/
+  AIWriter.tsx       rewrite/grammar/tone UI with copy, replace, undo, and save
+  AIWorkbench.tsx    compact Write / Ask Library switcher
   BulkActionBar.tsx  bounded multi-bookmark cleanup controls
   home/              Home widgets and customization controls
 lib/
   backend/           local and PocketBase implementations behind one interface
   ai.ts              tags, summaries, hybrid retrieval, and grounded library Q&A
+  aiWriter.ts        provider execution and session-persisted writer drafts
+  aiWriterPrompt.ts  pure prompt construction, normalization, and change summaries
   bulk.ts            pure selection, tag normalization, and bounded batch helpers
   llm.ts             Anthropic/OpenAI/Google adapters and provider safety
   retrieval.ts       deterministic ranking and evidence-snippet selection
   uiContext.ts       save-context resolution and Quick Bar positioning helpers
-  quickbar.ts        edge-snapping in-page save control
+  quickbar.ts        customizable edge-snapping in-page command dock
   embedder.ts        local semantic embeddings
   home.ts            durable Home pin/order overlay
   widgets.ts         Home widget data and browser integrations
@@ -126,11 +131,12 @@ The UI calls `lib/bookmarks`, `lib/highlights`, and `lib/auth`. Those facades de
 
 - AI keys remain in local extension storage and are never committed or synced.
 - AI requests have hard timeouts and provider-specific error handling.
-- Saved webpage text is isolated as untrusted source material in AI prompts.
+- Selected/page text is isolated as untrusted source material in AI Writer prompts.
+- AI replacement validates that the captured selection is still current and requires an explicit click; it never silently overwrites typed text.
 - Quick Bar collection labels are rendered as text, not injected HTML.
 - Bulk operations use bounded batches instead of flooding storage or the background worker.
 - PocketBase rules must enforce per-user access with `user = @request.auth.id`.
 - Local-mode passwords are salted and hashed for on-device profile separation; use PocketBase for real hosted authentication.
-- `<all_urls>` is required for user-triggered capture, metadata, highlights, and in-page features.
+- `<all_urls>` is required for user-triggered capture, metadata, highlights, AI selection tools, and in-page features.
 - Anthropic, OpenAI, and Google API hosts are used only when the user enables BYOK AI.
 - Weather hosts and full-page MHTML capture remain optional permissions.
