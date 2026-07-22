@@ -15,6 +15,13 @@ export function scheduleQueue(): void {
   browser.alarms.create(QUEUE_ALARM, { periodInMinutes: 1, delayInMinutes: 1 });
 }
 
+// User-triggered saves should acknowledge immediately. This schedules the same
+// durable queue for the earliest MV3-safe alarm window instead of making the
+// click wait for extraction, embeddings, or an LLM response.
+export function scheduleQueueSoon(): void {
+  browser.alarms.create(QUEUE_ALARM, { periodInMinutes: 1, delayInMinutes: 0.5 });
+}
+
 interface Backoff {
   until: number;
   step: number; // minutes; doubles per consecutive failure round, caps at 60

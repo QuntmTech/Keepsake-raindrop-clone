@@ -19,10 +19,10 @@ export interface SaveCurrentPageResult {
 }
 
 export type Message =
-  | { type: 'SAVE_CURRENT_PAGE'; collection?: string; force?: boolean }
+  | { type: 'SAVE_CURRENT_PAGE'; collection?: string; explicitCollection?: boolean; force?: boolean }
   | { type: 'DELETE_BOOKMARK'; id: string }
   | { type: 'MOVE_BOOKMARK'; id: string; collection?: string }
-  | { type: 'REFRESH_BOOKMARK'; id: string }
+  | { type: 'REFRESH_BOOKMARK'; id: string; url: string }
   | { type: 'CAPTURE_SCREENSHOT' }       // background -> JPEG dataURL of the visible tab
   | { type: 'EXTRACT_META'; tabId?: number } // background -> PageMeta for a tab
   | { type: 'OPEN_DASHBOARD' }

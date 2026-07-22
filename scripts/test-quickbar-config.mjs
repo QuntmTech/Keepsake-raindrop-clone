@@ -22,6 +22,7 @@ const {
   reorderQuickBarAction,
   normalizeQuickBarColor,
   normalizeQuickBarUrl,
+  resolveSaveCollection,
   rememberRecentCollection,
   splitRecentCollections,
   buildRelatedQuery,
@@ -30,10 +31,17 @@ const {
 
 const completeOrder = ['popup', 'search', 'related', 'save', 'folder', 'dashboard', 'custom'];
 
-test('Quick Bar order is unique, valid, and always complete', () => {
-  assert.deepEqual(normalizeQuickBarOrder(['folder', 'popup', 'folder', 'bad']), [
+test('older Quick Bar layouts receive discovery actions beside Popup', () => {
+  assert.deepEqual(normalizeQuickBarOrder(['folder', 'popup', 'save', 'dashboard', 'custom']), [
     'folder', 'popup', 'search', 'related', 'save', 'dashboard', 'custom',
   ]);
+});
+
+test('complete custom Quick Bar orders remain untouched', () => {
+  assert.deepEqual(
+    normalizeQuickBarOrder(['dashboard', 'save', 'popup', 'related', 'folder', 'search', 'custom']),
+    ['dashboard', 'save', 'popup', 'related', 'folder', 'search', 'custom'],
+  );
 });
 
 test('dragging an action before another action persists a deterministic order', () => {
@@ -54,6 +62,12 @@ test('custom shortcuts allow only http and https URLs', () => {
   assert.equal(normalizeQuickBarUrl('https://example.com/path'), 'https://example.com/path');
   assert.equal(normalizeQuickBarUrl('javascript:alert(1)'), '');
   assert.equal(normalizeQuickBarUrl('file:///tmp/test'), '');
+});
+
+test('explicit Unsorted never falls back to the default collection', () => {
+  assert.equal(resolveSaveCollection(undefined, 'default-id', true), '');
+  assert.equal(resolveSaveCollection(undefined, 'default-id', false), 'default-id');
+  assert.equal(resolveSaveCollection('picked-id', 'default-id', true), 'picked-id');
 });
 
 test('recent collections are unique, newest-first, and capped', () => {

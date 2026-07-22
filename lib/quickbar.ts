@@ -4,8 +4,9 @@ import { listCollections, createCollection, findByUrl, searchBookmarks } from '.
 import { send, type SaveCurrentPageResult } from './messaging';
 import { ACCENTS } from './theme';
 import { clampQuickBarTop, quickBarFractionFromTop, quickBarSideForPointer } from './uiContext';
-import { buildRelatedQuery, normalizeQuickBarColor, normalizeQuickBarOrder, normalizeQuickBarUrl, rememberRecentCollection, reorderQuickBarAction, sameCanonicalUrl, splitRecentCollections } from './quickbarConfig';
+import { normalizeQuickBarColor, normalizeQuickBarOrder, normalizeQuickBarUrl, rememberRecentCollection, reorderQuickBarAction, splitRecentCollections } from './quickbarConfig';
 import { type Bookmark, type Collection, type QuickBarAction, type QuickBarCustomIcon, type QuickBarSide, type Settings } from './types';
+import { type RecallItem, type RecallResult } from './recall';
 
 // The in-page Quick Bar is rendered in a Shadow DOM so websites cannot restyle
 // it. It snaps to either browser edge, remembers its position, and can collapse
@@ -96,6 +97,7 @@ export async function mountQuickBar(): Promise<QuickBarApi | null> {
     .btn:hover { background: rgba(255,255,255,.13); color: #fff; transform: scale(1.06); }
     .btn:active { transform: scale(.92); }
     .btn:disabled { opacity: .65; }
+    button:focus-visible, input:focus-visible, select:focus-visible, [role="button"]:focus-visible { outline: 2px solid var(--ks-accent); outline-offset: 2px; }
     .actions { display: flex; flex-direction: column; align-items: center; gap: 3px; }
     .action[draggable="true"] { cursor: grab; }
     .action.dragging-action { opacity: .42; transform: scale(.9); }
@@ -214,7 +216,7 @@ export async function mountQuickBar(): Promise<QuickBarApi | null> {
   let dragging = false;
   let saving = false;
   let existingBookmark: Bookmark | null = null;
-  let related: Bookmark[] = [];
+  let related: RecallItem[] = [];
   let collectionCache: { items: Collection[]; at: number } | null = null;
   let searchSequence = 0;
 
@@ -268,7 +270,7 @@ export async function mountQuickBar(): Promise<QuickBarApi | null> {
     for (const action of order) actions.appendChild(map[action]);
     const customUrl = normalizeQuickBarUrl(currentSettings.quickBarCustomUrl);
     customButton.hidden = !customUrl;
-    relatedButton.hidden = related.length === 0;
+    relatedButton.hidden = !currentSettings.recallEnabled || related.length === 0;
     relatedButton.innerHTML = `${icon('related')}<span class="count">${Math.min(99, related.length)}</span>`;
     const iconName = currentSettings.quickBarCustomIcon as QuickBarCustomIcon;
     customButton.innerHTML = icon(iconName in SVG ? iconName as keyof typeof SVG : 'link');
@@ -277,14 +279,17 @@ export async function mountQuickBar(): Promise<QuickBarApi | null> {
   };
 
   const updateFromSettings = (next: Settings) => {
+    const recallChanged = next.recallEnabled !== currentSettings.recallEnabled;
     currentSettings = next;
     currentY = next.quickBarY;
     side = next.quickBarSide;
     collapsed = next.quickBarCollapsed;
     accent = normalizeQuickBarColor(next.quickBarColor) || ACCENTS.find((item) => item.key === next.accent)?.swatch || '#2563eb';
     host.style.setProperty('--ks-accent', accent);
+    if (!next.recallEnabled) related = [];
     renderActions();
     applyAll();
+    if (recallChanged && next.recallEnabled) window.setTimeout(() => loadRelated().catch(() => {}), 250);
   };
 
   renderActions();
@@ -369,7 +374,7 @@ export async function mountQuickBar(): Promise<QuickBarApi | null> {
     const element = document.createElement('div');
     element.className = 'pop';
     const rect = (collapsed ? tab : rail).getBoundingClientRect();
-    element.style.top = `${Math.max(8, Math.min(rect.top, window.innerHeight - 330))}px`;
+    element.style.top = `${Math.max(8, Math.min(rect.top, window.innerHeight - 440))}px`;
     if (side === 'right') {
       element.style.right = `${Math.max(8, window.innerWidth - rect.left + 10)}px`;
       element.style.left = 'auto';
@@ -385,6 +390,8 @@ export async function mountQuickBar(): Promise<QuickBarApi | null> {
     popover = buildPopover();
     const box = document.createElement('div');
     box.className = 'msg';
+    box.setAttribute('role', 'status');
+    box.setAttribute('aria-live', 'polite');
     box.append(document.createTextNode(message));
     if (actionLabel && action) {
       box.appendChild(document.createElement('br'));
@@ -392,7 +399,16 @@ export async function mountQuickBar(): Promise<QuickBarApi | null> {
       link.type = 'button';
       link.className = 'link';
       link.textContent = actionLabel;
-      link.onclick = action;
+      link.onclick = async () => {
+        link.disabled = true;
+        try {
+          await action();
+        } catch {
+          showMessage('That action could not be completed. Try again.');
+        } finally {
+          link.disabled = false;
+        }
+      };
       box.appendChild(link);
     }
     popover.appendChild(box);
@@ -444,7 +460,7 @@ export async function mountQuickBar(): Promise<QuickBarApi | null> {
     paintSave();
   };
 
-  async function quickSave(collection?: string, force = false) {
+  async function quickSave(collection?: string, force = false, explicitCollection = false) {
     if (saving) return;
     if (existingBookmark && !force && collection === undefined) {
       openDuplicateMenu();
@@ -463,7 +479,7 @@ export async function mountQuickBar(): Promise<QuickBarApi | null> {
     setButtonBusy(folderButton, true);
     saveButton.innerHTML = '<span class="spinner"></span>';
     try {
-      const response = await send<SaveCurrentPageResult>({ type: 'SAVE_CURRENT_PAGE', collection, force });
+      const response = await send<SaveCurrentPageResult>({ type: 'SAVE_CURRENT_PAGE', collection, force, explicitCollection });
       if (!response?.ok && response?.status !== 'queued') throw new Error(response?.error || 'The page could not be saved');
       if (response.status === 'duplicate') {
         await refreshExisting();
@@ -552,7 +568,7 @@ export async function mountQuickBar(): Promise<QuickBarApi | null> {
       row.append(dot, text);
       row.onclick = () => {
         if (moveMode) moveExisting(collection);
-        else quickSave(collection);
+        else quickSave(collection, false, true);
       };
       popover.appendChild(row);
     };
@@ -585,22 +601,59 @@ export async function mountQuickBar(): Promise<QuickBarApi | null> {
     const label = document.createElement('span');
     label.textContent = 'New collection…';
     newFolder.appendChild(label);
-    newFolder.onclick = async () => {
-      const name = window.prompt('New collection name')?.trim();
-      if (!name) return;
+    newFolder.onclick = () => openCreateCollection(moveMode);
+    popover.appendChild(newFolder);
+  }
+
+  function openCreateCollection(moveMode: boolean) {
+    closePopover();
+    popover = buildPopover();
+    const heading = document.createElement('h4');
+    heading.textContent = 'New collection';
+    const input = document.createElement('input');
+    input.className = 'search-input';
+    input.placeholder = 'Collection name';
+    input.maxLength = 80;
+    const actions = document.createElement('div');
+    actions.className = 'config-actions';
+    const cancel = document.createElement('button');
+    cancel.type = 'button';
+    cancel.className = 'chip';
+    cancel.textContent = 'Cancel';
+    cancel.onclick = () => openFolders(moveMode);
+    const create = document.createElement('button');
+    create.type = 'button';
+    create.className = 'primary-small';
+    create.textContent = moveMode ? 'Create & move' : 'Create & save';
+    const submit = async () => {
+      const name = input.value.trim();
+      if (!name) {
+        input.focus();
+        return;
+      }
+      create.disabled = true;
       try {
         const created = await createCollection({ name });
         collectionCache = null;
         if (moveMode) await moveExisting(created.id);
-        else await quickSave(created.id);
+        else await quickSave(created.id, false, true);
       } catch {
         showMessage('The collection could not be created. Try again.');
+      } finally {
+        create.disabled = false;
       }
     };
-    popover.appendChild(newFolder);
+    create.onclick = submit;
+    input.addEventListener('keydown', (event) => {
+      if (event.key === 'Enter') submit();
+    });
+    actions.append(cancel, create);
+    popover.append(heading, input, actions);
+    shadow.appendChild(popover);
+    input.focus();
   }
 
-  function addBookmarkRows(container: HTMLElement, items: Bookmark[], emptyMessage: string) {
+  function addBookmarkRows(container: HTMLElement, items: (Bookmark | RecallItem)[], emptyMessage: string) {
     container.replaceChildren();
     if (!items.length) {
       const empty = document.createElement('div');
@@ -667,6 +720,7 @@ export async function mountQuickBar(): Promise<QuickBarApi | null> {
       const response = await send<{ ok?: boolean; bookmark?: Bookmark; error?: string }>({
         type: 'REFRESH_BOOKMARK',
         id: existingBookmark!.id,
+        url: location.href,
       }).catch(() => null);
       if (!response?.ok) {
         showMessage(response?.error || 'Keepsake could not refresh this save.');
@@ -678,13 +732,46 @@ export async function mountQuickBar(): Promise<QuickBarApi | null> {
     });
     addAction('Move to another collection…', () => openFolders(true));
     addAction('Save another copy', () => quickSave(undefined, true));
-    addAction('Remove from Keepsake', async () => {
-      if (!window.confirm('Remove this saved item from Keepsake?')) return;
-      await send({ type: 'DELETE_BOOKMARK', id: existingBookmark!.id });
+    addAction('Remove from Keepsake…', () => openDeleteConfirmation(), 'danger');
+    shadow.appendChild(popover);
+  }
+
+  function openDeleteConfirmation() {
+    if (!existingBookmark) return;
+    closePopover();
+    popover = buildPopover();
+    const heading = document.createElement('h4');
+    heading.textContent = 'Remove saved item?';
+    const message = document.createElement('div');
+    message.className = 'msg';
+    message.textContent = 'This removes it from Keepsake. The original website is not affected.';
+    const actions = document.createElement('div');
+    actions.className = 'config-actions';
+    const cancel = document.createElement('button');
+    cancel.type = 'button';
+    cancel.className = 'chip';
+    cancel.textContent = 'Cancel';
+    cancel.onclick = openDuplicateMenu;
+    const remove = document.createElement('button');
+    remove.type = 'button';
+    remove.className = 'primary-small';
+    remove.style.background = '#dc2626';
+    remove.textContent = 'Remove';
+    remove.onclick = async () => {
+      remove.disabled = true;
+      const id = existingBookmark?.id;
+      if (!id) return;
+      const response = await send<{ ok?: boolean; error?: string }>({ type: 'DELETE_BOOKMARK', id }).catch(() => null);
+      if (!response?.ok) {
+        showMessage(response?.error || 'Keepsake could not remove this save.');
+        return;
+      }
       existingBookmark = null;
       paintSave();
       showMessage('Removed from Keepsake.');
-    }, 'danger');
+    };
+    actions.append(cancel, remove);
+    popover.append(heading, message, actions);
     shadow.appendChild(popover);
   }
 
@@ -702,18 +789,19 @@ export async function mountQuickBar(): Promise<QuickBarApi | null> {
     popover.append(heading, input, results);
     shadow.appendChild(popover);
 
+    const panel = popover;
     let timer: number | undefined;
     const run = async () => {
       const sequence = ++searchSequence;
       const query = input.value.trim();
       results.innerHTML = '<div class="empty">Searching…</div>';
       const items = await searchBookmarks(query, { perPage: 8 }).catch(() => []);
-      if (sequence !== searchSequence || !popover) return;
+      if (sequence !== searchSequence || popover !== panel) return;
       addBookmarkRows(results, items.filter((item) => !item.homeOnly), query ? 'No matching saves.' : 'Your library is empty.');
     };
     input.addEventListener('input', () => {
       window.clearTimeout(timer);
-      timer = window.setTimeout(run, 160);
+      timer = window.setTimeout(run, 200);
     });
     input.addEventListener('keydown', (event) => {
       if (event.key === 'Enter') (results.querySelector('button') as HTMLButtonElement | null)?.click();
@@ -723,13 +811,14 @@ export async function mountQuickBar(): Promise<QuickBarApi | null> {
   }
 
   async function loadRelated() {
-    if (!(await loggedIn())) return;
-    const query = buildRelatedQuery(document.title, location.href);
-    if (!query) return;
-    const items = await searchBookmarks(query, { perPage: 10 }).catch(() => []);
-    related = items
-      .filter((item) => !item.homeOnly && !sameCanonicalUrl(item.url, location.href))
-      .slice(0, 6);
+    if (!currentSettings.recallEnabled || !(await loggedIn())) {
+      related = [];
+      renderActions();
+      return;
+    }
+    const response = await send<{ ok?: boolean; result?: RecallResult | null }>({ type: 'KS_GET_RECALL' }).catch(() => null);
+    const result = response?.result;
+    related = result?.url === location.href ? result.semantic.slice(0, 6) : [];
     renderActions();
     applyTop();
   }
@@ -891,17 +980,17 @@ export async function mountQuickBar(): Promise<QuickBarApi | null> {
   }
 
   popupButton.onclick = openDropdown;
-  searchButton.onclick = () => (popover ? closePopover() : openSearch());
-  relatedButton.onclick = () => (popover ? closePopover() : openRelated());
+  searchButton.onclick = openSearch;
+  relatedButton.onclick = openRelated;
   saveButton.onclick = () => quickSave();
-  folderButton.onclick = () => (popover ? closePopover() : openFolders(Boolean(existingBookmark)));
+  folderButton.onclick = () => openFolders(Boolean(existingBookmark));
   dashboardButton.onclick = () => send({ type: 'OPEN_DASHBOARD' });
   customButton.onclick = openCustomShortcut;
-  customizeButton.onclick = () => (popover ? closePopover() : openCustomize());
+  customizeButton.onclick = openCustomize;
 
   if (await loggedIn()) {
     await refreshExisting();
-    loadRelated().catch(() => {});
+    if (currentSettings.recallEnabled) window.setTimeout(() => loadRelated().catch(() => {}), 700);
   } else {
     paintSave();
   }

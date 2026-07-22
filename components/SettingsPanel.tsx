@@ -383,7 +383,7 @@ export function SettingsPanel({ compact = false }: { compact?: boolean }) {
         hint="Surfaces 'you saved things about this' while you browse. All matching runs on your device against your own library — no page content ever leaves it, and no network calls are made."
       >
         <Toggle
-          label="Show related saves while browsing (badge + side panel)"
+          label="Show related saves while browsing (toolbar badge, Quick Bar + side panel)"
           checked={settings.recallEnabled}
           onChange={(v) => update({ recallEnabled: v })}
         />
@@ -409,7 +409,7 @@ export function SettingsPanel({ compact = false }: { compact?: boolean }) {
         )}
       </Section>
 
-      <Section title="Capture" compact={compact} hint="The Quick Bar is a draggable widget on the edge of every page. Shortcut: Ctrl+Shift+K pops the folder picker.">
+      <Section title="Capture" compact={compact} hint="The Quick Bar is a draggable widget on the edge of every page. Use its gear to reorder buttons, change size/color, or add a custom shortcut. Ctrl+Shift+K opens the folder picker.">
         <Toggle label="Show the in-page Quick Bar" checked={settings.enableQuickBar} onChange={(v) => update({ enableQuickBar: v })} />
         <Toggle label="Highlights & annotations on pages" checked={settings.enableHighlights} onChange={(v) => update({ enableHighlights: v })} />
         <Toggle label="Auto-capture a preview screenshot" checked={settings.enableAutoScreenshot} onChange={(v) => update({ enableAutoScreenshot: v })} />
