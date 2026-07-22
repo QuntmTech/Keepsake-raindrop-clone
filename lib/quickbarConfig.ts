@@ -77,6 +77,17 @@ export function normalizeQuickBarUrl(value: unknown): string {
   }
 }
 
+// `undefined` normally means "use the default collection". The folder picker
+// needs a separate explicit flag so its Unsorted row can intentionally clear
+// the destination instead of accidentally falling back to that default.
+export function resolveSaveCollection(
+  selected: string | undefined,
+  defaultCollection: string | undefined,
+  explicit: boolean,
+): string | undefined {
+  return explicit ? selected || '' : selected ?? defaultCollection;
+}
+
 export function rememberRecentCollection(current: unknown, id: string | undefined, limit = 3): string[] {
   const safe = Array.isArray(current) ? current.filter((item): item is string => typeof item === 'string' && Boolean(item)) : [];
   if (!id) return [...new Set(safe)].slice(0, limit);
