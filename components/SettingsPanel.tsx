@@ -6,6 +6,7 @@ import { LoginForm } from './LoginForm';
 import { PlanBadge } from './PlanBadge';
 import { AdminBilling } from './AdminBilling';
 import { Icon } from './Icon';
+import { AiEngineSettings } from './AiEngineSettings';
 import { useToast } from './Toast';
 import { ACCENTS } from '@/lib/theme';
 import { type Accent, type AiSettings, type LlmProvider, type SortMode, type ThemeMode, type UiSurface, type ViewMode } from '@/lib/types';
@@ -324,58 +325,7 @@ export function SettingsPanel({ compact = false }: { compact?: boolean }) {
         </div>
       </Section>
 
-      <Section
-        title="AI"
-        compact={compact}
-        hint="Bring your own API key (Anthropic, OpenAI or Google). It is stored locally on this device, never synced, and only ever sent to the provider you chose. If your Chrome has built-in on-device AI, summaries prefer it — free and private."
-      >
-        {ai && (
-          <div className="flex flex-col gap-3">
-            <Toggle label="Enable AI features" checked={ai.enabled} onChange={(v) => patchAi({ enabled: v })} />
-            {ai.enabled && (
-              <>
-                <label className="block text-xs font-medium text-ink-soft">Provider</label>
-                <select
-                  className="input"
-                  value={ai.provider ?? 'anthropic'}
-                  onChange={(e) => patchAi({ provider: e.target.value as LlmProvider })}
-                >
-                  {(Object.keys(PROVIDER_DEFAULTS) as LlmProvider[]).map((p) => (
-                    <option key={p} value={p}>
-                      {PROVIDER_DEFAULTS[p].label}
-                    </option>
-                  ))}
-                </select>
-                <div className="flex items-center gap-2">
-                  <input
-                    className="input font-mono text-xs"
-                    type="password"
-                    placeholder={PROVIDER_DEFAULTS[ai.provider ?? 'anthropic'].keyHint}
-                    value={keyDraft}
-                    onChange={(e) => setKeyDraft(e.target.value)}
-                    onBlur={commitKey}
-                  />
-                  <button className="btn-outline whitespace-nowrap" onClick={runTest} disabled={testing || !keyDraft.trim()}>
-                    {testing ? 'Testing…' : 'Test key'}
-                  </button>
-                </div>
-                <Toggle
-                  label="Auto-file every save (zero-organization)"
-                  checked={ai.autoFile}
-                  onChange={(v) => patchAi({ autoFile: v })}
-                />
-                <p className="text-xs text-ink-faint">
-                  Every save is read, summarized, tagged and filed automatically. Low-confidence saves land in{' '}
-                  <b>Inbox</b> instead of guessing. Without a key, saves still work — they queue in Inbox and get
-                  processed once a key is added. Embeddings always run locally on your device.
-                </p>
-                <Toggle label="Auto-suggest tags on save" checked={ai.autoTag} onChange={(v) => patchAi({ autoTag: v })} />
-                <Toggle label="Auto-summarize pages on save" checked={ai.autoSummarize} onChange={(v) => patchAi({ autoSummarize: v })} />
-              </>
-            )}
-          </div>
-        )}
-      </Section>
+      <AiEngineSettings compact={compact} />
 
       <Section
         title="Ambient Recall"

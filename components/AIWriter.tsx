@@ -1,10 +1,11 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { aiAvailable, watchAiSettings } from '@/lib/ai';
+import { aiAvailable, getAiSettings, watchAiSettings } from '@/lib/ai';
 import {
   DEFAULT_WRITER_DRAFT,
   getWriterDraft,
-  runWriter,
+  runWriterDetailed,
   setWriterDraft,
+  watchWriterDraft,
   type WriterDraft,
 } from '@/lib/aiWriter';
 import {
@@ -15,23 +16,34 @@ import {
   type WriterTone,
 } from '@/lib/aiWriterPrompt';
 import { findByUrl, updateBookmark } from '@/lib/bookmarks';
+import { type LlmResult } from '@/lib/llm';
 import {
   send,
   type AiSelectionReplaceResult,
   type AiSelectionResult,
   type SaveCurrentPageResult,
 } from '@/lib/messaging';
+import { findPromptBySlash, listSavedPrompts, type SavedPrompt } from '@/lib/promptLibrary';
+import { type AiRouteMode } from '@/lib/types';
+import { AiResultMeta } from './AiResultMeta';
 import { Icon } from './Icon';
 
-const ACTIONS: Array<{ action: WriterAction; label: string }> = [
+const PRIMARY_ACTIONS: Array<{ action: WriterAction; label: string }> = [
   { action: 'improve', label: 'Improve' },
   { action: 'grammar', label: 'Grammar' },
   { action: 'rewrite', label: 'Rewrite' },
+  { action: 'humanize', label: 'Humanize' },
   { action: 'shorten', label: 'Shorten' },
+  { action: 'reply', label: 'Reply' },
+  { action: 'professional', label: 'Professional' },
+  { action: 'persuasive', label: 'Persuasive' },
+];
+
+const MORE_ACTIONS: Array<{ action: WriterAction; label: string }> = [
   { action: 'expand', label: 'Expand' },
   { action: 'simplify', label: 'Simplify' },
-  { action: 'professional', label: 'Professional' },
   { action: 'casual', label: 'Casual' },
+  { action: 'translate', label: 'Translate' },
 ];
 
 interface ActivePage {
@@ -56,28 +68,52 @@ export function AIWriter({ onOpenSettings }: { onOpenSettings?: () => void }) {
   const [ready, setReady] = useState(false);
   const [available, setAvailable] = useState<boolean | null>(null);
   const [selection, setSelection] = useState<AiSelectionResult | null>(null);
+  const [prompts, setPrompts] = useState<SavedPrompt[]>([]);
+  const [showUsage, setShowUsage] = useState(true);
+  const [resultMeta, setResultMeta] = useState<LlmResult | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
   const [status, setStatus] = useState('');
   const [undoAvailable, setUndoAvailable] = useState(false);
   const requestId = useRef(0);
+  const mounted = useRef(false);
 
   useEffect(() => {
     let cancelled = false;
-    Promise.all([getWriterDraft(), aiAvailable(), readPageSelection()])
-      .then(([stored, hasAi, selected]) => {
+    Promise.all([getWriterDraft(), aiAvailable(), readPageSelection(), listSavedPrompts(), getAiSettings()])
+      .then(([stored, hasAi, selected, savedPrompts, settings]) => {
         if (cancelled) return;
         const next = selected?.text && !stored.input ? { ...stored, input: selected.text } : stored;
         setDraft(next);
         setAvailable(hasAi);
         setSelection(selected);
+        setPrompts(savedPrompts);
+        setShowUsage(settings.showUsage);
         if (next !== stored) setWriterDraft(next).catch(() => {});
       })
-      .finally(() => !cancelled && setReady(true));
-    const unwatch = watchAiSettings(() => aiAvailable().then(setAvailable).catch(() => setAvailable(false)));
+      .finally(() => {
+        if (!cancelled) {
+          mounted.current = true;
+          setReady(true);
+        }
+      });
+
+    const unwatchAi = watchAiSettings((settings) => {
+      setShowUsage(settings.showUsage);
+      aiAvailable().then(setAvailable).catch(() => setAvailable(false));
+    });
+    const unwatchDraft = watchWriterDraft((next) => {
+      if (!mounted.current) return;
+      setDraft(next);
+      setResultMeta(null);
+      setError('');
+      setStatus(next.input ? 'Text loaded into AI Writer.' : '');
+    });
     return () => {
       cancelled = true;
-      unwatch();
+      mounted.current = false;
+      unwatchAi();
+      unwatchDraft();
     };
   }, []);
 
@@ -96,6 +132,7 @@ export function AIWriter({ onOpenSettings }: { onOpenSettings?: () => void }) {
     setDraft((current) => ({ ...current, ...patchValue }));
     setError('');
     setStatus('');
+    if ('input' in patchValue || 'output' in patchValue || 'action' in patchValue) setResultMeta(null);
   }
 
   async function grabSelection() {
@@ -104,18 +141,35 @@ export function AIWriter({ onOpenSettings }: { onOpenSettings?: () => void }) {
     const selected = await readPageSelection();
     setSelection(selected);
     if (!selected?.text) {
-      setError('Select some text on the webpage, then click this again.');
+      setError('Select text on the webpage or inside a text field, then click Use selection again.');
       return;
     }
     patch({ input: selected.text, output: '' });
-    setStatus(selected.editable ? 'Selected editable text loaded.' : 'Selected page text loaded.');
+    setStatus(selected.editable ? 'Editable selection loaded — Replace will be available.' : 'Selected page text loaded.');
+  }
+
+  async function applyPrompt(prompt: SavedPrompt) {
+    patch({
+      action: 'custom',
+      customInstruction: prompt.instruction,
+      selectedPromptId: prompt.id,
+      output: '',
+    });
+    setStatus(`Loaded “${prompt.name}”.`);
+  }
+
+  async function handleCustomInstruction(value: string) {
+    patch({ customInstruction: value, selectedPromptId: '' });
+    if (!/^\/[a-z0-9_-]+\s*$/i.test(value.trim())) return;
+    const prompt = await findPromptBySlash(value);
+    if (prompt) await applyPrompt(prompt);
   }
 
   async function generate(actionOverride?: WriterAction) {
     const action = actionOverride ?? draft.action;
     if (busy || !draft.input.trim()) return;
     if (!available) {
-      setError('Add an Anthropic, OpenAI, or Google API key in Settings → AI first.');
+      setError('Connect Novita, OpenAI, Anthropic, or Google in Settings → AI first.');
       return;
     }
 
@@ -123,17 +177,21 @@ export function AIWriter({ onOpenSettings }: { onOpenSettings?: () => void }) {
     setBusy(true);
     setError('');
     setStatus('');
+    setResultMeta(null);
     patch({ action });
     try {
-      const output = await runWriter({
+      const result = await runWriterDetailed({
         text: draft.input,
         action,
         tone: draft.tone,
         length: draft.length,
         customInstruction: draft.customInstruction,
+        targetLanguage: draft.targetLanguage,
+        quality: draft.quality,
       });
       if (id !== requestId.current) return;
-      patch({ output: output.trim(), action });
+      patch({ output: result.text.trim(), action });
+      setResultMeta(result);
       setStatus(`${writerActionLabel(action)} complete.`);
     } catch (cause) {
       if (id !== requestId.current) return;
@@ -227,7 +285,7 @@ export function AIWriter({ onOpenSettings }: { onOpenSettings?: () => void }) {
             </span>
             <div className="min-w-0">
               <p className="text-sm font-semibold text-ink">AI Writer</p>
-              <p className="truncate text-[11px] text-ink-faint">Rewrite, repair, and reuse text without leaving the page</p>
+              <p className="truncate text-[11px] text-ink-faint">Rewrite, reply, translate, and replace without leaving the page</p>
             </div>
           </div>
           <button className="btn-ghost shrink-0 px-2 text-xs" onClick={grabSelection} title="Load selected text from the webpage">
@@ -240,31 +298,26 @@ export function AIWriter({ onOpenSettings }: { onOpenSettings?: () => void }) {
         {available === false && (
           <div className="rounded-xl border border-amber-400/30 bg-amber-400/10 p-3 text-xs text-ink-soft">
             <p className="font-medium text-ink">Connect an AI provider</p>
-            <p className="mt-1">Your key stays on this device and is sent only to the provider you choose.</p>
-            {onOpenSettings && (
-              <button className="mt-2 font-medium text-brand hover:underline" onClick={onOpenSettings}>
-                Open AI settings →
-              </button>
-            )}
+            <p className="mt-1">Novita is recommended for automatic cost-aware multi-model routing.</p>
+            {onOpenSettings && <button className="mt-2 font-medium text-brand hover:underline" onClick={onOpenSettings}>Open AI settings →</button>}
           </div>
         )}
 
         <div>
           <div className="mb-2 flex items-center justify-between">
             <label className="text-xs font-semibold text-ink">Source text</label>
-            <span className="text-[10px] text-ink-faint">{draft.input.length.toLocaleString()} / 24,000</span>
+            <span className="text-[10px] text-ink-faint">{draft.input.length.toLocaleString()} / 48,000</span>
           </div>
           <textarea
             className="min-h-36 w-full resize-y rounded-xl border border-line bg-surface-raised p-3 text-sm leading-relaxed text-ink outline-none transition focus:border-brand/60 focus:ring-2 focus:ring-brand/10"
             value={draft.input}
-            maxLength={24_000}
-            placeholder="Paste text here, or select text on the webpage and click Use selection…"
+            maxLength={48_000}
+            placeholder="Paste text, select text on the webpage, or click the small Rewrite chip beside an editable field…"
             onChange={(event) => patch({ input: event.target.value, output: '' })}
           />
           {selection?.text && (
             <p className="mt-1 text-[10px] text-ink-faint">
-              Loaded from {selection.source === 'page' ? 'page text' : 'an editable field'}
-              {selection.editable ? ' · replacement available' : ''}
+              Loaded from {selection.source === 'page' ? 'page text' : 'an editable field'}{selection.editable ? ' · replacement available' : ''}
             </p>
           )}
         </div>
@@ -272,14 +325,10 @@ export function AIWriter({ onOpenSettings }: { onOpenSettings?: () => void }) {
         <div>
           <p className="mb-2 text-xs font-semibold text-ink">Quick actions</p>
           <div className="grid grid-cols-4 gap-1.5">
-            {ACTIONS.map(({ action, label }) => (
+            {PRIMARY_ACTIONS.map(({ action, label }) => (
               <button
                 key={action}
-                className={`rounded-lg border px-2 py-2 text-[11px] font-medium transition ${
-                  draft.action === action
-                    ? 'border-brand bg-brand/10 text-brand'
-                    : 'border-line bg-surface-raised text-ink-soft hover:border-brand/40 hover:text-ink'
-                }`}
+                className={`rounded-lg border px-1.5 py-2 text-[10px] font-medium transition ${draft.action === action ? 'border-brand bg-brand/10 text-brand' : 'border-line bg-surface-raised text-ink-soft hover:border-brand/40 hover:text-ink'}`}
                 onClick={() => generate(action)}
                 disabled={busy || !draft.input.trim()}
               >
@@ -287,54 +336,66 @@ export function AIWriter({ onOpenSettings }: { onOpenSettings?: () => void }) {
               </button>
             ))}
           </div>
+          <details className="mt-2 rounded-xl border border-line bg-surface-raised p-2.5">
+            <summary className="cursor-pointer text-[11px] font-medium text-ink-soft">More transformations</summary>
+            <div className="mt-2 grid grid-cols-4 gap-1.5">
+              {MORE_ACTIONS.map(({ action, label }) => (
+                <button key={action} className="rounded-lg border border-line bg-surface px-1 py-2 text-[10px] font-medium text-ink-soft hover:border-brand/40 hover:text-ink" onClick={() => generate(action)} disabled={busy || !draft.input.trim()}>{label}</button>
+              ))}
+            </div>
+          </details>
         </div>
 
         <div className="grid grid-cols-2 gap-2">
           <label className="space-y-1 text-[11px] font-medium text-ink-soft">
             Tone
-            <select
-              className="w-full rounded-lg border border-line bg-surface-raised px-2.5 py-2 text-xs text-ink outline-none focus:border-brand"
-              value={draft.tone}
-              onChange={(event) => patch({ tone: event.target.value as WriterTone })}
-            >
-              <option value="preserve">Preserve voice</option>
-              <option value="confident">Confident</option>
-              <option value="friendly">Friendly</option>
-              <option value="professional">Professional</option>
-              <option value="casual">Casual</option>
-              <option value="direct">Direct</option>
+            <select className="w-full rounded-lg border border-line bg-surface-raised px-2.5 py-2 text-xs text-ink outline-none focus:border-brand" value={draft.tone} onChange={(event) => patch({ tone: event.target.value as WriterTone })}>
+              <option value="preserve">Preserve voice</option><option value="confident">Confident</option><option value="friendly">Friendly</option><option value="professional">Professional</option><option value="casual">Casual</option><option value="direct">Direct</option>
             </select>
           </label>
           <label className="space-y-1 text-[11px] font-medium text-ink-soft">
             Length
-            <select
-              className="w-full rounded-lg border border-line bg-surface-raised px-2.5 py-2 text-xs text-ink outline-none focus:border-brand"
-              value={draft.length}
-              onChange={(event) => patch({ length: event.target.value as WriterLength })}
-            >
-              <option value="shorter">Shorter</option>
-              <option value="same">About the same</option>
-              <option value="longer">Longer</option>
+            <select className="w-full rounded-lg border border-line bg-surface-raised px-2.5 py-2 text-xs text-ink outline-none focus:border-brand" value={draft.length} onChange={(event) => patch({ length: event.target.value as WriterLength })}>
+              <option value="shorter">Shorter</option><option value="same">About the same</option><option value="longer">Longer</option>
             </select>
           </label>
         </div>
 
-        <details className="rounded-xl border border-line bg-surface-raised p-3">
-          <summary className="cursor-pointer text-xs font-medium text-ink">Custom instruction</summary>
-          <textarea
-            className="mt-3 min-h-20 w-full resize-y rounded-lg border border-line bg-surface p-2.5 text-xs text-ink outline-none focus:border-brand"
-            value={draft.customInstruction}
-            maxLength={800}
-            placeholder="Example: Make this sound like a concise founder update with more urgency."
-            onChange={(event) => patch({ customInstruction: event.target.value })}
-          />
-          <button
-            className="btn-primary mt-2 w-full justify-center"
-            onClick={() => generate('custom')}
-            disabled={busy || !draft.input.trim() || !draft.customInstruction.trim()}
+        {draft.action === 'translate' && (
+          <label className="block text-[11px] font-medium text-ink-soft">Translate to<input className="input mt-1" value={draft.targetLanguage} onChange={(event) => patch({ targetLanguage: event.target.value })} /></label>
+        )}
+
+        <div>
+          <p className="mb-1.5 text-[11px] font-medium text-ink-soft">Quality route</p>
+          <div className="grid grid-cols-4 gap-1">
+            {(['auto', 'economy', 'balanced', 'best'] as AiRouteMode[]).map((quality) => (
+              <button key={quality} className={`rounded-lg border px-1 py-2 text-[10px] font-medium capitalize ${draft.quality === quality ? 'border-brand bg-brand/10 text-brand' : 'border-line text-ink-faint hover:text-ink'}`} onClick={() => patch({ quality })}>{quality}</button>
+            ))}
+          </div>
+        </div>
+
+        <details className="rounded-xl border border-line bg-surface-raised p-3" open={draft.action === 'custom'}>
+          <summary className="cursor-pointer text-xs font-medium text-ink">Saved or custom prompt</summary>
+          <select
+            className="input mt-3 text-xs"
+            value={draft.selectedPromptId}
+            onChange={(event) => {
+              const prompt = prompts.find((item) => item.id === event.target.value);
+              if (prompt) applyPrompt(prompt);
+              else patch({ selectedPromptId: '' });
+            }}
           >
-            Run custom instruction
-          </button>
+            <option value="">Choose a saved prompt…</option>
+            {prompts.map((prompt) => <option key={prompt.id} value={prompt.id}>{prompt.name} (/{prompt.shortcut})</option>)}
+          </select>
+          <textarea
+            className="mt-2 min-h-24 w-full resize-y rounded-lg border border-line bg-surface p-2.5 text-xs text-ink outline-none focus:border-brand"
+            value={draft.customInstruction}
+            maxLength={1200}
+            placeholder="Type an instruction, or enter /reply, /sales, /simple…"
+            onChange={(event) => handleCustomInstruction(event.target.value)}
+          />
+          <button className="btn-primary mt-2 w-full justify-center" onClick={() => generate('custom')} disabled={busy || !draft.input.trim() || !draft.customInstruction.trim()}>Run custom prompt</button>
         </details>
 
         <button className="btn-primary w-full justify-center" onClick={() => generate()} disabled={busy || !draft.input.trim()}>
@@ -347,37 +408,16 @@ export function AIWriter({ onOpenSettings }: { onOpenSettings?: () => void }) {
         {draft.output && (
           <div className="rounded-2xl border border-line bg-surface-raised p-3">
             <div className="mb-2 flex items-start justify-between gap-2">
-              <div>
-                <p className="text-xs font-semibold text-ink">Result</p>
-                <p className="text-[10px] text-ink-faint">{changeSummary}</p>
-              </div>
-              <button className="btn-ghost px-2 text-xs" onClick={() => patch({ output: '' })}>
-                Clear
-              </button>
+              <div><p className="text-xs font-semibold text-ink">Result</p><p className="text-[10px] text-ink-faint">{changeSummary}</p></div>
+              <button className="btn-ghost px-2 text-xs" onClick={() => patch({ output: '' })}>Clear</button>
             </div>
-            <textarea
-              className="min-h-40 w-full resize-y rounded-xl border border-line bg-surface p-3 text-sm leading-relaxed text-ink outline-none focus:border-brand"
-              value={draft.output}
-              onChange={(event) => patch({ output: event.target.value })}
-            />
+            <textarea className="min-h-48 w-full resize-y rounded-xl border border-line bg-surface p-3 text-sm leading-relaxed text-ink outline-none focus:border-brand" value={draft.output} onChange={(event) => patch({ output: event.target.value })} />
+            {showUsage && resultMeta && <div className="mt-2"><AiResultMeta result={resultMeta} /></div>}
             <div className="mt-3 grid grid-cols-2 gap-2">
-              <button className="btn-ghost justify-center" onClick={copyOutput}>
-                <Icon name="copy" size={14} /> Copy
-              </button>
-              <button className="btn-ghost justify-center" onClick={saveOutput}>
-                <Icon name="bookmark" size={14} /> Save
-              </button>
-              <button
-                className="btn-ghost justify-center"
-                onClick={replaceSelection}
-                disabled={!selection?.editable}
-                title={selection?.editable ? 'Replace the captured editable selection' : 'Select text inside an editable field first'}
-              >
-                <Icon name="edit" size={14} /> Replace
-              </button>
-              <button className="btn-ghost justify-center" onClick={undoReplacement} disabled={!undoAvailable}>
-                Undo replace
-              </button>
+              <button className="btn-ghost justify-center" onClick={copyOutput}><Icon name="copy" size={14} /> Copy</button>
+              <button className="btn-ghost justify-center" onClick={saveOutput}><Icon name="bookmark" size={14} /> Save</button>
+              <button className="btn-ghost justify-center" onClick={replaceSelection} disabled={!selection?.editable} title={selection?.editable ? 'Replace the captured editable selection' : 'Select text inside an editable field first'}><Icon name="edit" size={14} /> Replace</button>
+              <button className="btn-ghost justify-center" onClick={undoReplacement} disabled={!undoAvailable}>Undo replace</button>
             </div>
           </div>
         )}
