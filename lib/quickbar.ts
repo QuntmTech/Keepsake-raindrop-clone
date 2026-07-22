@@ -37,6 +37,7 @@ const SVG = {
   bolt: '<path d="M13 2 4 14h7l-1 8 9-12h-7z"/>',
   star: '<path d="m12 3 2.8 5.7 6.2.9-4.5 4.4 1.1 6.2-5.6-3-5.6 3 1.1-6.2L3 9.6l6.2-.9z"/>',
   search: '<circle cx="11" cy="11" r="7"/><path d="m20 20-4-4"/>',
+  sparkles: '<path d="M12 3l1.8 4.2L18 9l-4.2 1.8L12 15l-1.8-4.2L6 9l4.2-1.8zM19 14l.9 2.1L22 17l-2.1.9L19 20l-.9-2.1L16 17l2.1-.9z"/>',
   related: '<path d="M8 6h11M5 6h.01M8 12h11M5 12h.01M8 18h11M5 18h.01"/>',
   refresh: '<path d="M20 11a8 8 0 1 0-2.34 5.66M20 4v7h-7"/>',
   trash: '<path d="M4 7h16M9 7V4h6v3m-8 0 1 13h8l1-13"/>',
@@ -193,6 +194,7 @@ export async function mountQuickBar(): Promise<QuickBarApi | null> {
       <button class="btn action popup" draggable="true" data-action="popup" type="button" aria-label="Open Keepsake dropdown" data-tooltip="Open dropdown">${icon('popup')}</button>
       <button class="btn action search" draggable="true" data-action="search" type="button" aria-label="Search Keepsake" data-tooltip="Search Keepsake">${icon('search')}</button>
       <button class="btn action browse" draggable="true" data-action="browse" type="button" aria-label="Browse collections" data-tooltip="Browse collections">${icon('library')}</button>
+      <button class="btn action ai" draggable="true" data-action="ai" type="button" aria-label="Open AI Writer" data-tooltip="AI Writer">${icon('sparkles')}</button>
       <button class="btn action related" draggable="true" data-action="related" type="button" aria-label="Related saves" data-tooltip="Related saves" hidden>${icon('related')}</button>
       <button class="btn action save" draggable="true" data-action="save" type="button" aria-label="Save this page" data-tooltip="Save page">${icon('bookmark', true)}</button>
       <button class="btn action folder" draggable="true" data-action="folder" type="button" aria-label="Save to collection" data-tooltip="Choose collection">${icon('folder')}</button>
@@ -217,6 +219,7 @@ export async function mountQuickBar(): Promise<QuickBarApi | null> {
   const popupButton = rail.querySelector('.btn.popup') as HTMLButtonElement;
   const searchButton = rail.querySelector('.btn.search') as HTMLButtonElement;
   const browseButton = rail.querySelector('.btn.browse') as HTMLButtonElement;
+  const aiButton = rail.querySelector('.btn.ai') as HTMLButtonElement;
   const relatedButton = rail.querySelector('.btn.related') as HTMLButtonElement;
   const saveButton = rail.querySelector('.btn.save') as HTMLButtonElement;
   const folderButton = rail.querySelector('.btn.folder') as HTMLButtonElement;
@@ -281,7 +284,7 @@ export async function mountQuickBar(): Promise<QuickBarApi | null> {
   const renderActions = () => {
     const order = normalizeQuickBarOrder(currentSettings.quickBarOrder);
     const map: Record<QuickBarAction, HTMLButtonElement> = {
-      popup: popupButton, search: searchButton, browse: browseButton, related: relatedButton, save: saveButton, folder: folderButton, dashboard: dashboardButton, custom: customButton,
+      popup: popupButton, search: searchButton, browse: browseButton, ai: aiButton, related: relatedButton, save: saveButton, folder: folderButton, dashboard: dashboardButton, custom: customButton,
     };
     for (const action of order) actions.appendChild(map[action]);
     const customUrl = normalizeQuickBarUrl(currentSettings.quickBarCustomUrl);
@@ -353,7 +356,7 @@ export async function mountQuickBar(): Promise<QuickBarApi | null> {
   grip.addEventListener('pointercancel', finishDrag);
 
   let draggedAction: QuickBarAction | null = null;
-  for (const button of [popupButton, searchButton, browseButton, relatedButton, saveButton, folderButton, dashboardButton, customButton]) {
+  for (const button of [popupButton, searchButton, browseButton, aiButton, relatedButton, saveButton, folderButton, dashboardButton, customButton]) {
     button.addEventListener('dragstart', (event) => {
       draggedAction = button.dataset.action as QuickBarAction;
       button.classList.add('dragging-action');
@@ -1083,7 +1086,7 @@ export async function mountQuickBar(): Promise<QuickBarApi | null> {
     reset.className = 'chip';
     reset.textContent = 'Reset order';
     reset.onclick = async () => {
-      updateFromSettings(await setSettings({ quickBarOrder: ['popup', 'search', 'browse', 'related', 'save', 'folder', 'dashboard', 'custom'] }));
+      updateFromSettings(await setSettings({ quickBarOrder: ['popup', 'search', 'browse', 'ai', 'related', 'save', 'folder', 'dashboard', 'custom'] }));
       openCustomize();
     };
     const save = document.createElement('button');
@@ -1113,6 +1116,10 @@ export async function mountQuickBar(): Promise<QuickBarApi | null> {
   popupButton.onclick = openDropdown;
   searchButton.onclick = openSearch;
   browseButton.onclick = openCollectionLauncher;
+  aiButton.onclick = async () => {
+    const response = await send<{ ok?: boolean; error?: string }>({ type: 'OPEN_AI_TOOLS' }).catch(() => null);
+    if (!response?.ok) showMessage(response?.error || 'Keepsake could not open AI Writer.');
+  };
   relatedButton.onclick = openRelated;
   saveButton.onclick = () => quickSave();
   folderButton.onclick = () => openFolders(Boolean(existingBookmark));

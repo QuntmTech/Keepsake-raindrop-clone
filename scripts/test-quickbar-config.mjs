@@ -29,25 +29,25 @@ const {
   sameCanonicalUrl,
 } = await import(pathToFileURL(builtFile).href);
 
-const completeOrder = ['popup', 'search', 'browse', 'related', 'save', 'folder', 'dashboard', 'custom'];
+const completeOrder = ['popup', 'search', 'browse', 'ai', 'related', 'save', 'folder', 'dashboard', 'custom'];
 
 test('older Quick Bar layouts receive discovery actions beside Popup', () => {
   assert.deepEqual(normalizeQuickBarOrder(['folder', 'popup', 'save', 'dashboard', 'custom']), [
-    'folder', 'popup', 'search', 'browse', 'related', 'save', 'dashboard', 'custom',
+    'folder', 'popup', 'search', 'browse', 'ai', 'related', 'save', 'dashboard', 'custom',
   ]);
 });
 
 test('complete custom Quick Bar orders remain untouched', () => {
   assert.deepEqual(
-    normalizeQuickBarOrder(['dashboard', 'save', 'popup', 'related', 'folder', 'browse', 'search', 'custom']),
-    ['dashboard', 'save', 'popup', 'related', 'folder', 'browse', 'search', 'custom'],
+    normalizeQuickBarOrder(['dashboard', 'save', 'popup', 'related', 'folder', 'ai', 'browse', 'search', 'custom']),
+    ['dashboard', 'save', 'popup', 'related', 'folder', 'ai', 'browse', 'search', 'custom'],
   );
 });
 
 test('dragging an action before another action persists a deterministic order', () => {
   assert.deepEqual(
     reorderQuickBarAction(completeOrder, 'dashboard', 'save'),
-    ['popup', 'search', 'browse', 'related', 'dashboard', 'save', 'folder', 'custom'],
+    ['popup', 'search', 'browse', 'ai', 'related', 'dashboard', 'save', 'folder', 'custom'],
   );
 });
 

@@ -80,7 +80,7 @@ export type SortMode = 'newest' | 'oldest' | 'title' | 'domain' | 'lastVisited';
 export type ThemeMode = 'system' | 'light' | 'dark';
 export type QuickBarSide = 'left' | 'right';
 export type QuickBarSize = 'compact' | 'comfortable';
-export type QuickBarAction = 'popup' | 'search' | 'browse' | 'related' | 'save' | 'folder' | 'dashboard' | 'custom';
+export type QuickBarAction = 'popup' | 'search' | 'browse' | 'ai' | 'related' | 'save' | 'folder' | 'dashboard' | 'custom';
 export type QuickBarCustomIcon = 'link' | 'globe' | 'bolt' | 'star';
 
 // Named accent palettes for the UI. Hex values live in lib/theme.ts.
@@ -154,7 +154,7 @@ export const DEFAULT_SETTINGS: Settings = {
   quickBarY: 0.5,
   quickBarSide: 'right',
   quickBarCollapsed: false,
-  quickBarOrder: ['popup', 'search', 'browse', 'related', 'save', 'folder', 'dashboard', 'custom'],
+  quickBarOrder: ['popup', 'search', 'browse', 'ai', 'related', 'save', 'folder', 'dashboard', 'custom'],
   quickBarColor: '',
   quickBarSize: 'comfortable',
   quickBarCustomUrl: '',

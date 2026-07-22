@@ -26,6 +26,7 @@ import { applyOverlayWrite, applyOverlayForget, syncHomeOverlay } from '@/lib/ho
 import { canSaveBookmark, storageRemaining, refreshEntitlements } from '@/lib/entitlements';
 import { storage } from 'wxt/utils/storage';
 import { normalizeQuickBarUrl, resolveSaveCollection, sameCanonicalUrl } from '@/lib/quickbarConfig';
+import { requestSidepanelTarget } from '@/lib/sidepanelTarget';
 
 // The background "service worker" is event-driven and can be killed at any time by Chrome.
 // Never rely on long-lived in-memory state here — read from storage when you need it.
@@ -282,6 +283,11 @@ async function handleMessage(msg: Message, sender?: { tab?: { id?: number; windo
 
     case 'OPEN_POPUP':
       await openToolbarPopup(sender?.tab?.id, sender?.tab?.windowId);
+      return { ok: true };
+
+    case 'OPEN_AI_TOOLS':
+      await requestSidepanelTarget('ai');
+      await openSidePanel(sender?.tab?.id);
       return { ok: true };
 
     case 'OPEN_URL': {

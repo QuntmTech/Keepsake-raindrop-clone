@@ -46,6 +46,7 @@ export type Message =
   | { type: 'OPEN_URL'; url: string } // validated http(s) custom Quick Bar shortcut
   | { type: 'OPEN_SURFACE'; surface: 'popup' | 'sidepanel' | 'dashboard' }
   | { type: 'OPEN_QUICKBAR' } // background -> content: pop the quick-save folder picker
+  | { type: 'OPEN_AI_TOOLS' } // Quick Bar -> side panel AI Writer
   | { type: 'KS_AI_SELECTION_GET' }
   | { type: 'KS_AI_SELECTION_REPLACE'; text: string; expectedOriginal: string }
   | { type: 'KS_AI_SELECTION_UNDO' }
