@@ -1,11 +1,11 @@
 import { getSettings, setSettings } from './settings';
 import { getBackend } from './backend';
-import { listCollections, createCollection, findByUrl } from './bookmarks';
-import { send } from './messaging';
+import { listCollections, createCollection, findByUrl, searchBookmarks } from './bookmarks';
+import { send, type SaveCurrentPageResult } from './messaging';
 import { ACCENTS } from './theme';
 import { clampQuickBarTop, quickBarFractionFromTop, quickBarSideForPointer } from './uiContext';
-import { normalizeQuickBarColor, normalizeQuickBarOrder, normalizeQuickBarUrl, reorderQuickBarAction } from './quickbarConfig';
-import { type Collection, type QuickBarAction, type QuickBarCustomIcon, type QuickBarSide, type Settings } from './types';
+import { buildRelatedQuery, normalizeQuickBarColor, normalizeQuickBarOrder, normalizeQuickBarUrl, rememberRecentCollection, reorderQuickBarAction, sameCanonicalUrl, splitRecentCollections } from './quickbarConfig';
+import { type Bookmark, type Collection, type QuickBarAction, type QuickBarCustomIcon, type QuickBarSide, type Settings } from './types';
 
 // The in-page Quick Bar is rendered in a Shadow DOM so websites cannot restyle
 // it. It snaps to either browser edge, remembers its position, and can collapse
@@ -34,6 +34,10 @@ const SVG = {
   globe: '<circle cx="12" cy="12" r="9"/><path d="M3 12h18M12 3a14 14 0 0 1 0 18M12 3a14 14 0 0 0 0 18"/>',
   bolt: '<path d="M13 2 4 14h7l-1 8 9-12h-7z"/>',
   star: '<path d="m12 3 2.8 5.7 6.2.9-4.5 4.4 1.1 6.2-5.6-3-5.6 3 1.1-6.2L3 9.6l6.2-.9z"/>',
+  search: '<circle cx="11" cy="11" r="7"/><path d="m20 20-4-4"/>',
+  related: '<path d="M8 6h11M5 6h.01M8 12h11M5 12h.01M8 18h11M5 18h.01"/>',
+  refresh: '<path d="M20 11a8 8 0 1 0-2.34 5.66M20 4v7h-7"/>',
+  trash: '<path d="M4 7h16M9 7V4h6v3m-8 0 1 13h8l1-13"/>',
 };
 
 function icon(name: keyof typeof SVG, fill = false, size = 20): string {
@@ -106,6 +110,10 @@ export async function mountQuickBar(): Promise<QuickBarApi | null> {
     .btn.ok { color: #34d399; background: rgba(52,211,153,.16); box-shadow: none; }
     .badge { position: absolute; top: 4px; right: 4px; width: 8px; height: 8px; border-radius: 50%;
       background: #34d399; box-shadow: 0 0 0 2px rgba(24,26,32,.94); }
+    .count { position: absolute; top: -3px; right: -3px; min-width: 16px; height: 16px; display: grid; place-items: center;
+      padding: 0 4px; border-radius: 99px; background: #f59e0b; color: #111827; font-size: 9px; font-weight: 800;
+      box-shadow: 0 0 0 2px rgba(24,26,32,.96); }
+    .btn.related { position: relative; }
     .tab { position: fixed; z-index: 2147483646; display: none; align-items: center; justify-content: center;
       gap: 1px; width: 25px; height: 64px; padding: 0; border: 1px solid rgba(255,255,255,.12);
       cursor: pointer; color: #fff; background: rgba(24,26,32,.96); backdrop-filter: blur(8px);
@@ -140,6 +148,19 @@ export async function mountQuickBar(): Promise<QuickBarApi | null> {
     .swatch { width: 25px; height: 25px; border-radius: 50%; border: 2px solid rgba(255,255,255,.45); cursor: pointer; padding: 0; }
     .hint { margin: 0; color: rgba(255,255,255,.48); font-size: 10px; line-height: 1.4; }
     .primary-small { border: none; border-radius: 8px; background: var(--ks-accent); color: #fff; padding: 8px 10px; cursor: pointer; font-size: 11px; font-weight: 700; }
+    .pop.wide { width: min(340px, calc(100vw - 76px)); }
+    .section-title { margin: 8px 8px 3px; color: rgba(255,255,255,.42); font-size: 10px; font-weight: 750; text-transform: uppercase; letter-spacing: .06em; }
+    .search-input { width: calc(100% - 8px); margin: 0 4px 7px; border: 1px solid rgba(255,255,255,.14); border-radius: 10px; background: rgba(255,255,255,.07); color: #fff; padding: 10px 11px; outline: none; font: 13px ui-sans-serif,system-ui; }
+    .search-input:focus { border-color: var(--ks-accent); box-shadow: 0 0 0 2px color-mix(in srgb, var(--ks-accent) 25%, transparent); }
+    .result { align-items: flex-start; padding: 9px 10px; }
+    .result-copy { min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+    .result-title { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: #fff; font-size: 12px; font-weight: 650; }
+    .result-meta { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: rgba(255,255,255,.48); font-size: 10px; }
+    .empty { padding: 18px 12px; color: rgba(255,255,255,.52); font-size: 12px; text-align: center; }
+    .danger { color: #fca5a5; }
+    .saved-card { margin: 4px; padding: 10px; border: 1px solid rgba(255,255,255,.1); border-radius: 10px; background: rgba(255,255,255,.045); }
+    .saved-title { margin: 0 0 4px; color: #fff; font-size: 12px; font-weight: 700; line-height: 1.35; }
+    .saved-meta { margin: 0; color: rgba(255,255,255,.5); font-size: 10px; }
     .link { margin-top: 8px; display: inline-block; color: var(--ks-accent); cursor: pointer; text-decoration: underline; }
     @keyframes spin { to { transform: rotate(360deg); } }
     .spinner { width: 17px; height: 17px; border: 2px solid rgba(255,255,255,.4); border-top-color: #fff;
@@ -155,6 +176,8 @@ export async function mountQuickBar(): Promise<QuickBarApi | null> {
     <div class="grip" role="button" aria-label="Drag Quick Bar" title="Drag up/down or across the screen to switch sides">${icon('grip')}</div>
     <div class="actions">
       <button class="btn action popup" draggable="true" data-action="popup" type="button" aria-label="Open Keepsake dropdown" title="Open Keepsake dropdown">${icon('popup')}</button>
+      <button class="btn action search" draggable="true" data-action="search" type="button" aria-label="Search Keepsake" title="Search Keepsake">${icon('search')}</button>
+      <button class="btn action related" draggable="true" data-action="related" type="button" aria-label="Related saves" title="Related saves" hidden>${icon('related')}</button>
       <button class="btn action save" draggable="true" data-action="save" type="button" aria-label="Save this page" title="Save this page">${icon('bookmark', true)}</button>
       <button class="btn action folder" draggable="true" data-action="folder" type="button" aria-label="Save to collection" title="Save to collection">${icon('folder')}</button>
       <button class="btn action dash" draggable="true" data-action="dashboard" type="button" aria-label="Open Keepsake dashboard" title="Open Keepsake dashboard">${icon('grid')}</button>
@@ -175,6 +198,8 @@ export async function mountQuickBar(): Promise<QuickBarApi | null> {
   const grip = rail.querySelector('.grip') as HTMLElement;
   const actions = rail.querySelector('.actions') as HTMLDivElement;
   const popupButton = rail.querySelector('.btn.popup') as HTMLButtonElement;
+  const searchButton = rail.querySelector('.btn.search') as HTMLButtonElement;
+  const relatedButton = rail.querySelector('.btn.related') as HTMLButtonElement;
   const saveButton = rail.querySelector('.btn.save') as HTMLButtonElement;
   const folderButton = rail.querySelector('.btn.folder') as HTMLButtonElement;
   const dashboardButton = rail.querySelector('.btn.dash') as HTMLButtonElement;
@@ -188,7 +213,10 @@ export async function mountQuickBar(): Promise<QuickBarApi | null> {
   let destroyed = false;
   let dragging = false;
   let saving = false;
-  let saved = false;
+  let existing: Bookmark | null = null;
+  let related: Bookmark[] = [];
+  let collectionCache: { items: Collection[]; at: number } | null = null;
+  let searchSequence = 0;
 
   const closePopover = () => {
     popover?.remove();
@@ -235,11 +263,13 @@ export async function mountQuickBar(): Promise<QuickBarApi | null> {
   const renderActions = () => {
     const order = normalizeQuickBarOrder(currentSettings.quickBarOrder);
     const map: Record<QuickBarAction, HTMLButtonElement> = {
-      popup: popupButton, save: saveButton, folder: folderButton, dashboard: dashboardButton, custom: customButton,
+      popup: popupButton, search: searchButton, related: relatedButton, save: saveButton, folder: folderButton, dashboard: dashboardButton, custom: customButton,
     };
     for (const action of order) actions.appendChild(map[action]);
     const customUrl = normalizeQuickBarUrl(currentSettings.quickBarCustomUrl);
     customButton.hidden = !customUrl;
+    relatedButton.hidden = related.length === 0;
+    relatedButton.innerHTML = `${icon('related')}<span class="count">${Math.min(99, related.length)}</span>`;
     const iconName = currentSettings.quickBarCustomIcon as QuickBarCustomIcon;
     customButton.innerHTML = icon(iconName in SVG ? iconName as keyof typeof SVG : 'link');
     customButton.title = currentSettings.quickBarCustomLabel.trim() || 'Open custom shortcut';
@@ -301,7 +331,7 @@ export async function mountQuickBar(): Promise<QuickBarApi | null> {
   grip.addEventListener('pointercancel', finishDrag);
 
   let draggedAction: QuickBarAction | null = null;
-  for (const button of [popupButton, saveButton, folderButton, dashboardButton, customButton]) {
+  for (const button of [popupButton, searchButton, relatedButton, saveButton, folderButton, dashboardButton, customButton]) {
     button.addEventListener('dragstart', (event) => {
       draggedAction = button.dataset.action as QuickBarAction;
       button.classList.add('dragging-action');
@@ -350,7 +380,7 @@ export async function mountQuickBar(): Promise<QuickBarApi | null> {
     return element;
   }
 
-  function showMessage(message: string, actionLabel?: string, action?: () => void) {
+  function showMessage(message: string, actionLabel?: string, action?: () => void | Promise<void>) {
     closePopover();
     popover = buildPopover();
     const box = document.createElement('div');
@@ -380,16 +410,46 @@ export async function mountQuickBar(): Promise<QuickBarApi | null> {
   const saveIcon = icon('bookmark', true);
   const paintSave = () => {
     saveButton.innerHTML = saveIcon;
-    if (saved) {
+    if (existing) {
       const badge = document.createElement('span');
       badge.className = 'badge';
       saveButton.appendChild(badge);
     }
-    saveButton.title = saved ? 'Already saved — click to save another copy' : 'Save this page';
+    saveButton.title = existing ? 'Already saved — manage saved item' : 'Save this page';
   };
 
-  async function quickSave(collection?: string) {
+  const loadCollections = async (): Promise<Collection[]> => {
+    if (collectionCache && Date.now() - collectionCache.at < 60_000) return collectionCache.items;
+    const items = await listCollections();
+    collectionCache = { items, at: Date.now() };
+    return items;
+  };
+
+  const collectionLabel = async (id?: string): Promise<string> => {
+    if (!id) return 'Unsorted';
+    const item = (await loadCollections().catch(() => [])).find((collection) => collection.id === id);
+    return item?.name || 'your collection';
+  };
+
+  const rememberCollection = async (id?: string) => {
+    if (!id) return;
+    const next = rememberRecentCollection(currentSettings.quickBarRecentCollections, id);
+    if (next.join('|') !== currentSettings.quickBarRecentCollections.join('|')) {
+      updateFromSettings(await setSettings({ quickBarRecentCollections: next }));
+    }
+  };
+
+  const refreshExisting = async () => {
+    existing = await findByUrl(location.href).catch(() => null);
+    paintSave();
+  };
+
+  async function quickSave(collection?: string, force = false) {
     if (saving) return;
+    if (existing && !force && collection === undefined) {
+      openDuplicateMenu();
+      return;
+    }
     if (!(await loggedIn())) {
       showMessage('Sign in to Keepsake before saving.', 'Open Keepsake →', () => {
         send({ type: 'OPEN_DASHBOARD' });
@@ -403,19 +463,36 @@ export async function mountQuickBar(): Promise<QuickBarApi | null> {
     setButtonBusy(folderButton, true);
     saveButton.innerHTML = '<span class="spinner"></span>';
     try {
-      const response = await send<{ ok?: boolean; error?: string }>({ type: 'SAVE_CURRENT_PAGE', collection });
-      if (!response?.ok) throw new Error(response?.error || 'The page could not be saved');
-      saved = true;
+      const response = await send<SaveCurrentPageResult>({ type: 'SAVE_CURRENT_PAGE', collection, force });
+      if (!response?.ok && response?.status !== 'queued') throw new Error(response?.error || 'The page could not be saved');
+      if (response.status === 'duplicate') {
+        await refreshExisting();
+        openDuplicateMenu();
+        return;
+      }
+      if (response.status === 'queued') {
+        paintSave();
+        showMessage('Saved offline — Keepsake will sync it automatically when your connection returns.');
+        return;
+      }
+
+      await rememberCollection(collection || response.collection);
+      await refreshExisting();
       saveButton.classList.add('ok');
       saveButton.innerHTML = icon('check');
-      closePopover();
+      const destination = await collectionLabel(response.collection || collection);
+      showMessage(`Saved to ${destination}.`, response.id ? 'Undo' : undefined, response.id ? async () => {
+        await send({ type: 'DELETE_BOOKMARK', id: response.id! });
+        existing = null;
+        paintSave();
+        showMessage('Save undone.');
+      } : undefined);
       setTimeout(() => {
         saveButton.classList.remove('ok');
         paintSave();
       }, 1100);
     } catch (error) {
-      saved = false;
-      paintSave();
+      await refreshExisting();
       showMessage((error as Error)?.message || 'Keepsake could not save this page. Try again.');
     } finally {
       saving = false;
@@ -424,21 +501,43 @@ export async function mountQuickBar(): Promise<QuickBarApi | null> {
     }
   }
 
-  async function openFolders() {
+  async function moveExisting(collection?: string) {
+    if (!existing) return;
+    const response = await send<{ ok?: boolean; bookmark?: Bookmark; error?: string }>({
+      type: 'MOVE_BOOKMARK',
+      id: existing.id,
+      collection,
+    }).catch(() => null);
+    if (!response?.ok) {
+      showMessage(response?.error || 'Keepsake could not move this save.');
+      return;
+    }
+    existing = response.bookmark ?? { ...existing, collection };
+    await rememberCollection(collection);
+    paintSave();
+    showMessage(`Moved to ${await collectionLabel(collection)}.`);
+  }
+
+  async function openFolders(moveMode = Boolean(existing)) {
     if (!(await loggedIn())) {
-      showMessage('Sign in to Keepsake before saving.', 'Open Keepsake →', () => {
-        send({ type: 'OPEN_DASHBOARD' });
-        closePopover();
-      });
+      showMessage('Sign in to Keepsake before saving.', 'Open Keepsake →', () => send({ type: 'OPEN_DASHBOARD' }));
       return;
     }
 
     closePopover();
     popover = buildPopover();
     const heading = document.createElement('h4');
-    heading.textContent = 'Save to…';
+    heading.textContent = moveMode ? 'Move saved item to…' : 'Save to…';
     popover.appendChild(heading);
     shadow.appendChild(popover);
+
+    const addSection = (label: string) => {
+      if (!popover) return;
+      const title = document.createElement('div');
+      title.className = 'section-title';
+      title.textContent = label;
+      popover.appendChild(title);
+    };
 
     const addRow = (label: string, color: string, collection?: string) => {
       if (!popover) return;
@@ -452,16 +551,24 @@ export async function mountQuickBar(): Promise<QuickBarApi | null> {
       text.textContent = label;
       row.append(dot, text);
       row.onclick = () => {
-        quickSave(collection);
-        closePopover();
+        if (moveMode) moveExisting(collection);
+        else quickSave(collection);
       };
       popover.appendChild(row);
     };
 
-    addRow('Unsorted', 'rgba(255,255,255,.35)');
     try {
-      const collections: Collection[] = await listCollections();
-      for (const collection of collections) {
+      const collections = await loadCollections();
+      const { recent, rest } = splitRecentCollections(collections, currentSettings.quickBarRecentCollections);
+      if (recent.length) {
+        addSection('Recent');
+        for (const collection of recent) {
+          addRow(`${collection.icon ? `${collection.icon} ` : ''}${collection.name}`, collection.color || accent, collection.id);
+        }
+      }
+      addSection(recent.length ? 'All collections' : 'Collections');
+      addRow('Unsorted', 'rgba(255,255,255,.35)');
+      for (const collection of rest) {
         addRow(`${collection.icon ? `${collection.icon} ` : ''}${collection.name}`, collection.color || accent, collection.id);
       }
     } catch {
@@ -476,21 +583,173 @@ export async function mountQuickBar(): Promise<QuickBarApi | null> {
     newFolder.style.color = accent;
     newFolder.innerHTML = icon('plus');
     const label = document.createElement('span');
-    label.textContent = 'New folder…';
+    label.textContent = 'New collection…';
     newFolder.appendChild(label);
     newFolder.onclick = async () => {
-      const name = window.prompt('New folder name')?.trim();
+      const name = window.prompt('New collection name')?.trim();
       if (!name) return;
       try {
         const created = await createCollection({ name });
-        await quickSave(created.id);
+        collectionCache = null;
+        if (moveMode) await moveExisting(created.id);
+        else await quickSave(created.id);
       } catch {
-        showMessage('The folder could not be created. Try again.');
+        showMessage('The collection could not be created. Try again.');
       }
-      closePopover();
     };
     popover.appendChild(newFolder);
   }
+
+  function addBookmarkRows(container: HTMLElement, items: Bookmark[], emptyMessage: string) {
+    container.replaceChildren();
+    if (!items.length) {
+      const empty = document.createElement('div');
+      empty.className = 'empty';
+      empty.textContent = emptyMessage;
+      container.appendChild(empty);
+      return;
+    }
+    for (const bookmark of items) {
+      const row = document.createElement('button');
+      row.type = 'button';
+      row.className = 'row result';
+      const copy = document.createElement('span');
+      copy.className = 'result-copy';
+      const title = document.createElement('span');
+      title.className = 'result-title';
+      title.textContent = bookmark.title || bookmark.url;
+      const meta = document.createElement('span');
+      meta.className = 'result-meta';
+      meta.textContent = bookmark.domain || (() => {
+        try { return new URL(bookmark.url).hostname; } catch { return bookmark.url; }
+      })();
+      copy.append(title, meta);
+      row.appendChild(copy);
+      row.onclick = () => {
+        send({ type: 'OPEN_URL', url: bookmark.url });
+        closePopover();
+      };
+      container.appendChild(row);
+    }
+  }
+
+  function openDuplicateMenu() {
+    if (!existing) return;
+    closePopover();
+    popover = buildPopover();
+    popover.classList.add('wide');
+    const heading = document.createElement('h4');
+    heading.textContent = 'Already saved';
+    popover.appendChild(heading);
+
+    const card = document.createElement('div');
+    card.className = 'saved-card';
+    const title = document.createElement('p');
+    title.className = 'saved-title';
+    title.textContent = existing.title || existing.url;
+    const meta = document.createElement('p');
+    meta.className = 'saved-meta';
+    meta.textContent = existing.collection ? 'Stored in a collection' : 'Stored in Unsorted';
+    card.append(title, meta);
+    popover.appendChild(card);
+
+    const addAction = (label: string, action: () => void | Promise<void>, className = '') => {
+      if (!popover) return;
+      const row = document.createElement('button');
+      row.type = 'button';
+      row.className = `row ${className}`.trim();
+      row.textContent = label;
+      row.onclick = action;
+      popover.appendChild(row);
+    };
+
+    addAction('Refresh saved title and page details', async () => {
+      const response = await send<{ ok?: boolean; bookmark?: Bookmark; error?: string }>({
+        type: 'REFRESH_BOOKMARK',
+        id: existing!.id,
+      }).catch(() => null);
+      if (!response?.ok) {
+        showMessage(response?.error || 'Keepsake could not refresh this save.');
+        return;
+      }
+      existing = response.bookmark ?? existing;
+      paintSave();
+      showMessage('Saved copy refreshed from the current page.');
+    });
+    addAction('Move to another collection…', () => openFolders(true));
+    addAction('Save another copy', () => quickSave(undefined, true));
+    addAction('Remove from Keepsake', async () => {
+      if (!window.confirm('Remove this saved item from Keepsake?')) return;
+      await send({ type: 'DELETE_BOOKMARK', id: existing!.id });
+      existing = null;
+      paintSave();
+      showMessage('Removed from Keepsake.');
+    }, 'danger');
+    shadow.appendChild(popover);
+  }
+
+  async function openSearch() {
+    closePopover();
+    popover = buildPopover();
+    popover.classList.add('wide');
+    const heading = document.createElement('h4');
+    heading.textContent = 'Search Keepsake';
+    const input = document.createElement('input');
+    input.className = 'search-input';
+    input.type = 'search';
+    input.placeholder = 'Search titles, notes, tags…';
+    const results = document.createElement('div');
+    popover.append(heading, input, results);
+    shadow.appendChild(popover);
+
+    let timer: number | undefined;
+    const run = async () => {
+      const sequence = ++searchSequence;
+      const query = input.value.trim();
+      results.innerHTML = '<div class="empty">Searching…</div>';
+      const items = await searchBookmarks(query, { perPage: 8 }).catch(() => []);
+      if (sequence !== searchSequence || !popover) return;
+      addBookmarkRows(results, items.filter((item) => !item.homeOnly), query ? 'No matching saves.' : 'Your library is empty.');
+    };
+    input.addEventListener('input', () => {
+      window.clearTimeout(timer);
+      timer = window.setTimeout(run, 160);
+    });
+    input.addEventListener('keydown', (event) => {
+      if (event.key === 'Enter') (results.querySelector('button') as HTMLButtonElement | null)?.click();
+    });
+    await run();
+    input.focus();
+  }
+
+  async function loadRelated() {
+    if (!(await loggedIn())) return;
+    const query = buildRelatedQuery(document.title, location.href);
+    if (!query) return;
+    const items = await searchBookmarks(query, { perPage: 10 }).catch(() => []);
+    related = items
+      .filter((item) => !item.homeOnly && !sameCanonicalUrl(item.url, location.href))
+      .slice(0, 6);
+    renderActions();
+    applyTop();
+  }
+
+  function openRelated() {
+    closePopover();
+    popover = buildPopover();
+    popover.classList.add('wide');
+    const heading = document.createElement('h4');
+    heading.textContent = `Related saves (${related.length})`;
+    const results = document.createElement('div');
+    addBookmarkRows(results, related, 'No related saves found for this page.');
+    popover.append(heading, results);
+    shadow.appendChild(popover);
+  }
+
+  const onKeydown = (event: KeyboardEvent) => {
+    if (event.key === 'Escape') closePopover();
+  };
+  document.addEventListener('keydown', onKeydown, true);
 
   async function openDropdown() {
     try {
@@ -522,7 +781,7 @@ export async function mountQuickBar(): Promise<QuickBarApi | null> {
 
     const hint = document.createElement('p');
     hint.className = 'hint';
-    hint.textContent = 'Drag the four action buttons directly on the dock to reorder them.';
+    hint.textContent = 'Drag any action button directly on the dock to reorder it.';
     form.appendChild(hint);
 
     const sizeWrap = document.createElement('div');
@@ -604,7 +863,7 @@ export async function mountQuickBar(): Promise<QuickBarApi | null> {
     reset.className = 'chip';
     reset.textContent = 'Reset order';
     reset.onclick = async () => {
-      updateFromSettings(await setSettings({ quickBarOrder: ['popup', 'save', 'folder', 'dashboard', 'custom'] }));
+      updateFromSettings(await setSettings({ quickBarOrder: ['popup', 'search', 'related', 'save', 'folder', 'dashboard', 'custom'] }));
       openCustomize();
     };
     const save = document.createElement('button');
@@ -632,19 +891,17 @@ export async function mountQuickBar(): Promise<QuickBarApi | null> {
   }
 
   popupButton.onclick = openDropdown;
+  searchButton.onclick = () => (popover ? closePopover() : openSearch());
+  relatedButton.onclick = () => (popover ? closePopover() : openRelated());
   saveButton.onclick = () => quickSave();
-  folderButton.onclick = () => (popover ? closePopover() : openFolders());
+  folderButton.onclick = () => (popover ? closePopover() : openFolders(Boolean(existing)));
   dashboardButton.onclick = () => send({ type: 'OPEN_DASHBOARD' });
   customButton.onclick = openCustomShortcut;
   customizeButton.onclick = () => (popover ? closePopover() : openCustomize());
 
   if (await loggedIn()) {
-    try {
-      saved = Boolean(await findByUrl(location.href));
-      paintSave();
-    } catch {
-      paintSave();
-    }
+    await refreshExisting();
+    loadRelated().catch(() => {});
   } else {
     paintSave();
   }
@@ -658,6 +915,7 @@ export async function mountQuickBar(): Promise<QuickBarApi | null> {
       closePopover();
       window.removeEventListener('resize', onResize);
       document.removeEventListener('click', onDocumentClick);
+      document.removeEventListener('keydown', onKeydown, true);
       host.remove();
       host.__keepsakeApi = undefined;
     },

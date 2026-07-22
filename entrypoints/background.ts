@@ -2,7 +2,7 @@ import { getBackend } from '@/lib/backend';
 import { getSettings, watchSettings } from '@/lib/settings';
 import { saveBookmark } from '@/lib/bookmarks';
 import { enqueueSave, flushQueue } from '@/lib/queue';
-import { type Message, type ScreenshotResult, type MetaResult, dataUrlToBlob } from '@/lib/messaging';
+import { type Message, type ScreenshotResult, type MetaResult, type SaveCurrentPageResult, dataUrlToBlob } from '@/lib/messaging';
 import { extractPageMeta, type PageMeta } from '@/lib/metadata';
 import { captureFullPageScript } from '@/lib/fullpage';
 import {
@@ -15,7 +15,7 @@ import { inferType, safeDomain } from '@/lib/util';
 import { type UiSurface } from '@/lib/types';
 import { migrateToSaves, pruneStudioItems, stashStudioItem } from '@/lib/save';
 import { saveCaptureToLibrary } from '@/lib/captureSave';
-import { searchBookmarks, updateBookmark } from '@/lib/bookmarks';
+import { deleteBookmark, searchBookmarks, updateBookmark } from '@/lib/bookmarks';
 import { agoLabel, autofileSave, findDuplicate, undoFiling, type FiledResult } from '@/lib/autofile';
 import { processQueueTick, scheduleQueue, QUEUE_ALARM } from '@/lib/aiQueue';
 import { matchPage, recallAllowed, type RecallResult } from '@/lib/recall';
@@ -237,8 +237,35 @@ async function handleMessage(msg: Message, sender?: { tab?: { id?: number; windo
 
     case 'SAVE_CURRENT_PAGE': {
       const [tab] = await browser.tabs.query({ active: true, currentWindow: true });
-      if (tab) await saveTab(tab, msg.collection);
+      if (!tab) return { ok: false, status: 'blocked', error: 'No active tab' } satisfies SaveCurrentPageResult;
+      return saveTab(tab, msg.collection, Boolean(msg.force));
+    }
+
+    case 'DELETE_BOOKMARK':
+      await deleteBookmark(msg.id);
       return { ok: true };
+
+    case 'MOVE_BOOKMARK': {
+      const bookmark = await updateBookmark(msg.id, { collection: msg.collection || '' });
+      return { ok: true, bookmark };
+    }
+
+    case 'REFRESH_BOOKMARK': {
+      const [tab] = await browser.tabs.query({ active: true, currentWindow: true });
+      if (!tab?.url) return { ok: false, error: 'No active page to refresh from.' };
+      const meta = await extractMeta(tab.id);
+      const bookmark = await updateBookmark(msg.id, {
+        url: tab.url,
+        title: meta?.title || tab.title || tab.url,
+        description: meta?.description,
+        content: meta?.text,
+        cover: meta?.cover,
+        favicon: meta?.favicon,
+        domain: safeDomain(tab.url),
+        type: meta?.type ?? inferType(tab.url),
+        readingTime: meta?.readingTime,
+      });
+      return { ok: true, bookmark };
     }
 
     case 'OPEN_DASHBOARD':
@@ -646,30 +673,36 @@ const filedNotifs = storage.defineItem<Record<string, string>>('session:filed_no
 // Full save pipeline used by the context menu + keyboard shortcut.
 // Phase 1 UX: dedupe → INSTANT save → background AI pass (extract/embed/file)
 // → "Filed: …" notification with Undo. The user never waits on AI.
-async function saveTab(tab: chrome.tabs.Tab, collection?: string) {
-  if (!tab.url) return;
+async function saveTab(
+  tab: chrome.tabs.Tab,
+  collection?: string,
+  force = false,
+): Promise<SaveCurrentPageResult> {
+  if (!tab.url) return { ok: false, status: 'blocked', error: 'This page has no URL.' };
   await getBackend();
   const settings = await getSettings();
 
-  // Dedupe by canonical URL — surface the existing save instead of duplicating.
-  // An explicitly picked folder (Quick Bar / context) still gets honored by
-  // moving the existing save there.
-  const dup = await findDuplicate(tab.url).catch(() => undefined);
-  if (dup) {
-    if (collection) {
-      await updateBookmark(dup.id, { collection }).catch(() => {});
-      await flash('✓', '#16a34a');
-      notify('Already saved — moved', `You saved this ${agoLabel(dup.timestamps.createdAt)}; it's now in the folder you picked.`);
-    } else {
-      await flash('∃', '#6366f1');
-      notify('Already saved', `You saved this ${agoLabel(dup.timestamps.createdAt)}. Open the dashboard to view it.`);
+  // Normal clicks never create accidental copies. The Quick Bar exposes an
+  // explicit "Save another copy" action that passes force=true.
+  if (!force) {
+    const dup = await findDuplicate(tab.url).catch(() => undefined);
+    if (dup) {
+      if (collection !== undefined) {
+        await updateBookmark(dup.id, { collection: collection || '' }).catch(() => {});
+        await flash('✓', '#16a34a');
+      } else {
+        await flash('∃', '#6366f1');
+      }
+      return {
+        ok: true,
+        status: 'duplicate',
+        id: dup.id,
+        title: dup.title,
+        collection: collection !== undefined ? collection : dup.organization.collectionId,
+      };
     }
-    return;
   }
 
-  // Cloud bookmark cap (Free plan) — a guardrail only; PocketBase enforces the
-  // real limit server-side. Checked AFTER dedupe: filing an existing save into
-  // a different folder is never blocked by the cap, only genuinely new saves.
   const cap = await canSaveBookmark();
   if (!cap.allowed) {
     await flash('★', '#f59e0b');
@@ -678,21 +711,19 @@ async function saveTab(tab: chrome.tabs.Tab, collection?: string) {
       "You've reached your Free plan's bookmark limit",
       `${cap.used}/${cap.limit} cloud bookmarks used. Upgrade to Pro for unlimited bookmarks, the full Capture Studio, and 25 watches.`,
     );
-    return;
+    return { ok: false, status: 'blocked', error: 'Free plan bookmark limit reached.' };
   }
 
   const meta = settings.enableMetadata ? await extractMeta(tab.id) : null;
 
   let screenshotBlob: Blob | undefined;
   if (settings.enableAutoScreenshot) {
-    // Storage guardrail: skip only the preview image when the estimated cloud
-    // storage cap is tight — the save itself always proceeds.
     const storageState = await storageRemaining();
     if (storageState.unlimited || storageState.remaining === null || storageState.remaining > 0) {
       try {
         screenshotBlob = dataUrlToBlob(await captureVisibleTab());
       } catch {
-        /* capture can fail on protected pages — save anyway */
+        /* protected pages still save without a screenshot */
       }
     }
   }
@@ -715,30 +746,30 @@ async function saveTab(tab: chrome.tabs.Tab, collection?: string) {
   try {
     saved = await saveBookmark(input);
     await flash('✓', '#16a34a');
-  } catch (e) {
-    // The server enforces the plan cap authoritatively and rejects an over-cap
-    // save with 402 — that's a PERMANENT rejection, not an offline blip, so it
-    // must NOT go on the offline queue (it would retry forever). Surface the
-    // upgrade path instead. Everything else (offline / 5xx) queues as before.
-    if ((e as { status?: number })?.status === 402) {
+  } catch (error) {
+    if ((error as { status?: number })?.status === 402) {
       await flash('★', '#f59e0b');
       notifyUpgrade(
         'ks-upgrade-bookmarks-',
         "You've reached your Free plan's bookmark limit",
         'Upgrade to Pro for unlimited cloud bookmarks, the full Capture Studio, and 25 watches.',
       );
-      return;
+      return { ok: false, status: 'blocked', error: 'Free plan bookmark limit reached.' };
     }
     await enqueueSave(input);
-    await flash('…', '#f59e0b'); // queued offline
-    return;
+    await flash('…', '#f59e0b');
+    return { ok: true, status: 'queued', title: input.title, collection: input.collection };
   }
 
-  // Background AI pass — embed locally, auto-file. Awaited so the service
-  // worker stays alive, but the save above already succeeded. The metadata
-  // extracted above is passed through so the page isn't re-injected.
-  const result = await autofileSave(saved.id, { tabId: tab.id, meta }).catch(() => null);
-  if (result) await announceFiling(result);
+  const filed = await autofileSave(saved.id, { tabId: tab.id, meta }).catch(() => null);
+  if (filed) await announceFiling(filed);
+  return {
+    ok: true,
+    status: 'saved',
+    id: saved.id,
+    title: saved.title,
+    collection: filed?.collectionId ?? saved.collection ?? input.collection,
+  };
 }
 
 async function announceFiling(result: FiledResult) {
