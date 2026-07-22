@@ -213,7 +213,7 @@ export async function mountQuickBar(): Promise<QuickBarApi | null> {
   let destroyed = false;
   let dragging = false;
   let saving = false;
-  let existing: Bookmark | null = null;
+  let existingBookmark: Bookmark | null = null;
   let related: Bookmark[] = [];
   let collectionCache: { items: Collection[]; at: number } | null = null;
   let searchSequence = 0;
@@ -410,12 +410,12 @@ export async function mountQuickBar(): Promise<QuickBarApi | null> {
   const saveIcon = icon('bookmark', true);
   const paintSave = () => {
     saveButton.innerHTML = saveIcon;
-    if (existing) {
+    if (existingBookmark) {
       const badge = document.createElement('span');
       badge.className = 'badge';
       saveButton.appendChild(badge);
     }
-    saveButton.title = existing ? 'Already saved — manage saved item' : 'Save this page';
+    saveButton.title = existingBookmark ? 'Already saved — manage saved item' : 'Save this page';
   };
 
   const loadCollections = async (): Promise<Collection[]> => {
@@ -440,13 +440,13 @@ export async function mountQuickBar(): Promise<QuickBarApi | null> {
   };
 
   const refreshExisting = async () => {
-    existing = await findByUrl(location.href).catch(() => null);
+    existingBookmark = await findByUrl(location.href).catch(() => null);
     paintSave();
   };
 
   async function quickSave(collection?: string, force = false) {
     if (saving) return;
-    if (existing && !force && collection === undefined) {
+    if (existingBookmark && !force && collection === undefined) {
       openDuplicateMenu();
       return;
     }
@@ -483,7 +483,7 @@ export async function mountQuickBar(): Promise<QuickBarApi | null> {
       const destination = await collectionLabel(response.collection || collection);
       showMessage(`Saved to ${destination}.`, response.id ? 'Undo' : undefined, response.id ? async () => {
         await send({ type: 'DELETE_BOOKMARK', id: response.id! });
-        existing = null;
+        existingBookmark = null;
         paintSave();
         showMessage('Save undone.');
       } : undefined);
@@ -502,23 +502,23 @@ export async function mountQuickBar(): Promise<QuickBarApi | null> {
   }
 
   async function moveExisting(collection?: string) {
-    if (!existing) return;
+    if (!existingBookmark) return;
     const response = await send<{ ok?: boolean; bookmark?: Bookmark; error?: string }>({
       type: 'MOVE_BOOKMARK',
-      id: existing.id,
+      id: existingBookmark.id,
       collection,
     }).catch(() => null);
     if (!response?.ok) {
       showMessage(response?.error || 'Keepsake could not move this save.');
       return;
     }
-    existing = response.bookmark ?? { ...existing, collection };
+    existingBookmark = response.bookmark ?? { ...existingBookmark, collection };
     await rememberCollection(collection);
     paintSave();
     showMessage(`Moved to ${await collectionLabel(collection)}.`);
   }
 
-  async function openFolders(moveMode = Boolean(existing)) {
+  async function openFolders(moveMode = Boolean(existingBookmark)) {
     if (!(await loggedIn())) {
       showMessage('Sign in to Keepsake before saving.', 'Open Keepsake →', () => send({ type: 'OPEN_DASHBOARD' }));
       return;
@@ -634,7 +634,7 @@ export async function mountQuickBar(): Promise<QuickBarApi | null> {
   }
 
   function openDuplicateMenu() {
-    if (!existing) return;
+    if (!existingBookmark) return;
     closePopover();
     popover = buildPopover();
     popover.classList.add('wide');
@@ -646,10 +646,10 @@ export async function mountQuickBar(): Promise<QuickBarApi | null> {
     card.className = 'saved-card';
     const title = document.createElement('p');
     title.className = 'saved-title';
-    title.textContent = existing.title || existing.url;
+    title.textContent = existingBookmark.title || existingBookmark.url;
     const meta = document.createElement('p');
     meta.className = 'saved-meta';
-    meta.textContent = existing.collection ? 'Stored in a collection' : 'Stored in Unsorted';
+    meta.textContent = existingBookmark.collection ? 'Stored in a collection' : 'Stored in Unsorted';
     card.append(title, meta);
     popover.appendChild(card);
 
@@ -666,13 +666,13 @@ export async function mountQuickBar(): Promise<QuickBarApi | null> {
     addAction('Refresh saved title and page details', async () => {
       const response = await send<{ ok?: boolean; bookmark?: Bookmark; error?: string }>({
         type: 'REFRESH_BOOKMARK',
-        id: existing!.id,
+        id: existingBookmark!.id,
       }).catch(() => null);
       if (!response?.ok) {
         showMessage(response?.error || 'Keepsake could not refresh this save.');
         return;
       }
-      existing = response.bookmark ?? existing;
+      existingBookmark = response.bookmark ?? existingBookmark;
       paintSave();
       showMessage('Saved copy refreshed from the current page.');
     });
@@ -680,8 +680,8 @@ export async function mountQuickBar(): Promise<QuickBarApi | null> {
     addAction('Save another copy', () => quickSave(undefined, true));
     addAction('Remove from Keepsake', async () => {
       if (!window.confirm('Remove this saved item from Keepsake?')) return;
-      await send({ type: 'DELETE_BOOKMARK', id: existing!.id });
-      existing = null;
+      await send({ type: 'DELETE_BOOKMARK', id: existingBookmark!.id });
+      existingBookmark = null;
       paintSave();
       showMessage('Removed from Keepsake.');
     }, 'danger');
@@ -894,7 +894,7 @@ export async function mountQuickBar(): Promise<QuickBarApi | null> {
   searchButton.onclick = () => (popover ? closePopover() : openSearch());
   relatedButton.onclick = () => (popover ? closePopover() : openRelated());
   saveButton.onclick = () => quickSave();
-  folderButton.onclick = () => (popover ? closePopover() : openFolders(Boolean(existing)));
+  folderButton.onclick = () => (popover ? closePopover() : openFolders(Boolean(existingBookmark)));
   dashboardButton.onclick = () => send({ type: 'OPEN_DASHBOARD' });
   customButton.onclick = openCustomShortcut;
   customizeButton.onclick = () => (popover ? closePopover() : openCustomize());
