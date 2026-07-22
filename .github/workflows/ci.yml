@@ -6,7 +6,7 @@ on:
     branches: [main]
 
 permissions:
-  contents: write
+  contents: read
 
 jobs:
   extension:
@@ -15,24 +15,6 @@ jobs:
     steps:
       - name: Check out repository
         uses: actions/checkout@v4
-        with:
-          ref: ${{ github.head_ref || github.ref_name }}
-          fetch-depth: 0
-
-      - name: Apply final 8.10.4 review patch
-        if: ${{ hashFiles('scripts/apply-8.10.4-final-review.py') != '' }}
-        shell: bash
-        run: |
-          set -euo pipefail
-          python scripts/apply-8.10.4-final-review.py
-          git fetch origin main --depth=1
-          git show origin/main:.github/workflows/ci.yml > .github/workflows/ci.yml
-          rm -f scripts/apply-8.10.4-final-review.py
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add -A
-          git commit -m "perf: finalize Quick Bar review [generated]"
-          git push origin HEAD:${{ github.head_ref || github.ref_name }}
 
       - name: Set up Node.js
         uses: actions/setup-node@v4

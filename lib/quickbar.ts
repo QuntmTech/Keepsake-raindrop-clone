@@ -601,9 +601,37 @@ export async function mountQuickBar(): Promise<QuickBarApi | null> {
     const label = document.createElement('span');
     label.textContent = 'New collection…';
     newFolder.appendChild(label);
-    newFolder.onclick = async () => {
-      const name = window.prompt('New collection name')?.trim();
-      if (!name) return;
+    newFolder.onclick = () => openCreateCollection(moveMode);
+    popover.appendChild(newFolder);
+  }
+
+  function openCreateCollection(moveMode: boolean) {
+    closePopover();
+    popover = buildPopover();
+    const heading = document.createElement('h4');
+    heading.textContent = 'New collection';
+    const input = document.createElement('input');
+    input.className = 'search-input';
+    input.placeholder = 'Collection name';
+    input.maxLength = 80;
+    const actions = document.createElement('div');
+    actions.className = 'config-actions';
+    const cancel = document.createElement('button');
+    cancel.type = 'button';
+    cancel.className = 'chip';
+    cancel.textContent = 'Cancel';
+    cancel.onclick = () => openFolders(moveMode);
+    const create = document.createElement('button');
+    create.type = 'button';
+    create.className = 'primary-small';
+    create.textContent = moveMode ? 'Create & move' : 'Create & save';
+    const submit = async () => {
+      const name = input.value.trim();
+      if (!name) {
+        input.focus();
+        return;
+      }
+      create.disabled = true;
       try {
         const created = await createCollection({ name });
         collectionCache = null;
@@ -611,9 +639,18 @@ export async function mountQuickBar(): Promise<QuickBarApi | null> {
         else await quickSave(created.id, false, true);
       } catch {
         showMessage('The collection could not be created. Try again.');
+      } finally {
+        create.disabled = false;
       }
     };
-    popover.appendChild(newFolder);
+    create.onclick = submit;
+    input.addEventListener('keydown', (event) => {
+      if (event.key === 'Enter') submit();
+    });
+    actions.append(cancel, create);
+    popover.append(heading, input, actions);
+    shadow.appendChild(popover);
+    input.focus();
   }
 
   function addBookmarkRows(container: HTMLElement, items: (Bookmark | RecallItem)[], emptyMessage: string) {

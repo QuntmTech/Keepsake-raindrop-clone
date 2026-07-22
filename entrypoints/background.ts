@@ -311,12 +311,12 @@ async function handleMessage(msg: Message, sender?: { tab?: { id?: number; windo
       }
       let cache = await recallCache.getValue();
       let result = tabId != null ? cache[tabId] ?? null : null;
-      // The Quick Bar loads at document_idle and can beat webNavigation's cache
-      // write. Compute once on demand, still entirely locally and only when the
-      // user's Ambient Recall setting/blocklist allows this page.
-      if (!result && tabId != null) {
+      // The Quick Bar can beat webNavigation's cache write, and SPAs can change
+      // URL without a full navigation. Recompute when missing OR stale, still
+      // entirely locally and only when the user's setting/blocklist allows it.
+      if (tabId != null) {
         const tab = await browser.tabs.get(tabId).catch(() => null);
-        if (tab?.url && (await recallAllowed(tab.url))) {
+        if (tab?.url && (!result || result.url !== tab.url) && (await recallAllowed(tab.url))) {
           await runRecall(tabId, tab.url).catch(() => {});
           cache = await recallCache.getValue();
           result = cache[tabId] ?? null;
@@ -712,7 +712,7 @@ async function saveTab(
     if (dup) {
       if (explicitCollection) {
         const destination = collection || '';
-        await updateBookmark(dup.id, { collection: destination }).catch(() => {});
+        await updateBookmark(dup.id, { collection: destination });
         await flash('✓', '#16a34a');
         dup.collection = destination;
       } else {
@@ -739,19 +739,21 @@ async function saveTab(
     return { ok: false, status: 'blocked', error: 'Free plan bookmark limit reached.' };
   }
 
-  const meta = settings.enableMetadata ? await extractMeta(tab.id) : null;
-
-  let screenshotBlob: Blob | undefined;
-  if (settings.enableAutoScreenshot) {
-    const storageState = await storageRemaining();
-    if (storageState.unlimited || storageState.remaining === null || storageState.remaining > 0) {
-      try {
-        screenshotBlob = dataUrlToBlob(await captureVisibleTab());
-      } catch {
-        /* protected pages still save without a screenshot */
-      }
-    }
-  }
+  // Metadata extraction and screenshot work are independent. Run them in
+  // parallel so a rich save costs roughly the slower task, not both combined.
+  const metaPromise = settings.enableMetadata ? extractMeta(tab.id) : Promise.resolve(null);
+  const screenshotPromise: Promise<Blob | undefined> = settings.enableAutoScreenshot
+    ? (async () => {
+        const storageState = await storageRemaining();
+        if (!storageState.unlimited && storageState.remaining !== null && storageState.remaining <= 0) return undefined;
+        try {
+          return dataUrlToBlob(await captureVisibleTab());
+        } catch {
+          return undefined; // protected pages still save without a screenshot
+        }
+      })()
+    : Promise.resolve(undefined);
+  const [meta, screenshotBlob] = await Promise.all([metaPromise, screenshotPromise]);
 
   const input = {
     url: tab.url,
