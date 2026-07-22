@@ -24,10 +24,10 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          python scripts/apply-quickbar-dock-release.py
+          python scripts/run-quickbar-generator.py
           git fetch origin main --depth=1
           git show origin/main:.github/workflows/ci.yml > .github/workflows/ci.yml
-          rm -f .github/workflows/quickbar-generate.yml scripts/apply-quickbar-dock-release.py
+          rm -f .github/workflows/quickbar-generate.yml scripts/apply-quickbar-dock-release.py scripts/run-quickbar-generator.py
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add -A
