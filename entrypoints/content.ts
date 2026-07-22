@@ -2,11 +2,168 @@ import { getBackend } from '@/lib/backend';
 import { getSettings, watchSettings } from '@/lib/settings';
 import { createHighlight, highlightsForUrl, parseAnchor } from '@/lib/highlights';
 import { mountQuickBar, type QuickBarApi } from '@/lib/quickbar';
-import { type Message } from '@/lib/messaging';
+import {
+  type AiSelectionReplaceResult,
+  type AiSelectionResult,
+  type Message,
+} from '@/lib/messaging';
 import { type HighlightColor, type TextQuoteAnchor } from '@/lib/types';
 
-// Content scripts run inside web pages. This one powers the draggable Quick Bar
-// and robust quote-based highlights.
+type TextInput = HTMLInputElement | HTMLTextAreaElement;
+
+type CapturedSelection =
+  | { kind: 'input'; element: TextInput; start: number; end: number; text: string }
+  | { kind: 'contenteditable'; root: HTMLElement; range: Range; text: string }
+  | { kind: 'page'; range: Range; text: string };
+
+type SelectionUndo =
+  | { kind: 'input'; element: TextInput; value: string; start: number; end: number }
+  | { kind: 'contenteditable'; inserted: Text; original: string; root: HTMLElement };
+
+let capturedSelection: CapturedSelection | null = null;
+let selectionUndo: SelectionUndo | null = null;
+
+function isEditableInput(element: Element | null): element is TextInput {
+  if (element instanceof HTMLTextAreaElement) return !element.disabled && !element.readOnly;
+  if (!(element instanceof HTMLInputElement) || element.disabled || element.readOnly) return false;
+  return ['text', 'search', 'email', 'url', 'tel', 'number'].includes(element.type || 'text');
+}
+
+function captureSelectionSnapshot(): CapturedSelection | null {
+  const active = document.activeElement;
+  if (isEditableInput(active)) {
+    const start = active.selectionStart ?? 0;
+    const end = active.selectionEnd ?? start;
+    if (end > start) {
+      const text = active.value.slice(start, end);
+      if (text.trim()) return { kind: 'input', element: active, start, end, text };
+    }
+  }
+
+  const selection = window.getSelection();
+  if (!selection || selection.rangeCount === 0) return null;
+  const text = selection.toString();
+  if (!text.trim()) return null;
+  const range = selection.getRangeAt(0).cloneRange();
+  const common = range.commonAncestorContainer instanceof Element
+    ? range.commonAncestorContainer
+    : range.commonAncestorContainer.parentElement;
+  const root = common?.closest<HTMLElement>('[contenteditable="true"], [contenteditable="plaintext-only"]') ?? null;
+  return root ? { kind: 'contenteditable', root, range, text } : { kind: 'page', range, text };
+}
+
+function rememberSelection(): CapturedSelection | null {
+  const next = captureSelectionSnapshot();
+  if (next) capturedSelection = next;
+  return capturedSelection;
+}
+
+function selectionResult(): AiSelectionResult {
+  const selected = rememberSelection();
+  if (!selected) {
+    return {
+      ok: true,
+      text: '',
+      editable: false,
+      source: 'none',
+      pageUrl: location.href,
+      pageTitle: document.title,
+    };
+  }
+  return {
+    ok: true,
+    text: selected.text,
+    editable: selected.kind !== 'page',
+    source: selected.kind,
+    pageUrl: location.href,
+    pageTitle: document.title,
+  };
+}
+
+function dispatchTextInput(element: Element, data: string | null, inputType: string) {
+  try {
+    element.dispatchEvent(new InputEvent('input', { bubbles: true, composed: true, data, inputType }));
+  } catch {
+    element.dispatchEvent(new Event('input', { bubbles: true, composed: true }));
+  }
+}
+
+function replaceCapturedSelection(text: string, expectedOriginal: string): AiSelectionReplaceResult {
+  const selected = capturedSelection;
+  if (!selected || selected.kind === 'page') {
+    return { ok: false, error: 'Select text inside an editable field first.' };
+  }
+  if (!text.trim()) return { ok: false, error: 'The replacement is empty.' };
+  if (selected.text !== expectedOriginal) {
+    return { ok: false, error: 'The selected text changed. Select it again and retry.' };
+  }
+
+  if (selected.kind === 'input') {
+    const { element, start, end } = selected;
+    if (!element.isConnected || element.value.slice(start, end) !== selected.text) {
+      return { ok: false, error: 'The editable field changed. Select the text again.' };
+    }
+    selectionUndo = { kind: 'input', element, value: element.value, start, end };
+    element.focus();
+    element.setRangeText(text, start, end, 'end');
+    dispatchTextInput(element, text, 'insertReplacementText');
+    const nextStart = start;
+    const nextEnd = start + text.length;
+    element.setSelectionRange(nextStart, nextEnd);
+    capturedSelection = { kind: 'input', element, start: nextStart, end: nextEnd, text };
+    return { ok: true, undoAvailable: true };
+  }
+
+  const { range, root } = selected;
+  if (!root.isConnected || !range.commonAncestorContainer.isConnected || range.toString() !== selected.text) {
+    return { ok: false, error: 'The editable text changed. Select it again.' };
+  }
+  selectionUndo = null;
+  range.deleteContents();
+  const inserted = document.createTextNode(text);
+  range.insertNode(inserted);
+  selectionUndo = { kind: 'contenteditable', inserted, original: selected.text, root };
+  const nextRange = document.createRange();
+  nextRange.selectNodeContents(inserted);
+  const selection = window.getSelection();
+  selection?.removeAllRanges();
+  selection?.addRange(nextRange);
+  dispatchTextInput(root, text, 'insertReplacementText');
+  capturedSelection = { kind: 'contenteditable', root, range: nextRange.cloneRange(), text };
+  return { ok: true, undoAvailable: true };
+}
+
+function undoCapturedReplacement(): AiSelectionReplaceResult {
+  const undo = selectionUndo;
+  if (!undo) return { ok: false, error: 'There is no AI replacement to undo.' };
+
+  if (undo.kind === 'input') {
+    const { element, value, start, end } = undo;
+    if (!element.isConnected) return { ok: false, error: 'The original field is no longer available.' };
+    element.focus();
+    element.value = value;
+    element.setSelectionRange(start, end);
+    dispatchTextInput(element, null, 'historyUndo');
+    capturedSelection = { kind: 'input', element, start, end, text: value.slice(start, end) };
+  } else {
+    const { inserted, original, root } = undo;
+    if (!inserted.isConnected || !root.isConnected) return { ok: false, error: 'The original text is no longer available.' };
+    const restored = document.createTextNode(original);
+    inserted.replaceWith(restored);
+    const range = document.createRange();
+    range.selectNodeContents(restored);
+    const selection = window.getSelection();
+    selection?.removeAllRanges();
+    selection?.addRange(range);
+    dispatchTextInput(root, original, 'historyUndo');
+    capturedSelection = { kind: 'contenteditable', root, range: range.cloneRange(), text: original };
+  }
+  selectionUndo = null;
+  return { ok: true, undoAvailable: false };
+}
+
+// Content scripts run inside web pages. This one powers the draggable Quick Bar,
+// selected-text AI actions, and robust quote-based highlights.
 export default defineContentScript({
   matches: ['<all_urls>'],
   runAt: 'document_idle',
@@ -42,8 +199,22 @@ export default defineContentScript({
     browser.runtime.onMessage.addListener((message: Message) => {
       if (message.type === 'OPEN_QUICKBAR') {
         ensureQuickBar().then((api) => api?.openFolders()).catch(() => {});
+        return undefined;
       }
+      if (message.type === 'KS_AI_SELECTION_GET') return Promise.resolve(selectionResult());
+      if (message.type === 'KS_AI_SELECTION_REPLACE') {
+        return Promise.resolve(replaceCapturedSelection(message.text, message.expectedOriginal));
+      }
+      if (message.type === 'KS_AI_SELECTION_UNDO') return Promise.resolve(undoCapturedReplacement());
+      return undefined;
     });
+
+    const rememberSoon = () => window.setTimeout(() => rememberSelection(), 0);
+    document.addEventListener('selectionchange', rememberSelection, true);
+    document.addEventListener('mouseup', rememberSoon, true);
+    document.addEventListener('keyup', rememberSoon, true);
+    document.addEventListener('focusin', rememberSoon, true);
+    document.addEventListener('input', rememberSoon, true);
 
     watchSettings(async (next) => {
       quickBarEnabled = next.enableQuickBar;
