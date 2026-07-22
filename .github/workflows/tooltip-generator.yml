@@ -1,0 +1,33 @@
+name: Generate instant Quick Bar tooltips
+
+on:
+  push:
+    branches: [agent/8.10.5-instant-tooltips]
+
+permissions:
+  contents: write
+
+jobs:
+  generate:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out feature branch
+        uses: actions/checkout@v4
+        with:
+          ref: agent/8.10.5-instant-tooltips
+          fetch-depth: 0
+
+      - name: Apply tooltip source changes
+        run: node scripts/apply-quickbar-tooltips.mjs
+
+      - name: Commit generated source
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          if git diff --cached --quiet; then
+            echo "No generated changes"
+            exit 0
+          fi
+          git commit -m "feat: add instant Quick Bar icon labels"
+          git push origin HEAD:agent/8.10.5-instant-tooltips
