@@ -8,6 +8,7 @@ test('Quick Bar controls expose instant inward-facing labels', () => {
   for (const label of [
     'Open dropdown',
     'Search Keepsake',
+    'Browse collections',
     'Save page',
     'Choose collection',
     'Open dashboard',
@@ -26,4 +27,13 @@ test('dynamic labels explain duplicate, related, and custom states', () => {
   assert.match(source, /saveButton\.dataset\.tooltip = existingBookmark/);
   assert.match(source, /relatedButton\.dataset\.tooltip = related\.length/);
   assert.match(source, /customButton\.dataset\.tooltip = currentSettings\.quickBarCustomLabel/);
+});
+
+
+test('collection launcher opens inward with searchable bookmark drill-down', () => {
+  assert.match(source, /data-action="browse"/);
+  assert.match(source, /async function openCollectionLauncher/);
+  assert.match(source, /async function openCollectionBookmarks/);
+  assert.match(source, /countByCollection/);
+  assert.match(source, /input\.placeholder = 'Search ' \+ label\.toLowerCase\(\)/);
 });

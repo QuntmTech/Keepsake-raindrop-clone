@@ -1,6 +1,6 @@
 import { getSettings, setSettings } from './settings';
 import { getBackend } from './backend';
-import { listCollections, createCollection, findByUrl, searchBookmarks } from './bookmarks';
+import { listCollections, createCollection, findByUrl, searchBookmarks, countByCollection } from './bookmarks';
 import { send, type SaveCurrentPageResult } from './messaging';
 import { ACCENTS } from './theme';
 import { clampQuickBarTop, quickBarFractionFromTop, quickBarSideForPointer } from './uiContext';
@@ -23,6 +23,7 @@ const SVG = {
   grip: '<circle cx="9" cy="6" r="1.4"/><circle cx="15" cy="6" r="1.4"/><circle cx="9" cy="12" r="1.4"/><circle cx="15" cy="12" r="1.4"/><circle cx="9" cy="18" r="1.4"/><circle cx="15" cy="18" r="1.4"/>',
   bookmark: '<path d="M6 4h12v16l-6-4-6 4z"/>',
   folder: '<path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/>',
+  library: '<path d="M4 5h6v14H4zM10 5h5v14h-5zM17 5l3-.8 2 14.8-3 .8z"/><path d="M7 9h.01M12.5 9h.01M19 9h.01"/>',
   grid: '<path d="M4 4h7v7H4zM13 4h7v7h-7zM4 13h7v7H4zM13 13h7v7h-7z"/>',
   check: '<path d="M5 13l4 4L19 7"/>',
   close: '<path d="M6 6l12 12M18 6L6 18"/>',
@@ -191,6 +192,7 @@ export async function mountQuickBar(): Promise<QuickBarApi | null> {
     <div class="actions">
       <button class="btn action popup" draggable="true" data-action="popup" type="button" aria-label="Open Keepsake dropdown" data-tooltip="Open dropdown">${icon('popup')}</button>
       <button class="btn action search" draggable="true" data-action="search" type="button" aria-label="Search Keepsake" data-tooltip="Search Keepsake">${icon('search')}</button>
+      <button class="btn action browse" draggable="true" data-action="browse" type="button" aria-label="Browse collections" data-tooltip="Browse collections">${icon('library')}</button>
       <button class="btn action related" draggable="true" data-action="related" type="button" aria-label="Related saves" data-tooltip="Related saves" hidden>${icon('related')}</button>
       <button class="btn action save" draggable="true" data-action="save" type="button" aria-label="Save this page" data-tooltip="Save page">${icon('bookmark', true)}</button>
       <button class="btn action folder" draggable="true" data-action="folder" type="button" aria-label="Save to collection" data-tooltip="Choose collection">${icon('folder')}</button>
@@ -214,6 +216,7 @@ export async function mountQuickBar(): Promise<QuickBarApi | null> {
   const actions = rail.querySelector('.actions') as HTMLDivElement;
   const popupButton = rail.querySelector('.btn.popup') as HTMLButtonElement;
   const searchButton = rail.querySelector('.btn.search') as HTMLButtonElement;
+  const browseButton = rail.querySelector('.btn.browse') as HTMLButtonElement;
   const relatedButton = rail.querySelector('.btn.related') as HTMLButtonElement;
   const saveButton = rail.querySelector('.btn.save') as HTMLButtonElement;
   const folderButton = rail.querySelector('.btn.folder') as HTMLButtonElement;
@@ -278,7 +281,7 @@ export async function mountQuickBar(): Promise<QuickBarApi | null> {
   const renderActions = () => {
     const order = normalizeQuickBarOrder(currentSettings.quickBarOrder);
     const map: Record<QuickBarAction, HTMLButtonElement> = {
-      popup: popupButton, search: searchButton, related: relatedButton, save: saveButton, folder: folderButton, dashboard: dashboardButton, custom: customButton,
+      popup: popupButton, search: searchButton, browse: browseButton, related: relatedButton, save: saveButton, folder: folderButton, dashboard: dashboardButton, custom: customButton,
     };
     for (const action of order) actions.appendChild(map[action]);
     const customUrl = normalizeQuickBarUrl(currentSettings.quickBarCustomUrl);
@@ -350,7 +353,7 @@ export async function mountQuickBar(): Promise<QuickBarApi | null> {
   grip.addEventListener('pointercancel', finishDrag);
 
   let draggedAction: QuickBarAction | null = null;
-  for (const button of [popupButton, searchButton, relatedButton, saveButton, folderButton, dashboardButton, customButton]) {
+  for (const button of [popupButton, searchButton, browseButton, relatedButton, saveButton, folderButton, dashboardButton, customButton]) {
     button.addEventListener('dragstart', (event) => {
       draggedAction = button.dataset.action as QuickBarAction;
       button.classList.add('dragging-action');
@@ -789,6 +792,120 @@ export async function mountQuickBar(): Promise<QuickBarApi | null> {
     shadow.appendChild(popover);
   }
 
+  async function openCollectionLauncher() {
+    closePopover();
+    popover = buildPopover();
+    popover.classList.add('wide');
+    const panel = popover;
+    const heading = document.createElement('h4');
+    heading.textContent = 'Browse collections';
+    const list = document.createElement('div');
+    list.innerHTML = '<div class="empty">Loading collections…</div>';
+    popover.append(heading, list);
+    shadow.appendChild(popover);
+
+    const addCollectionRow = (label: string, color: string, count: number | undefined, id?: string, unsorted = false) => {
+      const row = document.createElement('button');
+      row.type = 'button';
+      row.className = 'row';
+      const dot = document.createElement('span');
+      dot.className = 'dot';
+      dot.style.background = color;
+      const copy = document.createElement('span');
+      copy.className = 'result-copy';
+      const title = document.createElement('span');
+      title.className = 'result-title';
+      title.textContent = label;
+      const meta = document.createElement('span');
+      meta.className = 'result-meta';
+      meta.textContent = count == null ? 'Open bookmarks' : String(count) + ' bookmark' + (count === 1 ? '' : 's');
+      copy.append(title, meta);
+      row.append(dot, copy);
+      row.onclick = () => openCollectionBookmarks(id, label, unsorted);
+      list.appendChild(row);
+    };
+
+    try {
+      const [collections, counts] = await Promise.all([loadCollections(), countByCollection()]);
+      if (popover !== panel) return;
+      list.replaceChildren();
+      addCollectionRow('All bookmarks', accent, undefined);
+      addCollectionRow('Unsorted', 'rgba(255,255,255,.35)', undefined, undefined, true);
+      for (const collection of collections) {
+        addCollectionRow(
+          (collection.icon ? collection.icon + ' ' : '') + collection.name,
+          collection.color || accent,
+          counts[collection.id] || 0,
+          collection.id,
+        );
+      }
+      if (!collections.length) {
+        const hint = document.createElement('div');
+        hint.className = 'empty';
+        hint.textContent = 'No collections yet — All bookmarks and Unsorted are still available.';
+        list.appendChild(hint);
+      }
+    } catch {
+      if (popover !== panel) return;
+      list.innerHTML = '<div class="empty">Collections could not be loaded. Try again.</div>';
+    }
+  }
+
+  async function openCollectionBookmarks(collectionId: string | undefined, label: string, unsorted = false) {
+    closePopover();
+    popover = buildPopover();
+    popover.classList.add('wide');
+    const panel = popover;
+
+    const back = document.createElement('button');
+    back.type = 'button';
+    back.className = 'row';
+    back.textContent = '← All collections';
+    back.onclick = openCollectionLauncher;
+    const heading = document.createElement('h4');
+    heading.textContent = label;
+    const input = document.createElement('input');
+    input.className = 'search-input';
+    input.type = 'search';
+    input.placeholder = 'Search ' + label.toLowerCase() + '…';
+    const results = document.createElement('div');
+    popover.append(back, heading, input, results);
+    shadow.appendChild(popover);
+
+    let timer: number | undefined;
+    let sequence = 0;
+    const run = async () => {
+      const current = ++sequence;
+      const query = input.value.trim();
+      results.innerHTML = '<div class="empty">Loading bookmarks…</div>';
+      let items = await searchBookmarks(query, {
+        collection: collectionId,
+        perPage: unsorted ? 300 : 50,
+      }).catch(() => []);
+      if (unsorted) items = items.filter((item) => !item.collection);
+      items = items.filter((item) => !item.homeOnly).slice(0, 50);
+      if (popover !== panel || current !== sequence) return;
+      addBookmarkRows(results, items, query ? 'No matching bookmarks.' : 'This collection is empty.');
+      if (items.length) {
+        const dashboard = document.createElement('button');
+        dashboard.type = 'button';
+        dashboard.className = 'row';
+        dashboard.textContent = 'Open full dashboard →';
+        dashboard.onclick = () => send({ type: 'OPEN_DASHBOARD' });
+        results.appendChild(dashboard);
+      }
+    };
+    input.addEventListener('input', () => {
+      window.clearTimeout(timer);
+      timer = window.setTimeout(run, 140);
+    });
+    input.addEventListener('keydown', (event) => {
+      if (event.key === 'Enter') (results.querySelector('button') as HTMLButtonElement | null)?.click();
+    });
+    await run();
+    input.focus();
+  }
+
   async function openSearch() {
     closePopover();
     popover = buildPopover();
@@ -966,7 +1083,7 @@ export async function mountQuickBar(): Promise<QuickBarApi | null> {
     reset.className = 'chip';
     reset.textContent = 'Reset order';
     reset.onclick = async () => {
-      updateFromSettings(await setSettings({ quickBarOrder: ['popup', 'search', 'related', 'save', 'folder', 'dashboard', 'custom'] }));
+      updateFromSettings(await setSettings({ quickBarOrder: ['popup', 'search', 'browse', 'related', 'save', 'folder', 'dashboard', 'custom'] }));
       openCustomize();
     };
     const save = document.createElement('button');
@@ -995,6 +1112,7 @@ export async function mountQuickBar(): Promise<QuickBarApi | null> {
 
   popupButton.onclick = openDropdown;
   searchButton.onclick = openSearch;
+  browseButton.onclick = openCollectionLauncher;
   relatedButton.onclick = openRelated;
   saveButton.onclick = () => quickSave();
   folderButton.onclick = () => openFolders(Boolean(existingBookmark));
