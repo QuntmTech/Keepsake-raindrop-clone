@@ -3,13 +3,15 @@ name: Generate Quick Bar release
 on:
   push:
     branches: [agent/quickbar-custom-dock]
+  pull_request:
+    branches: [main]
 
 permissions:
   contents: write
 
 jobs:
   generate:
-    if: ${{ !contains(github.event.head_commit.message, '[quickbar-generated]') }}
+    if: ${{ github.event_name == 'pull_request' || !contains(github.event.head_commit.message, '[quickbar-generated]') }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
