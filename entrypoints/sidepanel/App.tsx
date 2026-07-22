@@ -8,6 +8,7 @@ import { RecallPanel } from '@/components/RecallPanel';
 import { SettingsPanel } from '@/components/SettingsPanel';
 import { Icon, type IconName } from '@/components/Icon';
 import { send } from '@/lib/messaging';
+import { consumeSidepanelTarget, watchSidepanelTarget } from '@/lib/sidepanelTarget';
 
 type Tab = 'save' | 'related' | 'library' | 'ai' | 'settings';
 
@@ -19,6 +20,20 @@ export default function App() {
   useEffect(() => {
     if (authed) send({ type: 'FLUSH_QUEUE' }).catch(() => {});
   }, [authed]);
+
+  useEffect(() => {
+    let cancelled = false;
+    consumeSidepanelTarget().then((target) => {
+      if (!cancelled && target === 'ai') setTab('ai');
+    });
+    const unwatch = watchSidepanelTarget((target) => {
+      if (target === 'ai') setTab('ai');
+    });
+    return () => {
+      cancelled = true;
+      unwatch();
+    };
+  }, []);
 
   if (!ready) return <p className="p-6 text-center text-sm text-ink-faint">Loading…</p>;
   if (!authed)
