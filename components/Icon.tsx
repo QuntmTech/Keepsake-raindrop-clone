@@ -6,7 +6,8 @@ export type IconName =
   | 'grid' | 'list' | 'masonry' | 'sparkles' | 'folder' | 'tag' | 'external'
   | 'chevron' | 'close' | 'check' | 'highlight' | 'sun' | 'moon' | 'command'
   | 'video' | 'image' | 'pdf' | 'repo' | 'doc' | 'link' | 'logout' | 'import'
-  | 'edit' | 'inbox' | 'copy' | 'grip' | 'camera' | 'record' | 'monitor' | 'mic';
+  | 'edit' | 'inbox' | 'copy' | 'grip' | 'camera' | 'record' | 'monitor' | 'mic'
+  | 'refresh' | 'upload' | 'download';
 
 const paths: Record<IconName, string> = {
   bookmark: 'M6 4h12v16l-6-4-6 4z',
@@ -46,6 +47,9 @@ const paths: Record<IconName, string> = {
   record: 'M12 3a9 9 0 1 0 0 18 9 9 0 0 0 0-18zM12 8a4 4 0 1 1 0 8 4 4 0 0 1 0-8z',
   monitor: 'M3 5h18v11H3zM8 21h8M12 16v5',
   mic: 'M12 3a3 3 0 0 1 3 3v5a3 3 0 0 1-6 0V6a3 3 0 0 1 3-3zM5 11a7 7 0 0 0 14 0M12 18v3M8 21h8',
+  refresh: 'M20 11a8 8 0 1 0-2.34 5.66M20 4v7h-7',
+  upload: 'M12 16V4M7 9l5-5 5 5M4 18v2h16v-2',
+  download: 'M12 4v12M7 11l5 5 5-5M4 20h16',
 };
 
 export function Icon({
