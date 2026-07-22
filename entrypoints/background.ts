@@ -34,8 +34,14 @@ import { setWriterDraft } from '@/lib/aiWriter';
 
 // Renew the auth token twice a day so sessions never hard-expire server-side.
 const AUTH_REFRESH_ALARM = 'ks-auth-refresh';
+const MAINTENANCE_ALARM = 'ks-maintenance';
 function scheduleAuthRefresh(): void {
   browser.alarms.create(AUTH_REFRESH_ALARM, { periodInMinutes: 720, delayInMinutes: 5 });
+}
+function scheduleMaintenance(): void {
+  // Chrome startup should paint Home/popup first. Queue recovery, migration,
+  // and overlay repair are durable maintenance and can safely wait 30s.
+  browser.alarms.create(MAINTENANCE_ALARM, { delayInMinutes: 0.5 });
 }
 
 export default defineBackground(() => {
@@ -49,23 +55,19 @@ export default defineBackground(() => {
     await ensureContextMenu();
     const settings = await getSettings();
     await applyActionBehavior(settings.primarySurface);
-    await flushQueue().catch(() => {});
     scheduleQueue();
     scheduleWatchAlarm();
     scheduleAuthRefresh();
-    await runMigration();
-    syncHomeOverlay().catch(() => {});
+    scheduleMaintenance();
   });
 
   browser.runtime.onStartup?.addListener(async () => {
     const settings = await getSettings();
     await applyActionBehavior(settings.primarySurface);
-    await flushQueue().catch(() => {});
     scheduleQueue();
     scheduleWatchAlarm();
     scheduleAuthRefresh();
-    await runMigration();
-    syncHomeOverlay().catch(() => {});
+    scheduleMaintenance();
   });
 
   // Batch AI queue + Living Bookmarks scheduler. Alarms are re-registered on
@@ -87,6 +89,11 @@ export default defineBackground(() => {
       // (the refresh itself is throttled through storage, so this is cheap).
       const backend = await getBackend().catch(() => null);
       await backend?.renewAuthToken?.().catch(() => {});
+    }
+    if (alarm.name === MAINTENANCE_ALARM) {
+      await flushQueue().catch(() => {});
+      await runMigration().catch(() => {});
+      await syncHomeOverlay().catch(() => {});
     }
   });
 
@@ -164,21 +171,32 @@ export default defineBackground(() => {
   });
 
   // ── Ambient Recall (Phase 2) ──────────────────────────────────────────────
+  const pageIntelligenceTimers = new Map<number, ReturnType<typeof setTimeout>>();
+  const schedulePageIntelligence = (tabId: number, url: string, delay = 450) => {
+    const previous = pageIntelligenceTimers.get(tabId);
+    if (previous) clearTimeout(previous);
+    const timer = setTimeout(() => {
+      pageIntelligenceTimers.delete(tabId);
+      runRecall(tabId, url).catch(() => {});
+      checkOnVisit(tabId, url).catch(() => {});
+    }, delay);
+    pageIntelligenceTimers.set(tabId, timer);
+  };
   // On navigation, match the page against the library — locally only — and
   // show a per-tab badge. Debounced per tab+URL; opt-in via Settings.
   browser.webNavigation?.onCompleted.addListener((details) => {
     if (details.frameId !== 0) return;
-    runRecall(details.tabId, details.url).catch(() => {});
-    // JS-rendered watched pages re-check from the live DOM on visit.
-    checkOnVisit(details.tabId, details.url).catch(() => {});
+    schedulePageIntelligence(details.tabId, details.url);
   });
   browser.webNavigation?.onHistoryStateUpdated.addListener((details) => {
     if (details.frameId !== 0) return;
     browser.tabs.sendMessage(details.tabId, { type: 'KS_PAGE_NAVIGATED', url: details.url }).catch(() => {});
-    runRecall(details.tabId, details.url).catch(() => {});
-    checkOnVisit(details.tabId, details.url).catch(() => {});
+    schedulePageIntelligence(details.tabId, details.url, 300);
   });
   browser.tabs.onRemoved.addListener((tabId) => {
+    const intelligenceTimer = pageIntelligenceTimers.get(tabId);
+    if (intelligenceTimer) clearTimeout(intelligenceTimer);
+    pageIntelligenceTimers.delete(tabId);
     recallCache.getValue().then((cache) => {
       if (cache[tabId]) {
         delete cache[tabId];

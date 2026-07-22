@@ -231,15 +231,25 @@ export default function App() {
   }, []);
   useEffect(() => {
     if (!authed) return;
+    let vaultTimer: number | undefined;
+    let overlayTimer: number | undefined;
     const unVault = watchVault(() => {
-      reloadAll();
-      window.setTimeout(reloadTags, 250);
-      c.refresh();
+      window.clearTimeout(vaultTimer);
+      vaultTimer = window.setTimeout(() => {
+        reloadAll();
+        reloadTags();
+        c.refresh();
+      }, 80);
     });
-    // Pins can also change via the overlay alone (e.g. added from the popup
-    // while this tab is open) — that write never touches the vault stores.
-    const unOverlay = watchHomeOverlay(reloadAll);
+    // Pins can also change via the overlay alone. Coalesce the several storage
+    // writes from one drag/pin action into one launcher repaint.
+    const unOverlay = watchHomeOverlay(() => {
+      window.clearTimeout(overlayTimer);
+      overlayTimer = window.setTimeout(reloadAll, 60);
+    });
     return () => {
+      window.clearTimeout(vaultTimer);
+      window.clearTimeout(overlayTimer);
       unVault();
       unOverlay();
     };

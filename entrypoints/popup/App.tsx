@@ -171,7 +171,7 @@ function Vault() {
   }, []);
 
   useEffect(() => {
-    const timer = setTimeout(run, 20);
+    const timer = setTimeout(run, query.trim() ? 120 : 20);
     return () => clearTimeout(timer);
   }, [run]);
 
@@ -183,12 +183,20 @@ function Vault() {
   }, [refreshMeta]);
 
   useEffect(() => {
-    return watchVault(() => {
-      run();
-      refreshMeta();
-      collectionsApi.refresh();
+    let timer: number | undefined;
+    const unwatch = watchVault(() => {
+      window.clearTimeout(timer);
+      timer = window.setTimeout(() => {
+        run();
+        refreshMeta();
+        collectionsApi.refresh();
+      }, 70);
     });
-  }, [run, refreshMeta, collectionsApi]);
+    return () => {
+      window.clearTimeout(timer);
+      unwatch();
+    };
+  }, [run, refreshMeta, collectionsApi.refresh]);
 
   async function remove(id: string) {
     await deleteBookmark(id);

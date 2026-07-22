@@ -16,8 +16,8 @@ export function useAuth() {
       mark('init');
       await loadAuth();
       mark('auth');
-      setAuthed(await isLoggedIn());
-      const u = await currentUser();
+      const [loggedIn, u] = await Promise.all([isLoggedIn(), currentUser()]);
+      setAuthed(loggedIn);
       setEmail(u?.email ?? null);
       setPlan(u?.plan ?? 'free');
       setReady(true);
