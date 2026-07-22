@@ -81,6 +81,8 @@ The key is stored in `chrome.storage.local`, never synced, and only sent to the 
 - **Portable** — imports from browser HTML, Raindrop, Pocket, and Keepsake JSON; exports JSON backups
 - **Resilient** — offline save queue, PocketBase request retries, cached startup data, durable Quick Bar state, and Home-field fallback storage
 
+The Quick Bar cannot appear on Chrome-owned pages such as `chrome://extensions`, the Chrome Web Store, or some built-in new-tab pages because Chrome blocks content scripts there.
+
 ---
 
 ## Project map
