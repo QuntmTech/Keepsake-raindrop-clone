@@ -79,6 +79,9 @@ export type SortMode = 'newest' | 'oldest' | 'title' | 'domain' | 'lastVisited';
 
 export type ThemeMode = 'system' | 'light' | 'dark';
 export type QuickBarSide = 'left' | 'right';
+export type QuickBarSize = 'compact' | 'comfortable';
+export type QuickBarAction = 'popup' | 'save' | 'folder' | 'dashboard' | 'custom';
+export type QuickBarCustomIcon = 'link' | 'globe' | 'bolt' | 'star';
 
 // Named accent palettes for the UI. Hex values live in lib/theme.ts.
 export type Accent = 'ocean' | 'violet' | 'emerald' | 'sunset' | 'rose' | 'slate';
@@ -120,6 +123,12 @@ export interface Settings {
   quickBarY: number;         // 0..1 vertical center position on the chosen edge
   quickBarSide: QuickBarSide;
   quickBarCollapsed: boolean;
+  quickBarOrder: QuickBarAction[]; // action order; draggable directly on the rail
+  quickBarColor: string;     // optional #RRGGBB override; empty follows the app accent
+  quickBarSize: QuickBarSize;
+  quickBarCustomUrl: string; // optional http(s) shortcut shown as the custom action
+  quickBarCustomLabel: string;
+  quickBarCustomIcon: QuickBarCustomIcon;
   theme: ThemeMode;
   accent: Accent;
   view: ViewMode;
@@ -144,6 +153,12 @@ export const DEFAULT_SETTINGS: Settings = {
   quickBarY: 0.5,
   quickBarSide: 'right',
   quickBarCollapsed: false,
+  quickBarOrder: ['popup', 'save', 'folder', 'dashboard', 'custom'],
+  quickBarColor: '',
+  quickBarSize: 'comfortable',
+  quickBarCustomUrl: '',
+  quickBarCustomLabel: 'Open shortcut',
+  quickBarCustomIcon: 'link',
   theme: 'system',
   accent: 'ocean',
   view: 'grid',
