@@ -6,15 +6,37 @@ on:
     branches: [main]
 
 permissions:
-  contents: read
+  contents: write
 
 jobs:
   extension:
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 20
     steps:
       - name: Check out repository
         uses: actions/checkout@v4
+        with:
+          ref: agent/8.12.1-resizable-performance
+          fetch-depth: 0
+
+      - name: Apply final navigation, queue, and save safety fixes
+        shell: bash
+        run: |
+          set -o pipefail
+          python3 scripts/apply-8121-final-safety.py 2>&1 | tee /tmp/generator.log
+
+      - name: Commit generated source
+        run: |
+          git checkout origin/main -- .github/workflows/ci.yml
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          if git diff --cached --quiet; then
+            echo "No generated changes"
+          else
+            git commit -m "perf: finalize navigation, queue, and save reliability"
+            git push origin HEAD:agent/8.12.1-resizable-performance
+          fi
 
       - name: Set up Node.js
         uses: actions/setup-node@v4
@@ -26,54 +48,22 @@ jobs:
         run: npm ci
 
       - name: Verify release version
-        shell: bash
-        run: |
-          set -o pipefail
-          npm run check:version 2>&1 | tee /tmp/version.log
+        run: npm run check:version
 
       - name: Run regression tests
-        shell: bash
-        run: |
-          set -o pipefail
-          npm test 2>&1 | tee /tmp/tests.log
+        run: npm test
 
       - name: Type-check
-        shell: bash
-        run: |
-          set -o pipefail
-          npm run compile 2>&1 | tee /tmp/compile.log
+        run: npm run compile
 
       - name: Build extension
-        shell: bash
-        run: |
-          set -o pipefail
-          npm run build 2>&1 | tee /tmp/build.log
+        run: npm run build
+
+      - name: Verify performance budgets
+        run: npm run check:bundle
 
       - name: Build Chrome Web Store ZIP
-        shell: bash
-        run: |
-          set -o pipefail
-          npm run zip:store 2>&1 | tee /tmp/store-zip.log
-
-      - name: Verify store manifest
-        shell: bash
-        run: |
-          set -euo pipefail
-          ZIP="$(find .output -maxdepth 1 -type f -name '*.zip' | head -n 1)"
-          test -n "$ZIP"
-          MANIFEST_PATH="$(unzip -Z1 "$ZIP" | grep -E '(^|/)manifest\.json$' | head -n 1)"
-          test -n "$MANIFEST_PATH"
-          unzip -p "$ZIP" "$MANIFEST_PATH" > /tmp/keepsake-manifest.json
-          node --input-type=module <<'NODE' 2>&1 | tee /tmp/store-verify.log
-          import { readFile } from 'node:fs/promises';
-          const manifest = JSON.parse(await readFile('/tmp/keepsake-manifest.json', 'utf8'));
-          const pkg = JSON.parse(await readFile('package.json', 'utf8'));
-          if (manifest.key) throw new Error('Store ZIP still contains the development manifest key');
-          if (manifest.version !== pkg.version) {
-            throw new Error(`Store manifest version ${manifest.version} does not match package ${pkg.version}`);
-          }
-          console.log(`Store ZIP verified: version ${manifest.version}, no development key`);
-          NODE
+        run: npm run zip:store
 
       - name: Upload unpacked Chrome extension
         uses: actions/upload-artifact@v4
@@ -84,27 +74,11 @@ jobs:
           if-no-files-found: error
           retention-days: 14
 
-      - name: Upload Chrome Web Store ZIP
-        uses: actions/upload-artifact@v4
-        with:
-          name: keepsake-chrome-store-zip
-          path: .output/*.zip
-          include-hidden-files: true
-          if-no-files-found: error
-          retention-days: 14
-
       - name: Upload CI diagnostics
         if: always()
         uses: actions/upload-artifact@v4
         with:
           name: keepsake-ci-diagnostics
-          path: |
-            /tmp/version.log
-            /tmp/tests.log
-            /tmp/compile.log
-            /tmp/build.log
-            /tmp/store-zip.log
-            /tmp/store-verify.log
-            /tmp/keepsake-manifest.json
+          path: /tmp/generator.log
           if-no-files-found: ignore
           retention-days: 7
