@@ -9,6 +9,7 @@ test('Quick Bar controls expose instant inward-facing labels', () => {
     'Open dropdown',
     'Search Keepsake',
     'Browse collections',
+    'AI Writer',
     'Save page',
     'Choose collection',
     'Open dashboard',
