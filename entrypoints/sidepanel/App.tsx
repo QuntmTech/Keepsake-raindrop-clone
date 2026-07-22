@@ -3,13 +3,13 @@ import { useAuth } from '@/hooks/useAuth';
 import { LoginForm } from '@/components/LoginForm';
 import { SaveForm } from '@/components/SaveForm';
 import { LibraryBrowser } from '@/components/LibraryBrowser';
-import { AIAssistant } from '@/components/AIAssistant';
+import { AIWorkbench } from '@/components/AIWorkbench';
 import { RecallPanel } from '@/components/RecallPanel';
 import { SettingsPanel } from '@/components/SettingsPanel';
 import { Icon, type IconName } from '@/components/Icon';
 import { send } from '@/lib/messaging';
 
-type Tab = 'save' | 'related' | 'library' | 'ask' | 'settings';
+type Tab = 'save' | 'related' | 'library' | 'ai' | 'settings';
 
 // The side panel stays docked while you browse.
 export default function App() {
@@ -34,7 +34,7 @@ export default function App() {
         <TabBtn icon="plus" label="Save" active={tab === 'save'} onClick={() => setTab('save')} />
         <TabBtn icon="sparkles" label="This page" active={tab === 'related'} onClick={() => setTab('related')} />
         <TabBtn icon="grid" label="Library" active={tab === 'library'} onClick={() => setTab('library')} />
-        <TabBtn icon="sparkles" label="Ask" active={tab === 'ask'} onClick={() => setTab('ask')} />
+        <TabBtn icon="edit" label="AI" active={tab === 'ai'} onClick={() => setTab('ai')} />
         <TabBtn icon="settings" label="Settings" active={tab === 'settings'} onClick={() => setTab('settings')} />
       </div>
       <div className="flex-1 overflow-hidden">
@@ -45,7 +45,7 @@ export default function App() {
           </div>
         )}
         {tab === 'library' && <LibraryBrowser autoFocus />}
-        {tab === 'ask' && <AIAssistant />}
+        {tab === 'ai' && <AIWorkbench onOpenSettings={() => setTab('settings')} />}
         {tab === 'settings' && (
           <div className="h-full overflow-y-auto">
             <SettingsPanel compact />
