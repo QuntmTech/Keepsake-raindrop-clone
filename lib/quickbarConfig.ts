@@ -3,6 +3,7 @@ import { type Collection, type QuickBarAction } from './types';
 export const DEFAULT_QUICKBAR_ORDER: QuickBarAction[] = [
   'popup',
   'search',
+  'browse',
   'related',
   'save',
   'folder',
@@ -26,7 +27,7 @@ export function normalizeQuickBarOrder(value: unknown): QuickBarAction[] {
   // Dashboard/Custom. Once present, the user's exact drag order is preserved.
   const popupIndex = result.indexOf('popup');
   let insertion = popupIndex >= 0 ? popupIndex + 1 : 0;
-  for (const action of ['search', 'related'] as QuickBarAction[]) {
+  for (const action of ['search', 'browse', 'related'] as QuickBarAction[]) {
     if (!result.includes(action)) {
       result.splice(insertion, 0, action);
       insertion++;
