@@ -12,6 +12,8 @@ export type Message =
   | { type: 'CAPTURE_SCREENSHOT' }       // background -> JPEG dataURL of the visible tab
   | { type: 'EXTRACT_META'; tabId?: number } // background -> PageMeta for a tab
   | { type: 'OPEN_DASHBOARD' }
+  | { type: 'OPEN_POPUP' } // content Quick Bar -> toolbar action dropdown
+  | { type: 'OPEN_URL'; url: string } // validated http(s) custom Quick Bar shortcut
   | { type: 'OPEN_SURFACE'; surface: 'popup' | 'sidepanel' | 'dashboard' }
   | { type: 'OPEN_QUICKBAR' } // background -> content: pop the quick-save folder picker
   | { type: 'CREATE_HIGHLIGHT'; url: string; text: string; color: HighlightColor; anchor?: string }
