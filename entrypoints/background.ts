@@ -1,6 +1,6 @@
 import { getBackend } from '@/lib/backend';
 import { getSettings, watchSettings } from '@/lib/settings';
-import { saveBookmark } from '@/lib/bookmarks';
+import { findByUrl, saveBookmark } from '@/lib/bookmarks';
 import { enqueueSave, flushQueue } from '@/lib/queue';
 import { type Message, type ScreenshotResult, type MetaResult, type SaveCurrentPageResult, dataUrlToBlob } from '@/lib/messaging';
 import { extractPageMeta, type PageMeta } from '@/lib/metadata';
@@ -16,8 +16,8 @@ import { type UiSurface } from '@/lib/types';
 import { migrateToSaves, pruneStudioItems, stashStudioItem } from '@/lib/save';
 import { saveCaptureToLibrary } from '@/lib/captureSave';
 import { deleteBookmark, searchBookmarks, updateBookmark } from '@/lib/bookmarks';
-import { agoLabel, autofileSave, findDuplicate, undoFiling, type FiledResult } from '@/lib/autofile';
-import { processQueueTick, scheduleQueue, QUEUE_ALARM } from '@/lib/aiQueue';
+import { agoLabel, autofileSave, undoFiling, type FiledResult } from '@/lib/autofile';
+import { processQueueTick, scheduleQueue, scheduleQueueSoon, QUEUE_ALARM } from '@/lib/aiQueue';
 import { matchPage, recallAllowed, type RecallResult } from '@/lib/recall';
 import { ensureOffscreen } from '@/lib/embedder';
 import { checkOnVisit, scheduleWatchAlarm, startWatch, stopWatch, watchTick, WATCH_ALARM, type WatchConfig } from '@/lib/watch';
@@ -25,7 +25,7 @@ import { onboardingStage } from '@/lib/onboarding';
 import { applyOverlayWrite, applyOverlayForget, syncHomeOverlay } from '@/lib/home';
 import { canSaveBookmark, storageRemaining, refreshEntitlements } from '@/lib/entitlements';
 import { storage } from 'wxt/utils/storage';
-import { normalizeQuickBarUrl } from '@/lib/quickbarConfig';
+import { normalizeQuickBarUrl, resolveSaveCollection, sameCanonicalUrl } from '@/lib/quickbarConfig';
 
 // The background "service worker" is event-driven and can be killed at any time by Chrome.
 // Never rely on long-lived in-memory state here — read from storage when you need it.
@@ -238,7 +238,7 @@ async function handleMessage(msg: Message, sender?: { tab?: { id?: number; windo
     case 'SAVE_CURRENT_PAGE': {
       const [tab] = await browser.tabs.query({ active: true, currentWindow: true });
       if (!tab) return { ok: false, status: 'blocked', error: 'No active tab' } satisfies SaveCurrentPageResult;
-      return saveTab(tab, msg.collection, Boolean(msg.force));
+      return saveTab(tab, msg.collection, Boolean(msg.force), Boolean(msg.explicitCollection));
     }
 
     case 'DELETE_BOOKMARK':
@@ -253,18 +253,26 @@ async function handleMessage(msg: Message, sender?: { tab?: { id?: number; windo
     case 'REFRESH_BOOKMARK': {
       const [tab] = await browser.tabs.query({ active: true, currentWindow: true });
       if (!tab?.url) return { ok: false, error: 'No active page to refresh from.' };
+      if (!sameCanonicalUrl(tab.url, msg.url)) {
+        return { ok: false, error: 'The page changed before refresh. Open the saved page and try again.' };
+      }
+      const existing = await findByUrl(msg.url).catch(() => null);
+      if (!existing || existing.id !== msg.id) {
+        return { ok: false, error: 'That saved item no longer matches this page.' };
+      }
       const meta = await extractMeta(tab.id);
-      const bookmark = await updateBookmark(msg.id, {
+      const patch: Parameters<typeof updateBookmark>[1] = {
         url: tab.url,
         title: meta?.title || tab.title || tab.url,
-        description: meta?.description,
-        content: meta?.text,
-        cover: meta?.cover,
-        favicon: meta?.favicon,
         domain: safeDomain(tab.url),
         type: meta?.type ?? inferType(tab.url),
-        readingTime: meta?.readingTime,
-      });
+      };
+      if (meta?.description !== undefined) patch.description = meta.description;
+      if (meta?.text !== undefined) patch.content = meta.text;
+      if (meta?.cover !== undefined) patch.cover = meta.cover;
+      if (meta?.favicon !== undefined) patch.favicon = meta.favicon;
+      if (meta?.readingTime !== undefined) patch.readingTime = meta.readingTime;
+      const bookmark = await updateBookmark(msg.id, patch);
       return { ok: true, bookmark };
     }
 
@@ -301,8 +309,20 @@ async function handleMessage(msg: Message, sender?: { tab?: { id?: number; windo
         const [tab] = await browser.tabs.query({ active: true, currentWindow: true });
         tabId = tab?.id;
       }
-      const cache = await recallCache.getValue();
-      return { ok: true, result: tabId != null ? cache[tabId] ?? null : null };
+      let cache = await recallCache.getValue();
+      let result = tabId != null ? cache[tabId] ?? null : null;
+      // The Quick Bar loads at document_idle and can beat webNavigation's cache
+      // write. Compute once on demand, still entirely locally and only when the
+      // user's Ambient Recall setting/blocklist allows this page.
+      if (!result && tabId != null) {
+        const tab = await browser.tabs.get(tabId).catch(() => null);
+        if (tab?.url && (await recallAllowed(tab.url))) {
+          await runRecall(tabId, tab.url).catch(() => {});
+          cache = await recallCache.getValue();
+          result = cache[tabId] ?? null;
+        }
+      }
+      return { ok: true, result };
     }
 
     // ---- Living Bookmarks (Phase 3) ----
@@ -677,6 +697,7 @@ async function saveTab(
   tab: chrome.tabs.Tab,
   collection?: string,
   force = false,
+  explicitCollection = false,
 ): Promise<SaveCurrentPageResult> {
   if (!tab.url) return { ok: false, status: 'blocked', error: 'This page has no URL.' };
   await getBackend();
@@ -685,11 +706,15 @@ async function saveTab(
   // Normal clicks never create accidental copies. The Quick Bar exposes an
   // explicit "Save another copy" action that passes force=true.
   if (!force) {
-    const dup = await findDuplicate(tab.url).catch(() => undefined);
+    // Use the authoritative active backend, not only the AI sidecar. This catches
+    // old local rows, imported data, and cloud saves even before sidecar repair.
+    const dup = await findByUrl(tab.url).catch(() => null);
     if (dup) {
-      if (collection !== undefined) {
-        await updateBookmark(dup.id, { collection: collection || '' }).catch(() => {});
+      if (explicitCollection) {
+        const destination = collection || '';
+        await updateBookmark(dup.id, { collection: destination }).catch(() => {});
         await flash('✓', '#16a34a');
+        dup.collection = destination;
       } else {
         await flash('∃', '#6366f1');
       }
@@ -698,7 +723,7 @@ async function saveTab(
         status: 'duplicate',
         id: dup.id,
         title: dup.title,
-        collection: collection !== undefined ? collection : dup.organization.collectionId,
+        collection: dup.collection,
       };
     }
   }
@@ -733,7 +758,7 @@ async function saveTab(
     title: meta?.title || tab.title || tab.url,
     description: meta?.description,
     content: meta?.text,
-    collection: collection ?? settings.defaultCollection,
+    collection: resolveSaveCollection(collection, settings.defaultCollection, explicitCollection),
     cover: meta?.cover,
     favicon: meta?.favicon,
     domain: safeDomain(tab.url),
@@ -761,14 +786,21 @@ async function saveTab(
     return { ok: true, status: 'queued', title: input.title, collection: input.collection };
   }
 
-  const filed = await autofileSave(saved.id, { tabId: tab.id, meta }).catch(() => null);
-  if (filed) await announceFiling(filed);
+  // Acknowledge the save immediately. Best-effort enrichment starts after the
+  // short Undo window; the durable alarm queue guarantees it still runs if MV3
+  // suspends the worker before that timer fires.
+  scheduleQueueSoon();
+  setTimeout(() => {
+    autofileSave(saved.id, { tabId: tab.id, meta })
+      .then((result) => (result ? announceFiling(result) : undefined))
+      .catch(() => {});
+  }, 2500);
   return {
     ok: true,
     status: 'saved',
     id: saved.id,
     title: saved.title,
-    collection: filed?.collectionId ?? saved.collection ?? input.collection,
+    collection: saved.collection ?? input.collection,
   };
 }
 
