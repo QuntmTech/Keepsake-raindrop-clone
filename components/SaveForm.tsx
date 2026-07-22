@@ -13,6 +13,7 @@ import { send, dataUrlToBlob, type ScreenshotResult, type MetaResult } from '@/l
 import { getSettings } from '@/lib/settings';
 import { aiAvailable, getAiSettings, suggestTags, summarize, type PageContext } from '@/lib/ai';
 import { canSaveBookmark, storageRemaining } from '@/lib/entitlements';
+import { resolveSaveCollection } from '@/lib/uiContext';
 import { type Collection } from '@/lib/types';
 import { type PageMeta } from '@/lib/metadata';
 import { TagInput } from './TagInput';
@@ -20,9 +21,15 @@ import { Icon } from './Icon';
 import { useToast } from './Toast';
 import { UpgradeDialog } from './UpgradeDialog';
 
-// Reads the active tab, enriches it (metadata + optional AI tags/summary),
-// lets the user tweak, and saves to PocketBase — queueing offline if needed.
-export function SaveForm({ onSaved }: { onSaved?: () => void }) {
+interface SaveFormProps {
+  onSaved?: () => void;
+  // undefined = use the global default; null = explicitly save Unsorted;
+  // string = prefer the collection currently open in the surrounding UI.
+  initialCollection?: string | null;
+}
+
+// Reads the active tab, enriches it, lets the user tweak it, and saves it.
+export function SaveForm({ onSaved, initialCollection }: SaveFormProps) {
   const { toast } = useToast();
   const [title, setTitle] = useState('');
   const [url, setUrl] = useState('');
@@ -47,9 +54,9 @@ export function SaveForm({ onSaved }: { onSaved?: () => void }) {
     const name = newFolder.trim();
     if (!name) return;
     try {
-      const c = await createCollection({ name });
-      setCollections((prev) => [...prev, c].sort((a, b) => a.name.localeCompare(b.name)));
-      setCollection(c.id);
+      const created = await createCollection({ name });
+      setCollections((previous) => [...previous, created].sort((a, b) => a.name.localeCompare(b.name)));
+      setCollection(created.id);
       setNewFolder('');
       setCreatingFolder(false);
       toast(`Folder “${name}” created`, 'success');
@@ -59,10 +66,12 @@ export function SaveForm({ onSaved }: { onSaved?: () => void }) {
   }
 
   useEffect(() => {
+    let active = true;
     (async () => {
       const [tab] = await browser.tabs.query({ active: true, currentWindow: true });
       const tabUrl = tab?.url ?? '';
       const tabTitle = tab?.title ?? '';
+      if (!active) return;
       setTitle(tabTitle);
       setUrl(tabUrl);
 
@@ -70,72 +79,67 @@ export function SaveForm({ onSaved }: { onSaved?: () => void }) {
       let cols: Collection[] = [];
       try {
         cols = await listCollections();
+        tagNames = (await getAllTags()).map((item) => item.tag);
+        if (!active) return;
         setCollections(cols);
-        tagNames = (await getAllTags()).map((t) => t.tag);
         setAllTags(tagNames);
       } catch {
         /* not logged in */
       }
-      const s = await getSettings();
-      if (s.defaultCollection) setCollection(s.defaultCollection);
 
-      // Already saved? Surface it so we don't create duplicates.
+      const settings = await getSettings();
+      if (!active) return;
+      setCollection(resolveSaveCollection(initialCollection, settings.defaultCollection, cols.map((item) => item.id)));
+
       try {
         const found = tabUrl ? await findByUrl(tabUrl) : null;
-        if (found) setExisting(true);
+        if (active && found) setExisting(true);
       } catch {
         /* ignore */
       }
 
-      // Enrich with page metadata (og:image, description, reading time, excerpt).
       let pageMeta: PageMeta | null = null;
-      if (s.enableMetadata && tab?.id) {
+      if (settings.enableMetadata && tab?.id) {
         try {
-          const res = await send<MetaResult>({ type: 'EXTRACT_META', tabId: tab.id });
-          pageMeta = res?.meta ?? null;
+          const response = await send<MetaResult>({ type: 'EXTRACT_META', tabId: tab.id });
+          pageMeta = response?.meta ?? null;
+          if (!active) return;
           setMeta(pageMeta);
           if (pageMeta?.title && !tabTitle) setTitle(pageMeta.title);
         } catch {
-          /* page may block injection */
+          /* protected page */
         }
       }
 
-      // AI enrichment — best effort, non-blocking on the save button.
       if (await aiAvailable()) {
         const ai = await getAiSettings();
-        const ctx: PageContext = {
+        const context: PageContext = {
           title: pageMeta?.title || tabTitle,
           url: tabUrl,
           description: pageMeta?.description,
           text: pageMeta?.text,
         };
+        if (!active) return;
         setAiBusy(true);
-        const jobs: Promise<void>[] = [];
-        if (ai.autoTag) {
-          jobs.push(
-            suggestTags(ctx, tagNames)
-              .then(setAiTags)
-              .catch(() => {}),
-          );
-        }
+        const jobs: Promise<unknown>[] = [];
+        if (ai.autoTag) jobs.push(suggestTags(context, tagNames).then((value) => active && setAiTags(value)).catch(() => {}));
         if (ai.autoSummarize) {
           jobs.push(
-            summarize(ctx)
-              .then((s) => setSummary((cur) => cur || s))
+            summarize(context)
+              .then((value) => active && setSummary((current) => current || value))
               .catch(() => {}),
           );
         }
-        // Collection suggestion removed: filing is owned by the auto-file
-        // pipeline (KS_AUTOFILE after save) — two competing filers would fight.
-        Promise.allSettled(jobs).finally(() => setAiBusy(false));
+        Promise.allSettled(jobs).finally(() => active && setAiBusy(false));
       }
     })();
-  }, []);
+    return () => {
+      active = false;
+    };
+  }, [initialCollection]);
 
   async function save() {
     if (!url) return;
-    // Cloud bookmark cap (Free) — a guardrail; PocketBase is the real enforcer.
-    // Re-saving an already-existing bookmark isn't blocked (not a new one).
     if (!existing) {
       const cap = await canSaveBookmark();
       if (!cap.allowed) {
@@ -143,21 +147,20 @@ export function SaveForm({ onSaved }: { onSaved?: () => void }) {
         return;
       }
     }
+
     setBusy(true);
     try {
       const settings = await getSettings();
       let screenshotBlob: Blob | undefined;
       if (settings.enableAutoScreenshot) {
-        // Storage guardrail: skip only the preview image when tight on the
-        // estimated cloud storage cap — the save itself always proceeds.
         const storageState = await storageRemaining();
         const roomy = storageState.unlimited || storageState.remaining === null || storageState.remaining > 0;
         if (roomy) {
           try {
-            const res = await send<ScreenshotResult>({ type: 'CAPTURE_SCREENSHOT' });
-            if (res?.dataUrl) screenshotBlob = dataUrlToBlob(res.dataUrl);
+            const response = await send<ScreenshotResult>({ type: 'CAPTURE_SCREENSHOT' });
+            if (response?.dataUrl) screenshotBlob = dataUrlToBlob(response.dataUrl);
           } catch {
-            /* capture failed, save without preview */
+            /* save without preview */
           }
         }
       }
@@ -182,20 +185,16 @@ export function SaveForm({ onSaved }: { onSaved?: () => void }) {
       };
 
       try {
-        const bm = await saveBookmark(input);
-        toast(collection ? 'Saved to your vault' : 'Saved — filing with AI…', 'success');
-        // AI pass runs in the background so it survives the popup closing.
-        // A user-picked collection is respected; otherwise AI files it.
+        const bookmark = await saveBookmark(input);
+        const folderName = collections.find((item) => item.id === collection)?.name;
+        toast(folderName ? `Saved to ${folderName}` : collection ? 'Saved to your vault' : 'Saved — filing with AI…', 'success');
         const [tab] = await browser.tabs.query({ active: true, currentWindow: true }).catch(() => [null] as any);
-        browser.runtime.sendMessage({ type: 'KS_AUTOFILE', id: bm.id, tabId: tab?.id }).catch(() => {});
-      } catch (e) {
-        // A 402 is the server's authoritative plan-cap rejection (permanent) —
-        // show the paywall rather than queuing it offline to retry forever.
-        if ((e as { status?: number })?.status === 402) {
+        browser.runtime.sendMessage({ type: 'KS_AUTOFILE', id: bookmark.id, tabId: tab?.id }).catch(() => {});
+      } catch (error) {
+        if ((error as { status?: number })?.status === 402) {
           setShowUpgrade(true);
-          return; // finally still resets busy; skip the "saved" UI below
+          return;
         }
-        // Offline / server down — keep it so nothing is lost.
         await enqueueSave(input);
         toast('Offline — queued, will sync later', 'info');
       }
@@ -219,36 +218,17 @@ export function SaveForm({ onSaved }: { onSaved?: () => void }) {
       )}
 
       {meta?.cover && (
-        <img
-          src={meta.cover}
-          alt=""
-          className="h-28 w-full rounded-lg object-cover"
-          onError={(e) => (e.currentTarget.style.display = 'none')}
-        />
+        <img src={meta.cover} alt="" className="h-28 w-full rounded-lg object-cover" onError={(event) => (event.currentTarget.style.display = 'none')} />
       )}
 
       <div className="flex items-start gap-2">
-        <input
-          className="input flex-1 font-medium"
-          value={title}
-          onChange={(e) => setTitle(e.target.value)}
-          placeholder="Title"
-        />
-        <button
-          className={`btn-outline px-2.5 ${favorite ? 'border-brand/50 text-brand' : ''}`}
-          onClick={() => setFavorite((f) => !f)}
-          title="Favorite"
-        >
+        <input className="input flex-1 font-medium" value={title} onChange={(event) => setTitle(event.target.value)} placeholder="Title" />
+        <button className={`btn-outline px-2.5 ${favorite ? 'border-brand/50 text-brand' : ''}`} onClick={() => setFavorite((value) => !value)} title="Favorite">
           <Icon name={favorite ? 'star-fill' : 'star'} size={16} />
         </button>
       </div>
 
-      <input
-        className="input truncate text-xs text-ink-faint"
-        value={url}
-        onChange={(e) => setUrl(e.target.value)}
-        placeholder="URL"
-      />
+      <input className="input truncate text-xs text-ink-faint" value={url} onChange={(event) => setUrl(event.target.value)} placeholder="URL" />
 
       {(summary || aiBusy) && (
         <div className="rounded-lg border border-line bg-surface-sunken p-2">
@@ -256,25 +236,14 @@ export function SaveForm({ onSaved }: { onSaved?: () => void }) {
             <Icon name="sparkles" size={11} /> {aiBusy && !summary ? 'Summarizing…' : 'AI summary'}
           </div>
           {summary ? (
-            <textarea
-              className="w-full resize-none bg-transparent text-xs text-ink-soft outline-none"
-              rows={2}
-              value={summary}
-              onChange={(e) => setSummary(e.target.value)}
-            />
+            <textarea className="w-full resize-none bg-transparent text-xs text-ink-soft outline-none" rows={2} value={summary} onChange={(event) => setSummary(event.target.value)} />
           ) : (
             <div className="skeleton h-3 w-3/4 rounded" />
           )}
         </div>
       )}
 
-      <TagInput
-        tags={tags}
-        onChange={setTags}
-        suggestions={allTags}
-        aiTags={aiTags}
-        placeholder="Add tags…"
-      />
+      <TagInput tags={tags} onChange={setTags} suggestions={allTags} aiTags={aiTags} placeholder="Add tags…" />
 
       {creatingFolder ? (
         <div className="flex items-center gap-1.5">
@@ -283,77 +252,36 @@ export function SaveForm({ onSaved }: { onSaved?: () => void }) {
             autoFocus
             placeholder="New folder name"
             value={newFolder}
-            onChange={(e) => setNewFolder(e.target.value)}
-            onKeyDown={(e) => {
-              if (e.key === 'Enter') createFolder();
-              else if (e.key === 'Escape') {
+            onChange={(event) => setNewFolder(event.target.value)}
+            onKeyDown={(event) => {
+              if (event.key === 'Enter') createFolder();
+              else if (event.key === 'Escape') {
                 setCreatingFolder(false);
                 setNewFolder('');
               }
             }}
           />
-          <button className="btn-primary px-2.5" onClick={createFolder} title="Create folder">
-            <Icon name="check" size={16} />
-          </button>
-          <button
-            className="btn-ghost px-2"
-            onClick={() => {
-              setCreatingFolder(false);
-              setNewFolder('');
-            }}
-            title="Cancel"
-          >
-            <Icon name="close" size={16} />
-          </button>
+          <button className="btn-primary px-2.5" onClick={createFolder} title="Create folder"><Icon name="check" size={16} /></button>
+          <button className="btn-ghost px-2" onClick={() => { setCreatingFolder(false); setNewFolder(''); }} title="Cancel"><Icon name="close" size={16} /></button>
         </div>
       ) : (
         <div className="flex items-center gap-1.5">
-          <select
-            className="input flex-1"
-            value={collection}
-            onChange={(e) => setCollection(e.target.value)}
-          >
+          <select className="input flex-1" value={collection} onChange={(event) => setCollection(event.target.value)}>
             <option value="">No collection</option>
-            {collections.map((c) => (
-              <option key={c.id} value={c.id}>
-                {c.icon ? `${c.icon} ` : ''}
-                {c.name}
-              </option>
+            {collections.map((item) => (
+              <option key={item.id} value={item.id}>{item.icon ? `${item.icon} ` : ''}{item.name}</option>
             ))}
           </select>
-          <button
-            className="btn-outline px-2.5"
-            onClick={() => setCreatingFolder(true)}
-            title="New folder"
-          >
-            <Icon name="plus" size={16} />
-          </button>
+          <button className="btn-outline px-2.5" onClick={() => setCreatingFolder(true)} title="New folder"><Icon name="plus" size={16} /></button>
         </div>
       )}
 
-      <input
-        className="input text-sm"
-        value={note}
-        onChange={(e) => setNote(e.target.value)}
-        placeholder="Add a note (optional)"
-      />
+      <input className="input text-sm" value={note} onChange={(event) => setNote(event.target.value)} placeholder="Add a note (optional)" />
 
       <button className="btn-primary" onClick={save} disabled={busy || !savable}>
-        {done ? (
-          <>
-            <Icon name="check" size={16} /> Saved
-          </>
-        ) : busy ? (
-          'Saving…'
-        ) : (
-          <>
-            <Icon name="bookmark" size={16} fill /> Save page
-          </>
-        )}
+        {done ? <><Icon name="check" size={16} /> Saved</> : busy ? 'Saving…' : <><Icon name="bookmark" size={16} fill /> Save page</>}
       </button>
-      {!savable && url !== '' && (
-        <p className="text-center text-xs text-ink-faint">This page can’t be saved (not a web URL).</p>
-      )}
+      {!savable && url !== '' && <p className="text-center text-xs text-ink-faint">This page can’t be saved (not a web URL).</p>}
       {showUpgrade && <UpgradeDialog reason="bookmarks" onClose={() => setShowUpgrade(false)} />}
     </div>
   );

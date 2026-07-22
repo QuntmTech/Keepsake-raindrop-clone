@@ -18,7 +18,7 @@ An AI-powered bookmark vault and customizable new-tab Home for Chrome/Firefox (M
 
 ```bash
 npm install
-npm run dev          # opens Chrome with hot reload
+npm run dev
 ```
 
 Create an account in the extension and start saving. Local mode needs no server.
@@ -26,7 +26,7 @@ Create an account in the extension and start saving. Local mode needs no server.
 ### Validation and production builds
 
 ```bash
-npm test              # retrieval + bulk-workflow regression tests
+npm test              # retrieval + bulk + UI-context regression tests
 npm run compile       # TypeScript check
 npm run build         # .output/chrome-mv3
 npm run check         # version + tests + type-check + build
@@ -34,8 +34,6 @@ npm run zip:store     # Chrome Web Store ZIP with development key removed
 ```
 
 ### Loading it into Chrome
-
-This is a source project; Chrome cannot load the `.tsx` files directly.
 
 1. Run `npm run build`.
 2. Open `chrome://extensions` and enable **Developer mode**.
@@ -69,7 +67,8 @@ The key is stored in `chrome.storage.local`, never synced, and only sent to the 
 ## Features
 
 - **Home launcher** — pinned app tiles, folders, drag-and-drop ordering, wallpapers, and optional dashboard widgets
-- **Quick Bar** — draggable in-page save control with folder selection
+- **Quick Bar** — a self-healing in-page save control that drags vertically, snaps to either browser edge, collapses to a visible tab, and reports save failures instead of pretending success
+- **Context-aware saving** — opening Save while browsing a collection preselects that collection; opening it from Unsorted preselects no collection
 - **Capture Studio** — visible/full-page screenshots, recordings, clipboard, and downloads
 - **AI filing** — optional summaries, tags, confidence-based filing, and an Inbox fallback
 - **Ask Your Library** — hybrid full-library retrieval, source snippets, numbered citations, follow-up context, and local fallback matches
@@ -80,7 +79,9 @@ The key is stored in `chrome.storage.local`, never synced, and only sent to the 
 - **Find** — instant text search, keyless Smart Search with optional AI reranking, command palette, multiple sorts, and grid/list/masonry views
 - **Highlights** — quote-and-context anchored annotations that survive many page changes
 - **Portable** — imports from browser HTML, Raindrop, Pocket, and Keepsake JSON; exports JSON backups
-- **Resilient** — offline save queue, PocketBase request retries, cached startup data, and Home-field fallback storage
+- **Resilient** — offline save queue, PocketBase request retries, cached startup data, durable Quick Bar state, and Home-field fallback storage
+
+The Quick Bar cannot appear on Chrome-owned pages such as `chrome://extensions`, the Chrome Web Store, or some built-in new-tab pages because Chrome blocks content scripts there.
 
 ---
 
@@ -89,9 +90,9 @@ The key is stored in `chrome.storage.local`, never synced, and only sent to the 
 ```text
 entrypoints/
   background.ts     service worker, capture, queues, watches, commands, billing handoff
-  content.ts        Quick Bar, highlights, and Ambient Recall
+  content.ts        self-healing Quick Bar, highlights, and Ambient Recall
   newtab/           Home launcher and widgets
-  popup/            quick save and compact library/settings surfaces
+  popup/            collection-aware quick save and compact library/settings surfaces
   sidepanel/        docked Save / Library / Ask surfaces
   dashboard/        complete bookmark library, bulk cleanup, and smart search
   options/          account, AI, capture, appearance, import/export, billing
@@ -104,13 +105,15 @@ lib/
   bulk.ts            pure selection, tag normalization, and bounded batch helpers
   llm.ts             Anthropic/OpenAI/Google adapters and provider safety
   retrieval.ts       deterministic ranking and evidence-snippet selection
+  uiContext.ts       save-context resolution and Quick Bar positioning helpers
+  quickbar.ts        edge-snapping in-page save control
   embedder.ts        local semantic embeddings
   home.ts            durable Home pin/order overlay
   widgets.ts         Home widget data and browser integrations
   wallpaper.ts       safe and optimized Home backgrounds
   watch.ts           Living Bookmarks scheduler and comparison logic
 pocketbase/          schema and server-side setup material
-scripts/             release, retrieval, and bulk-workflow regression tests
+scripts/             release and regression tests
 ```
 
 ---
@@ -124,6 +127,7 @@ The UI calls `lib/bookmarks`, `lib/highlights`, and `lib/auth`. Those facades de
 - AI keys remain in local extension storage and are never committed or synced.
 - AI requests have hard timeouts and provider-specific error handling.
 - Saved webpage text is isolated as untrusted source material in AI prompts.
+- Quick Bar collection labels are rendered as text, not injected HTML.
 - Bulk operations use bounded batches instead of flooding storage or the background worker.
 - PocketBase rules must enforce per-user access with `user = @request.auth.id`.
 - Local-mode passwords are salted and hashed for on-device profile separation; use PocketBase for real hosted authentication.

@@ -75,6 +75,24 @@ jobs:
           console.log(`Store ZIP verified: version ${manifest.version}, no development key`);
           NODE
 
+      - name: Upload unpacked Chrome extension
+        uses: actions/upload-artifact@v4
+        with:
+          name: keepsake-chrome-unpacked
+          path: .output/chrome-mv3/
+          include-hidden-files: true
+          if-no-files-found: error
+          retention-days: 14
+
+      - name: Upload Chrome Web Store ZIP
+        uses: actions/upload-artifact@v4
+        with:
+          name: keepsake-chrome-store-zip
+          path: .output/*.zip
+          include-hidden-files: true
+          if-no-files-found: error
+          retention-days: 14
+
       - name: Upload CI diagnostics
         if: always()
         uses: actions/upload-artifact@v4

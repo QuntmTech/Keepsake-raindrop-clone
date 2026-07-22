@@ -1,23 +1,21 @@
-import { storage } from 'wxt/utils/storage';
 import { getSettings, setSettings } from './settings';
 import { getBackend } from './backend';
 import { listCollections, createCollection, findByUrl } from './bookmarks';
 import { send } from './messaging';
 import { ACCENTS } from './theme';
-import { type Collection } from './types';
+import { clampQuickBarTop, quickBarFractionFromTop, quickBarSideForPointer } from './uiContext';
+import { type Collection, type QuickBarSide, type Settings } from './types';
 
-// Whether the bar is collapsed to an edge tab (persisted, roams across devices).
-const collapsedStore = storage.defineItem<boolean>('local:quickbar_collapsed', { fallback: false });
-
-// An in-page "Quick Bar": a small, draggable widget pinned to the right edge of
-// every page. Save the current page in one click, drop it straight into a
-// folder, or jump to the dashboard — without ever opening the toolbar popup.
-// Rendered inside a Shadow DOM so no website's CSS can interfere with it.
-
+// The in-page Quick Bar is rendered in a Shadow DOM so websites cannot restyle
+// it. It snaps to either browser edge, remembers its position, and can collapse
+// to a visible edge tab instead of disappearing.
 export interface QuickBarApi {
   openFolders: () => void;
+  update: (settings: Settings) => void;
   destroy: () => void;
 }
+
+type QuickBarHost = HTMLDivElement & { __keepsakeApi?: QuickBarApi };
 
 const SVG = {
   grip: '<circle cx="9" cy="6" r="1.4"/><circle cx="15" cy="6" r="1.4"/><circle cx="9" cy="12" r="1.4"/><circle cx="15" cy="12" r="1.4"/><circle cx="9" cy="18" r="1.4"/><circle cx="15" cy="18" r="1.4"/>',
@@ -31,17 +29,24 @@ const SVG = {
   plus: '<path d="M12 5v14M5 12h14"/>',
 };
 
-function icon(name: keyof typeof SVG, fill = false): string {
-  return `<svg viewBox="0 0 24 24" width="20" height="20" fill="${fill ? 'currentColor' : 'none'}" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">${SVG[name]}</svg>`;
+function icon(name: keyof typeof SVG, fill = false, size = 20): string {
+  return `<svg viewBox="0 0 24 24" width="${size}" height="${size}" fill="${fill ? 'currentColor' : 'none'}" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${SVG[name]}</svg>`;
+}
+
+function setButtonBusy(button: HTMLButtonElement, busy: boolean) {
+  button.disabled = busy;
+  button.style.pointerEvents = busy ? 'none' : '';
 }
 
 export async function mountQuickBar(): Promise<QuickBarApi | null> {
-  if (document.getElementById('keepsake-quickbar')) return null;
+  const existing = document.getElementById('keepsake-quickbar') as QuickBarHost | null;
+  if (existing?.__keepsakeApi) return existing.__keepsakeApi;
+  existing?.remove();
 
   const settings = await getSettings();
-  const accent = ACCENTS.find((a) => a.key === settings.accent)?.swatch ?? '#2563eb';
+  const accent = ACCENTS.find((item) => item.key === settings.accent)?.swatch ?? '#2563eb';
 
-  const host = document.createElement('div');
+  const host = document.createElement('div') as QuickBarHost;
   host.id = 'keepsake-quickbar';
   const shadow = host.attachShadow({ mode: 'open' });
   (document.documentElement || document.body).appendChild(host);
@@ -49,170 +54,235 @@ export async function mountQuickBar(): Promise<QuickBarApi | null> {
   const style = document.createElement('style');
   style.textContent = `
     :host { all: initial; }
-    .rail { position: fixed; right: 0; z-index: 2147483000;
-      display: flex; flex-direction: column; align-items: center; gap: 3px;
-      padding: 7px 5px; background: linear-gradient(180deg, rgba(32,34,44,.94), rgba(18,20,27,.96));
+    * { box-sizing: border-box; }
+    button { font: inherit; }
+    .rail { position: fixed; z-index: 2147483646; display: flex; flex-direction: column;
+      align-items: center; gap: 3px; padding: 7px 5px; color: #fff;
+      background: linear-gradient(180deg, rgba(32,34,44,.96), rgba(18,20,27,.98));
       backdrop-filter: blur(12px) saturate(1.3); -webkit-backdrop-filter: blur(12px) saturate(1.3);
-      border: 1px solid rgba(255,255,255,.09); border-right: none;
-      border-radius: 16px 0 0 16px;
-      box-shadow: 0 10px 32px rgba(0,0,0,.35), 0 2px 8px rgba(0,0,0,.25), inset 0 1px 0 rgba(255,255,255,.06);
-      font-family: ui-sans-serif, system-ui, sans-serif; transition: opacity .2s, transform .15s;
-      opacity: .6; }
-    .rail:hover { opacity: 1; transform: translateX(-1px); }
-    .grip { color: rgba(255,255,255,.4); cursor: grab; padding: 2px 0; touch-action: none; }
+      border: 1px solid rgba(255,255,255,.12); box-shadow: 0 12px 34px rgba(0,0,0,.38),
+      0 2px 8px rgba(0,0,0,.25), inset 0 1px 0 rgba(255,255,255,.07);
+      font-family: ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      opacity: .86; transition: opacity .16s, filter .16s; }
+    .rail.right { right: 0; left: auto; border-right: none; border-radius: 16px 0 0 16px; }
+    .rail.left { left: 0; right: auto; border-left: none; border-radius: 0 16px 16px 0; }
+    .rail:hover, .rail.dragging { opacity: 1; filter: brightness(1.04); }
+    .grip { width: 38px; height: 22px; display: grid; place-items: center; color: rgba(255,255,255,.55);
+      cursor: grab; border-radius: 8px; touch-action: none; user-select: none; }
+    .grip:hover { color: #fff; background: rgba(255,255,255,.1); }
     .grip:active { cursor: grabbing; }
-    .hide { width: 38px; height: 22px; display: grid; place-items: center; color: rgba(255,255,255,.35);
-      background: transparent; border: none; border-radius: 8px; cursor: pointer; opacity: 0;
-      transition: opacity .15s, color .12s; }
-    .rail:hover .hide { opacity: 1; }
-    .hide:hover { color: #fff; background: rgba(255,255,255,.12); }
-    .collapse { width: 38px; height: 22px; display: grid; place-items: center; color: rgba(255,255,255,.4);
-      background: transparent; border: none; border-radius: 8px; cursor: pointer; opacity: 0;
-      transition: opacity .15s, color .12s; }
-    .rail:hover .collapse { opacity: 1; }
-    .collapse:hover { color: #fff; background: rgba(255,255,255,.12); }
-    .tab { position: fixed; right: 0; z-index: 2147483000; display: none; align-items: center;
-      width: 16px; height: 54px; padding: 0; border: none; cursor: pointer; color: rgba(255,255,255,.9);
-      background: rgba(24,26,32,.92); backdrop-filter: blur(8px); border-radius: 10px 0 0 10px;
-      box-shadow: 0 6px 24px rgba(0,0,0,.3); transition: width .15s, opacity .2s; opacity: .5; overflow: hidden; }
-    .tab:hover { width: 30px; opacity: 1; }
-    .tab svg { flex: none; }
-    .tab .tabmark { display: none; }
-    .tab:hover .tabmark { display: inline-grid; place-items: center; color: ${accent}; }
-    .btn { width: 38px; height: 38px; display: grid; place-items: center; color: rgba(255,255,255,.9);
+    .mini { width: 38px; height: 22px; display: grid; place-items: center; color: rgba(255,255,255,.56);
+      background: transparent; border: none; border-radius: 8px; cursor: pointer;
+      transition: color .12s, background .12s; }
+    .mini:hover { color: #fff; background: rgba(255,255,255,.12); }
+    .hide { opacity: .65; }
+    .rail:not(:hover) .hide { opacity: .25; }
+    .btn { width: 38px; height: 38px; display: grid; place-items: center; color: rgba(255,255,255,.92);
       background: transparent; border: none; border-radius: 11px; cursor: pointer;
       transition: background .12s, transform .12s, color .12s, box-shadow .12s; }
-    .btn:hover { background: rgba(255,255,255,.12); color: #fff; transform: scale(1.06); }
+    .btn:hover { background: rgba(255,255,255,.13); color: #fff; transform: scale(1.06); }
     .btn:active { transform: scale(.92); }
-    .btn.save { position: relative; color: #fff;
-      background: linear-gradient(135deg, ${accent}, ${accent}dd);
-      box-shadow: 0 3px 10px ${accent}55; }
-    .btn.save:hover { filter: brightness(1.12); transform: scale(1.06); }
-    .btn.ok { color: #34d399; background: rgba(52,211,153,.15); box-shadow: none; }
-    .badge { position: absolute; top: 5px; right: 5px; width: 8px; height: 8px;
-      border-radius: 50%; background: #34d399; box-shadow: 0 0 0 2px rgba(24,26,32,.92); }
-    .pop { position: fixed; z-index: 2147483001; width: 230px; max-height: 60vh; overflow:auto;
-      background: #1b1d24; color: #eef; border-radius: 12px; box-shadow: 0 10px 30px rgba(0,0,0,.4);
-      padding: 8px; font-family: ui-sans-serif, system-ui, sans-serif; }
-    .pop h4 { margin: 4px 8px 8px; font-size: 11px; text-transform: uppercase;
-      letter-spacing: .04em; color: rgba(255,255,255,.45); font-weight: 600; }
-    .row { display: flex; align-items: center; gap: 8px; width: 100%; padding: 8px 10px;
-      background: transparent; border: none; border-radius: 8px; cursor: pointer;
-      color: #eef; font-size: 13px; text-align: left; }
-    .row:hover { background: rgba(255,255,255,.08); }
+    .btn:disabled { opacity: .65; }
+    .btn.save { position: relative; color: #fff; background: linear-gradient(135deg, ${accent}, ${accent}dd);
+      box-shadow: 0 3px 12px ${accent}66; }
+    .btn.save:hover { filter: brightness(1.12); }
+    .btn.ok { color: #34d399; background: rgba(52,211,153,.16); box-shadow: none; }
+    .badge { position: absolute; top: 4px; right: 4px; width: 8px; height: 8px; border-radius: 50%;
+      background: #34d399; box-shadow: 0 0 0 2px rgba(24,26,32,.94); }
+    .tab { position: fixed; z-index: 2147483646; display: none; align-items: center; justify-content: center;
+      gap: 1px; width: 25px; height: 64px; padding: 0; border: 1px solid rgba(255,255,255,.12);
+      cursor: pointer; color: #fff; background: rgba(24,26,32,.96); backdrop-filter: blur(8px);
+      box-shadow: 0 8px 26px rgba(0,0,0,.34); opacity: .78; overflow: hidden;
+      transition: width .15s, opacity .15s, background .15s; }
+    .tab.right { right: 0; left: auto; border-right: none; border-radius: 11px 0 0 11px; }
+    .tab.left { left: 0; right: auto; border-left: none; border-radius: 0 11px 11px 0; }
+    .tab:hover { width: 42px; opacity: 1; background: rgba(24,26,32,.99); }
+    .tabmark { color: ${accent}; display: grid; place-items: center; }
+    .tabchev { display: none; color: rgba(255,255,255,.75); }
+    .tab:hover .tabchev { display: grid; place-items: center; }
+    .pop { position: fixed; z-index: 2147483647; width: min(250px, calc(100vw - 76px)); max-height: min(60vh, 430px);
+      overflow: auto; background: #1b1d24; color: #eef; border: 1px solid rgba(255,255,255,.1);
+      border-radius: 13px; box-shadow: 0 12px 34px rgba(0,0,0,.45); padding: 8px;
+      font-family: ui-sans-serif, system-ui, sans-serif; }
+    .pop h4 { margin: 4px 8px 8px; font-size: 11px; text-transform: uppercase; letter-spacing: .04em;
+      color: rgba(255,255,255,.48); font-weight: 650; }
+    .row { display: flex; align-items: center; gap: 8px; width: 100%; padding: 9px 10px;
+      background: transparent; border: none; border-radius: 8px; cursor: pointer; color: #eef;
+      font-size: 13px; text-align: left; }
+    .row:hover { background: rgba(255,255,255,.09); }
     .row svg { width: 16px; height: 16px; flex: none; }
     .dot { width: 9px; height: 9px; border-radius: 50%; flex: none; }
-    .msg { padding: 14px 12px; font-size: 13px; color: rgba(255,255,255,.7); text-align: center; }
-    .link { color: ${accent}; cursor: pointer; text-decoration: underline; }
+    .msg { padding: 14px 12px; font-size: 13px; line-height: 1.45; color: rgba(255,255,255,.76); text-align: center; }
+    .link { margin-top: 8px; display: inline-block; color: ${accent}; cursor: pointer; text-decoration: underline; }
+    @keyframes spin { to { transform: rotate(360deg); } }
+    .spinner { width: 17px; height: 17px; border: 2px solid rgba(255,255,255,.4); border-top-color: #fff;
+      border-radius: 50%; animation: spin .6s linear infinite; }
   `;
   shadow.appendChild(style);
 
   const rail = document.createElement('div');
   rail.className = 'rail';
   rail.innerHTML = `
-    <button class="hide" title="Hide the Quick Bar (turn it back on in the Keepsake popup → Settings)">${icon('close')}</button>
-    <button class="collapse" title="Collapse to the edge">${icon('chevronR')}</button>
-    <div class="grip" title="Drag to move">${icon('grip')}</div>
-    <button class="btn save" title="Save this page">${icon('bookmark', true)}</button>
-    <button class="btn folder" title="Save to folder">${icon('folder')}</button>
-    <button class="btn dash" title="Open Keepsake">${icon('grid')}</button>
+    <button class="mini hide" type="button" aria-label="Hide Quick Bar" title="Hide Quick Bar — turn it back on in Keepsake Settings">${icon('close')}</button>
+    <button class="mini collapse" type="button" aria-label="Collapse Quick Bar" title="Collapse to the browser edge"></button>
+    <div class="grip" role="button" aria-label="Drag Quick Bar" title="Drag up/down or across the screen to switch sides">${icon('grip')}</div>
+    <button class="btn save" type="button" aria-label="Save this page" title="Save this page">${icon('bookmark', true)}</button>
+    <button class="btn folder" type="button" aria-label="Save to collection" title="Save to collection">${icon('folder')}</button>
+    <button class="btn dash" type="button" aria-label="Open Keepsake" title="Open Keepsake">${icon('grid')}</button>
   `;
   shadow.appendChild(rail);
 
-  // Collapsed edge tab — peeks from the right; click to expand.
   const tab = document.createElement('button');
   tab.className = 'tab';
-  tab.title = 'Open Keepsake Quick Bar';
-  tab.innerHTML = icon('chevronL') + `<span class="tabmark">${icon('bookmark', true)}</span>`;
+  tab.type = 'button';
+  tab.title = 'Expand Keepsake Quick Bar';
   shadow.appendChild(tab);
 
-  // ---- position (vertical) ----
-  let curY = settings.quickBarY;
-  const clampTop = (frac: number) => {
-    const h = rail.offsetHeight || 180;
-    const max = window.innerHeight - h - 8;
-    return Math.max(8, Math.min(max, frac * window.innerHeight - h / 2));
-  };
-  const applyTop = () => {
-    rail.style.top = `${clampTop(curY)}px`;
-    tab.style.top = `${Math.max(8, Math.min(window.innerHeight - 62, curY * window.innerHeight - 27))}px`;
-  };
-  applyTop();
-  const onResize = () => applyTop();
-  window.addEventListener('resize', onResize);
+  const hideButton = rail.querySelector('.hide') as HTMLButtonElement;
+  const collapseButton = rail.querySelector('.collapse') as HTMLButtonElement;
+  const grip = rail.querySelector('.grip') as HTMLElement;
+  const saveButton = rail.querySelector('.btn.save') as HTMLButtonElement;
+  const folderButton = rail.querySelector('.btn.folder') as HTMLButtonElement;
+  const dashboardButton = rail.querySelector('.btn.dash') as HTMLButtonElement;
 
-  // ---- collapse to edge tab ----
-  let collapsed = await collapsedStore.getValue();
+  let currentY = settings.quickBarY;
+  let side: QuickBarSide = settings.quickBarSide;
+  let collapsed = settings.quickBarCollapsed;
+  let popover: HTMLDivElement | null = null;
+  let destroyed = false;
+  let dragging = false;
+  let saving = false;
+  let saved = false;
+
+  const closePopover = () => {
+    popover?.remove();
+    popover = null;
+  };
+
+  const paintDirection = () => {
+    collapseButton.innerHTML = icon(side === 'right' ? 'chevronR' : 'chevronL');
+    const inward = side === 'right' ? 'chevronL' : 'chevronR';
+    tab.innerHTML = `<span class="tabmark">${icon('bookmark', true, 16)}</span><span class="tabchev">${icon(inward, false, 15)}</span>`;
+  };
+
+  const applyEdge = () => {
+    rail.classList.toggle('left', side === 'left');
+    rail.classList.toggle('right', side === 'right');
+    tab.classList.toggle('left', side === 'left');
+    tab.classList.toggle('right', side === 'right');
+    paintDirection();
+  };
+
+  const applyTop = () => {
+    const railHeight = rail.offsetHeight || 178;
+    rail.style.top = `${clampQuickBarTop(currentY, window.innerHeight, railHeight)}px`;
+    tab.style.top = `${clampQuickBarTop(currentY, window.innerHeight, tab.offsetHeight || 64)}px`;
+  };
+
   const applyCollapsed = () => {
     rail.style.display = collapsed ? 'none' : 'flex';
     tab.style.display = collapsed ? 'flex' : 'none';
     applyTop();
   };
-  applyCollapsed();
-  const setCollapsed = async (v: boolean) => {
-    collapsed = v;
-    applyCollapsed();
-    await collapsedStore.setValue(v);
-  };
-  (rail.querySelector('.collapse') as HTMLButtonElement).onclick = () => setCollapsed(true);
-  tab.onclick = () => setCollapsed(false);
 
-  // ---- drag ----
-  const grip = rail.querySelector('.grip') as HTMLElement;
-  let dragging = false;
-  grip.addEventListener('pointerdown', (e) => {
-    dragging = true;
-    grip.setPointerCapture(e.pointerId);
-    e.preventDefault();
-  });
-  grip.addEventListener('pointermove', (e) => {
-    if (!dragging) return;
-    const top = Math.max(8, Math.min(window.innerHeight - rail.offsetHeight - 8, e.clientY - rail.offsetHeight / 2));
-    rail.style.top = `${top}px`;
-  });
-  grip.addEventListener('pointerup', async () => {
+  const applyAll = () => {
+    applyEdge();
+    applyCollapsed();
+  };
+
+  const setCollapsed = async (value: boolean) => {
+    collapsed = value;
+    applyCollapsed();
+    await setSettings({ quickBarCollapsed: value });
+  };
+
+  const updateFromSettings = (next: Settings) => {
+    currentY = next.quickBarY;
+    side = next.quickBarSide;
+    collapsed = next.quickBarCollapsed;
+    applyAll();
+  };
+
+  applyAll();
+
+  const onResize = () => {
+    applyTop();
+    closePopover();
+  };
+  window.addEventListener('resize', onResize);
+
+  collapseButton.onclick = () => setCollapsed(true);
+  tab.onclick = () => setCollapsed(false);
+  hideButton.onclick = () => setSettings({ enableQuickBar: false });
+
+  const finishDrag = async () => {
     if (!dragging) return;
     dragging = false;
-    curY = Math.max(0, Math.min(1, (parseFloat(rail.style.top) + rail.offsetHeight / 2) / window.innerHeight));
-    await setSettings({ quickBarY: curY });
+    rail.classList.remove('dragging');
+    currentY = quickBarFractionFromTop(parseFloat(rail.style.top) || 0, window.innerHeight, rail.offsetHeight || 178);
+    await setSettings({ quickBarY: currentY, quickBarSide: side, quickBarCollapsed: false });
+  };
+
+  grip.addEventListener('pointerdown', (event) => {
+    dragging = true;
+    rail.classList.add('dragging');
+    grip.setPointerCapture(event.pointerId);
+    closePopover();
+    event.preventDefault();
   });
 
-  // ---- actions ----
-  const hideBtn = rail.querySelector('.hide') as HTMLButtonElement;
-  const saveBtn = rail.querySelector('.btn.save') as HTMLButtonElement;
-  const folderBtn = rail.querySelector('.btn.folder') as HTMLButtonElement;
-  const dashBtn = rail.querySelector('.btn.dash') as HTMLButtonElement;
-
-  // Hide the bar everywhere; re-enable from the popup → Settings (content.ts
-  // watches this setting and unmounts/remounts live).
-  hideBtn.onclick = () => setSettings({ enableQuickBar: false });
-
-  let pop: HTMLDivElement | null = null;
-  const closePop = () => {
-    pop?.remove();
-    pop = null;
-  };
-  const onDocClick = (e: MouseEvent) => {
-    if (pop && !host.contains(e.target as Node)) closePop();
-  };
-  document.addEventListener('click', onDocClick);
-
-  // ---- saved-state awareness ----
-  const SAVE_ICON = icon('bookmark', true);
-  let saved = false;
-  const paintSave = (inner: string) => {
-    saveBtn.innerHTML = inner;
-    if (saved) {
-      const b = document.createElement('span');
-      b.className = 'badge';
-      saveBtn.appendChild(b);
+  grip.addEventListener('pointermove', (event) => {
+    if (!dragging) return;
+    const nextSide = quickBarSideForPointer(event.clientX, window.innerWidth);
+    if (nextSide !== side) {
+      side = nextSide;
+      applyEdge();
     }
+    const center = Math.max(0, Math.min(1, event.clientY / Math.max(1, window.innerHeight)));
+    rail.style.top = `${clampQuickBarTop(center, window.innerHeight, rail.offsetHeight || 178)}px`;
+  });
+
+  grip.addEventListener('pointerup', finishDrag);
+  grip.addEventListener('pointercancel', finishDrag);
+
+  const onDocumentClick = (event: MouseEvent) => {
+    if (popover && !host.contains(event.target as Node)) closePopover();
   };
-  const setSaved = (v: boolean) => {
-    saved = v;
-    saveBtn.title = v ? 'Already saved — click to save again' : 'Save this page';
-    paintSave(SAVE_ICON);
-  };
+  document.addEventListener('click', onDocumentClick);
+
+  function buildPopover(): HTMLDivElement {
+    const element = document.createElement('div');
+    element.className = 'pop';
+    const rect = (collapsed ? tab : rail).getBoundingClientRect();
+    element.style.top = `${Math.max(8, Math.min(rect.top, window.innerHeight - 330))}px`;
+    if (side === 'right') {
+      element.style.right = `${Math.max(8, window.innerWidth - rect.left + 10)}px`;
+      element.style.left = 'auto';
+    } else {
+      element.style.left = `${Math.max(8, rect.right + 10)}px`;
+      element.style.right = 'auto';
+    }
+    return element;
+  }
+
+  function showMessage(message: string, actionLabel?: string, action?: () => void) {
+    closePopover();
+    popover = buildPopover();
+    const box = document.createElement('div');
+    box.className = 'msg';
+    box.append(document.createTextNode(message));
+    if (actionLabel && action) {
+      box.appendChild(document.createElement('br'));
+      const link = document.createElement('button');
+      link.type = 'button';
+      link.className = 'link';
+      link.textContent = actionLabel;
+      link.onclick = action;
+      box.appendChild(link);
+    }
+    popover.appendChild(box);
+    shadow.appendChild(popover);
+  }
 
   async function loggedIn(): Promise<boolean> {
     try {
@@ -222,119 +292,150 @@ export async function mountQuickBar(): Promise<QuickBarApi | null> {
     }
   }
 
+  const saveIcon = icon('bookmark', true);
+  const paintSave = () => {
+    saveButton.innerHTML = saveIcon;
+    if (saved) {
+      const badge = document.createElement('span');
+      badge.className = 'badge';
+      saveButton.appendChild(badge);
+    }
+    saveButton.title = saved ? 'Already saved — click to save another copy' : 'Save this page';
+  };
+
   async function quickSave(collection?: string) {
+    if (saving) return;
     if (!(await loggedIn())) {
-      showSignIn();
+      showMessage('Sign in to Keepsake before saving.', 'Open Keepsake →', () => {
+        send({ type: 'OPEN_DASHBOARD' });
+        closePopover();
+      });
       return;
     }
-    saveBtn.innerHTML = `<span style="display:inline-block;width:16px;height:16px;border:2px solid rgba(255,255,255,.4);border-top-color:#fff;border-radius:50%;animation:spin .6s linear infinite"></span>`;
+
+    saving = true;
+    setButtonBusy(saveButton, true);
+    setButtonBusy(folderButton, true);
+    saveButton.innerHTML = '<span class="spinner"></span>';
     try {
-      await send({ type: 'SAVE_CURRENT_PAGE', collection });
-    } catch {
-      /* background queues on failure */
+      const response = await send<{ ok?: boolean; error?: string }>({ type: 'SAVE_CURRENT_PAGE', collection });
+      if (!response?.ok) throw new Error(response?.error || 'The page could not be saved');
+      saved = true;
+      saveButton.classList.add('ok');
+      saveButton.innerHTML = icon('check');
+      closePopover();
+      setTimeout(() => {
+        saveButton.classList.remove('ok');
+        paintSave();
+      }, 1100);
+    } catch (error) {
+      saved = false;
+      paintSave();
+      showMessage((error as Error)?.message || 'Keepsake could not save this page. Try again.');
+    } finally {
+      saving = false;
+      setButtonBusy(saveButton, false);
+      setButtonBusy(folderButton, false);
     }
-    saveBtn.classList.add('ok');
-    saveBtn.innerHTML = icon('check');
-    setTimeout(() => {
-      saveBtn.classList.remove('ok');
-      setSaved(true);
-    }, 1400);
-  }
-
-  function showSignIn() {
-    closePop();
-    pop = buildPop();
-    pop.innerHTML = `<div class="msg">Sign in to Keepsake to save.<br><span class="link">Open Keepsake →</span></div>`;
-    (pop.querySelector('.link') as HTMLElement).onclick = () => {
-      send({ type: 'OPEN_DASHBOARD' });
-      closePop();
-    };
-    shadow.appendChild(pop);
-  }
-
-  function buildPop(): HTMLDivElement {
-    const el = document.createElement('div');
-    el.className = 'pop';
-    const railRect = rail.getBoundingClientRect();
-    el.style.right = `${window.innerWidth - railRect.left + 8}px`;
-    el.style.top = `${Math.min(railRect.top, window.innerHeight - 320)}px`;
-    return el;
   }
 
   async function openFolders() {
     if (!(await loggedIn())) {
-      showSignIn();
+      showMessage('Sign in to Keepsake before saving.', 'Open Keepsake →', () => {
+        send({ type: 'OPEN_DASHBOARD' });
+        closePopover();
+      });
       return;
     }
-    closePop();
-    pop = buildPop();
-    pop.innerHTML = `<h4>Save to…</h4>`;
-    shadow.appendChild(pop);
+
+    closePopover();
+    popover = buildPopover();
+    const heading = document.createElement('h4');
+    heading.textContent = 'Save to…';
+    popover.appendChild(heading);
+    shadow.appendChild(popover);
 
     const addRow = (label: string, color: string, collection?: string) => {
+      if (!popover) return;
       const row = document.createElement('button');
+      row.type = 'button';
       row.className = 'row';
-      row.innerHTML = `<span class="dot" style="background:${color}"></span><span>${label}</span>`;
+      const dot = document.createElement('span');
+      dot.className = 'dot';
+      dot.style.background = color;
+      const text = document.createElement('span');
+      text.textContent = label;
+      row.append(dot, text);
       row.onclick = () => {
         quickSave(collection);
-        closePop();
+        closePopover();
       };
-      pop!.appendChild(row);
+      popover.appendChild(row);
     };
 
-    addRow('Unsorted', 'rgba(255,255,255,.3)');
+    addRow('Unsorted', 'rgba(255,255,255,.35)');
     try {
-      const cols: Collection[] = await listCollections();
-      for (const c of cols) addRow(`${c.icon ? c.icon + ' ' : ''}${c.name}`, c.color || accent, c.id);
+      const collections: Collection[] = await listCollections();
+      for (const collection of collections) {
+        addRow(`${collection.icon ? `${collection.icon} ` : ''}${collection.name}`, collection.color || accent, collection.id);
+      }
     } catch {
-      /* none */
+      showMessage('Collections could not be loaded. Try again.');
+      return;
     }
 
-    // New-folder action: create a collection on the fly and save into it.
-    const newRow = document.createElement('button');
-    newRow.className = 'row';
-    newRow.style.color = accent;
-    newRow.innerHTML = `${icon('plus')}<span>New folder…</span>`;
-    newRow.onclick = async () => {
-      const nameInput = window.prompt('New folder name');
-      const name = nameInput?.trim();
+    if (!popover) return;
+    const newFolder = document.createElement('button');
+    newFolder.type = 'button';
+    newFolder.className = 'row';
+    newFolder.style.color = accent;
+    newFolder.innerHTML = icon('plus');
+    const label = document.createElement('span');
+    label.textContent = 'New folder…';
+    newFolder.appendChild(label);
+    newFolder.onclick = async () => {
+      const name = window.prompt('New folder name')?.trim();
       if (!name) return;
       try {
         const created = await createCollection({ name });
-        quickSave(created.id);
+        await quickSave(created.id);
       } catch {
-        /* ignore */
+        showMessage('The folder could not be created. Try again.');
       }
-      closePop();
+      closePopover();
     };
-    pop!.appendChild(newRow);
+    popover.appendChild(newFolder);
   }
 
-  saveBtn.onclick = () => quickSave();
-  folderBtn.onclick = () => (pop ? closePop() : openFolders());
-  dashBtn.onclick = () => send({ type: 'OPEN_DASHBOARD' });
+  saveButton.onclick = () => quickSave();
+  folderButton.onclick = () => (popover ? closePopover() : openFolders());
+  dashboardButton.onclick = () => send({ type: 'OPEN_DASHBOARD' });
 
-  // spinner keyframes (scoped to shadow)
-  const kf = document.createElement('style');
-  kf.textContent = `@keyframes spin { to { transform: rotate(360deg); } }`;
-  shadow.appendChild(kf);
-
-  // Reflect whether this page is already in the vault.
   if (await loggedIn()) {
     try {
-      if (await findByUrl(location.href)) setSaved(true);
+      saved = Boolean(await findByUrl(location.href));
+      paintSave();
     } catch {
-      /* ignore */
+      paintSave();
     }
+  } else {
+    paintSave();
   }
 
   const api: QuickBarApi = {
     openFolders,
+    update: updateFromSettings,
     destroy: () => {
+      if (destroyed) return;
+      destroyed = true;
+      closePopover();
       window.removeEventListener('resize', onResize);
-      document.removeEventListener('click', onDocClick);
+      document.removeEventListener('click', onDocumentClick);
       host.remove();
+      host.__keepsakeApi = undefined;
     },
   };
+
+  host.__keepsakeApi = api;
   return api;
 }

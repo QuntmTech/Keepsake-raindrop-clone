@@ -2,7 +2,7 @@
   "name": "keepsake",
   "description": "Keepsake — an AI-powered MV3 bookmark manager. Local-first, with an optional PocketBase backend.",
   "private": true,
-  "version": "8.10.0",
+  "version": "8.10.1",
   "type": "module",
   "scripts": {
     "dev": "wxt",
@@ -13,7 +13,8 @@
     "compile": "tsc --noEmit",
     "test:retrieval": "node --test scripts/test-retrieval.mjs",
     "test:bulk": "node --test scripts/test-bulk.mjs",
-    "test": "npm run test:retrieval && npm run test:bulk",
+    "test:ui": "node --test scripts/test-ui-context.mjs",
+    "test": "npm run test:retrieval && npm run test:bulk && npm run test:ui",
     "check:version": "node scripts/check-version.mjs",
     "check": "npm run check:version && npm test && npm run compile && npm run build",
     "postinstall": "wxt prepare",
