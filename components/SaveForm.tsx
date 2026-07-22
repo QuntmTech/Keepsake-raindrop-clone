@@ -121,7 +121,7 @@ export function SaveForm({ onSaved, initialCollection }: SaveFormProps) {
         };
         if (!active) return;
         setAiBusy(true);
-        const jobs: Promise<void>[] = [];
+        const jobs: Promise<unknown>[] = [];
         if (ai.autoTag) jobs.push(suggestTags(context, tagNames).then((value) => active && setAiTags(value)).catch(() => {}));
         if (ai.autoSummarize) {
           jobs.push(
