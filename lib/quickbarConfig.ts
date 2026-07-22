@@ -20,6 +20,19 @@ export function normalizeQuickBarOrder(value: unknown): QuickBarAction[] {
     const action = item as QuickBarAction;
     if (!result.includes(action)) result.push(action);
   }
+
+  // Existing 8.10.2 users already have a five-action custom order. Insert the
+  // new discovery actions beside Popup instead of silently burying them after
+  // Dashboard/Custom. Once present, the user's exact drag order is preserved.
+  const popupIndex = result.indexOf('popup');
+  let insertion = popupIndex >= 0 ? popupIndex + 1 : 0;
+  for (const action of ['search', 'related'] as QuickBarAction[]) {
+    if (!result.includes(action)) {
+      result.splice(insertion, 0, action);
+      insertion++;
+    }
+  }
+
   for (const action of DEFAULT_QUICKBAR_ORDER) {
     if (!result.includes(action)) result.push(action);
   }
