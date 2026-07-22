@@ -171,6 +171,12 @@ export default defineBackground(() => {
     // JS-rendered watched pages re-check from the live DOM on visit.
     checkOnVisit(details.tabId, details.url).catch(() => {});
   });
+  browser.webNavigation?.onHistoryStateUpdated.addListener((details) => {
+    if (details.frameId !== 0) return;
+    browser.tabs.sendMessage(details.tabId, { type: 'KS_PAGE_NAVIGATED', url: details.url }).catch(() => {});
+    runRecall(details.tabId, details.url).catch(() => {});
+    checkOnVisit(details.tabId, details.url).catch(() => {});
+  });
   browser.tabs.onRemoved.addListener((tabId) => {
     recallCache.getValue().then((cache) => {
       if (cache[tabId]) {
@@ -752,6 +758,18 @@ async function extractMeta(tabId?: number): Promise<PageMeta | null> {
 // Map of "Filed: …" notification id → save id (session-scoped; survives SW restarts).
 const filedNotifs = storage.defineItem<Record<string, string>>('session:filed_notifs', { fallback: {} });
 
+async function settleWithin<T>(promise: Promise<T>, timeoutMs: number, fallback: T): Promise<T> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    return await Promise.race([
+      promise.catch(() => fallback),
+      new Promise<T>((resolve) => { timer = setTimeout(() => resolve(fallback), timeoutMs); }),
+    ]);
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
+}
+
 // Full save pipeline used by the context menu + keyboard shortcut.
 // Phase 1 UX: dedupe → INSTANT save → background AI pass (extract/embed/file)
 // → "Filed: …" notification with Undo. The user never waits on AI.
@@ -815,7 +833,10 @@ async function saveTab(
         }
       })()
     : Promise.resolve(undefined);
-  const [meta, screenshotBlob] = await Promise.all([metaPromise, screenshotPromise]);
+  const [meta, screenshotBlob] = await Promise.all([
+    settleWithin(metaPromise, 1800, null),
+    settleWithin(screenshotPromise, 1800, undefined),
+  ]);
 
   const input = {
     url: tab.url,
@@ -844,6 +865,16 @@ async function saveTab(
         'Upgrade to Pro for unlimited cloud bookmarks, the full Capture Studio, and 25 watches.',
       );
       return { ok: false, status: 'blocked', error: 'Free plan bookmark limit reached.' };
+    }
+    const status = (error as { status?: number })?.status ?? 0;
+    const transient = status === 0 || status === 408 || status === 429 || status >= 500;
+    if (!transient) {
+      await flash('!', '#dc2626');
+      return {
+        ok: false,
+        status: 'blocked',
+        error: (error as Error)?.message || 'The server rejected this save.',
+      };
     }
     await enqueueSave(input);
     await flash('…', '#f59e0b');

@@ -92,8 +92,8 @@ export class PocketBaseBackend implements Backend {
     // counts on open) reject as "autocancelled" and show up empty until a later
     // request lands. Turn it off so every request completes.
     this.pb.autoCancellation(false);
-    // A request with no timeout can hang a surface forever on a dead
-    // connection — abort at 30s so failures surface and the retry logic runs.
+    // A dead connection must not freeze a popup or page action. Abort each
+    // attempt after 8s; safe reads/updates get one bounded retry.
     this.pb.beforeSend = (url, options) => {
       options.signal ??= AbortSignal.timeout(8_000);
       return { url, options };
@@ -489,8 +489,12 @@ export class PocketBaseBackend implements Backend {
         for (const input of slice) batch.collection('bookmarks').create(toBody(input));
         const results = await this.req(() => batch.send(), 0);
         saved += results.filter((r) => r.status >= 200 && r.status < 300).length;
-      } catch {
-        // Batch unsupported/rejected — per-item so one bad row can't lose the chunk.
+      } catch (error) {
+        const status = (error as { status?: number })?.status ?? 0;
+        // Replay as individual creates only when the server definitively
+        // rejected the batch shape. Network/timeout/429/5xx is ambiguous: the
+        // atomic batch may have committed, so replaying could duplicate rows.
+        if (![400, 404, 405, 422].includes(status)) throw error;
         for (const input of slice) {
           try {
             await this.saveBookmark(input);

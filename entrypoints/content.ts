@@ -200,6 +200,12 @@ export default defineContentScript({
         ensureQuickBar().then((api) => api?.openFolders()).catch(() => {});
         return undefined;
       }
+      if (message.type === 'KS_PAGE_NAVIGATED') {
+        capturedSelection = null;
+        selectionUndo = null;
+        quickBar?.refreshPage();
+        return undefined;
+      }
       if (message.type === 'KS_AI_SELECTION_GET') return Promise.resolve(selectionResult());
       if (message.type === 'KS_AI_SELECTION_REPLACE') {
         return Promise.resolve(replaceCapturedSelection(message.text, message.expectedOriginal));
@@ -244,12 +250,6 @@ export default defineContentScript({
     });
     observer.observe(document.documentElement, { childList: true });
 
-    ctx.locationWatcher.run();
-    ctx.addEventListener(window, 'wxt:locationchange', () => {
-      capturedSelection = null;
-      selectionUndo = null;
-      quickBar?.refreshPage();
-    });
     ctx.onInvalidated(() => {
       observer.disconnect();
       quickBar?.destroy();
@@ -261,7 +261,7 @@ export default defineContentScript({
     injectStyles();
     // Rebuilding quote anchors walks page text; keep it off the critical render
     // path and let the page/Quick Bar become interactive first.
-    window.setTimeout(() => reapplyHighlights().catch(() => {}), 350);
+    ctx.setTimeout(() => reapplyHighlights().catch(() => {}), 350);
 
     let toolbar: HTMLDivElement | null = null;
     const closeToolbar = () => {

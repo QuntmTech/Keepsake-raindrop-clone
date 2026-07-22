@@ -20,7 +20,7 @@ test('page controls run at document_end without blocking on backend startup', ()
   assert.match(content, /runAt: 'document_end'/);
   assert.doesNotMatch(content, /await getBackend\(\)/);
   assert.match(content, /mountQuickBar\(latestSettings\)/);
-  assert.match(content, /ctx\.locationWatcher\.run\(\)/);
+  assert.match(content, /KS_PAGE_NAVIGATED/);
   assert.match(content, /ctx\.onInvalidated/);
   assert.match(aiEmbed, /runAt: 'document_idle'/);
   assert.match(aiEmbed, /ctx\.onInvalidated/);
