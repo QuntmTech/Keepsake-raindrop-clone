@@ -37,14 +37,27 @@ const draftStore = storage.defineItem<WriterDraft>('session:ai_writer_draft', {
   fallback: DEFAULT_WRITER_DRAFT,
 });
 
+function normalizeDraft(value?: Partial<WriterDraft> | null): WriterDraft {
+  return { ...DEFAULT_WRITER_DRAFT, ...(value ?? {}) };
+}
+
 export async function getWriterDraft(): Promise<WriterDraft> {
-  return { ...DEFAULT_WRITER_DRAFT, ...(await draftStore.getValue()) };
+  return normalizeDraft(await draftStore.getValue());
 }
 
 export async function setWriterDraft(patch: Partial<WriterDraft>): Promise<WriterDraft> {
-  const next = { ...(await getWriterDraft()), ...patch };
+  const next = normalizeDraft({ ...(await getWriterDraft()), ...patch });
   await draftStore.setValue(next);
   return next;
+}
+
+export function watchWriterDraft(callback: (draft: WriterDraft) => void): () => void {
+  return draftStore.watch((value) => callback(normalizeDraft(value)));
+}
+
+export async function clearWriterDraft(): Promise<WriterDraft> {
+  await draftStore.setValue(DEFAULT_WRITER_DRAFT);
+  return DEFAULT_WRITER_DRAFT;
 }
 
 export async function runWriterDetailed(request: WriterRequest & { quality?: AiRouteMode }): Promise<LlmResult> {
