@@ -532,7 +532,7 @@ async function handleMessage(msg: Message, sender?: { tab?: { id?: number; windo
     case 'KS_CAPTURE_VIEWPORT': {
       await tileGate();
       try {
-        const dataUrl = await browser.tabs.captureVisibleTab(sender?.tab?.windowId, { format: 'png' });
+        const dataUrl = await captureTabPng(sender?.tab?.windowId);
         return { dataUrl };
       } catch (error) {
         return { dataUrl: '', error: (error as Error)?.message || 'Viewport capture failed' };
@@ -695,6 +695,12 @@ async function runMigration() {
 // ---- capture plumbing ----
 
 // Minimum spacing between captureVisibleTab calls (Chrome quota is roughly 2/sec).
+function captureTabPng(windowId?: number): Promise<string> {
+  return windowId == null
+    ? browser.tabs.captureVisibleTab({ format: 'png' })
+    : browser.tabs.captureVisibleTab(windowId, { format: 'png' });
+}
+
 let lastTileAt = 0;
 const activeFullCaptures = new Set<number>();
 async function tileGate(): Promise<void> {
@@ -730,7 +736,7 @@ async function captureValidatedPng(windowId?: number): Promise<string> {
   let last = '';
   for (let attempt = 0; attempt < 2; attempt++) {
     await tileGate();
-    last = await browser.tabs.captureVisibleTab(windowId, { format: 'png' });
+    last = await captureTabPng(windowId);
     const analysis = await analyzeImage(last);
     if (!analysis.blank) return last;
     await new Promise((resolve) => setTimeout(resolve, 240));

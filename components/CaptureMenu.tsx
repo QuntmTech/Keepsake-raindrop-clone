@@ -39,9 +39,10 @@ export function CaptureMenu({ buttonClass = 'btn-ghost px-2.5 text-sm' }: { butt
       setElapsed('');
       return;
     }
+    const startedAt = rec.startedAt;
     const tick = () => {
       const pausedNow = rec.paused && rec.pausedAt ? Date.now() - rec.pausedAt : 0;
-      const seconds = Math.max(0, Math.floor((Date.now() - rec.startedAt - rec.pausedDurationMs - pausedNow) / 1000));
+      const seconds = Math.max(0, Math.floor((Date.now() - startedAt - rec.pausedDurationMs - pausedNow) / 1000));
       setElapsed(`${Math.floor(seconds / 60)}:${String(seconds % 60).padStart(2, '0')}`);
     };
     tick();
