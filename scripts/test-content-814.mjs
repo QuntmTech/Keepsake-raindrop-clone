@@ -4,18 +4,18 @@ import { readFile } from 'node:fs/promises';
 
 const source = async (path) => readFile(new URL(`../${path}`, import.meta.url), 'utf8');
 
-test('Page AI stays available while the intrusive bubble is optional', async () => {
+test('Page AI stays available while the selected-text helper is optional', async () => {
   const embed = await source('entrypoints/ai-embed.content.ts');
   assert.match(embed, /KS_AI_PAGE_GET/);
-  assert.match(embed, /applySettings\(settings\.enableHighlights\)/);
+  assert.match(embed, /applySettings\(settings\.enableAiSelectionTools\)/);
   assert.match(embed, /watchSettings/);
   assert.match(embed, /disposeBubble\?\.\(\)/);
 });
 
-test('disabled selection UI creates no host and no page listeners', async () => {
+test('disabled selected-text AI creates no host and no page listeners', async () => {
   const embed = await source('entrypoints/ai-embed.content.ts');
   const settingsIndex = embed.indexOf('const settings = await getSettings()');
-  const mountIndex = embed.indexOf('applySettings(settings.enableHighlights)');
+  const mountIndex = embed.indexOf('applySettings(settings.enableAiSelectionTools)');
   assert.ok(settingsIndex >= 0 && mountIndex > settingsIndex);
   assert.match(embed, /if \(enabled\) mountBubble\(\)/);
 });
