@@ -24,7 +24,7 @@ async function patchFile(relativePath, patches) {
   }
 }
 
-const quickbarHelpers = String.raw`
+const quickbarHelpers = `
   function youtubeThumbnail(url: string): string | null {
     try {
       const parsed = new URL(url);
