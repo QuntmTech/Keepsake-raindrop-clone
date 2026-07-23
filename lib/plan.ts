@@ -10,6 +10,7 @@ import { limitsFor } from './entitlements';
 export const PLAN_LABEL: Record<Plan, string> = {
   free: 'Free',
   pro: 'Pro',
+  max: 'Max',
   owner: 'Owner',
 };
 
