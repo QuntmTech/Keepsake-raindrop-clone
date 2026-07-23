@@ -7,8 +7,7 @@ import {
   deleteCollection,
 } from '@/lib/bookmarks';
 import { type Collection } from '@/lib/types';
-import { currentUser } from '@/lib/auth';
-import { readSnapshot } from '@/lib/cache';
+import { readLastSnapshot } from '@/lib/cache';
 
 // Loads collections + per-collection counts and exposes CRUD that refreshes state.
 export function useCollections(authed: boolean) {
@@ -19,28 +18,28 @@ export function useCollections(authed: boolean) {
   const refresh = useCallback(async () => {
     if (!authed) return;
     try {
-      const [cols, cnt] = await Promise.all([listCollections(), countByCollection()]);
-      setCollections(cols);
-      setCounts(cnt);
+      const [nextCollections, nextCounts] = await Promise.all([listCollections(), countByCollection()]);
+      setCollections(nextCollections);
+      setCounts(nextCounts);
     } catch {
-      /* keep whatever we had (e.g. cached) */
+      // Keep the cached snapshot when PocketBase is slow or temporarily offline.
     } finally {
       setLoading(false);
     }
   }, [authed]);
 
-  // Paint cached collections instantly, then refresh in the background.
+  // Paint cached collections directly from chrome.storage before constructing the
+  // backend. Logout clears the snapshot, so this never crosses user sessions.
   useEffect(() => {
     let cancelled = false;
     (async () => {
-      const uid = (await currentUser())?.id ?? null;
-      const snap = await readSnapshot(uid);
-      if (!cancelled && snap) {
-        setCollections(snap.collections);
-        setCounts(snap.counts);
+      const snapshot = await readLastSnapshot();
+      if (!cancelled && snapshot) {
+        setCollections(snapshot.collections);
+        setCounts(snapshot.counts);
         setLoading(false);
       }
-      refresh();
+      await refresh();
     })();
     return () => {
       cancelled = true;
@@ -49,9 +48,9 @@ export function useCollections(authed: boolean) {
 
   const create = useCallback(
     async (data: { name: string; color?: string; icon?: string; parent?: string }) => {
-      const c = await createCollection(data);
+      const collection = await createCollection(data);
       await refresh();
-      return c;
+      return collection;
     },
     [refresh],
   );
@@ -72,15 +71,15 @@ export function useCollections(authed: boolean) {
     [refresh],
   );
 
-  // Persist a new top-to-bottom order by writing each collection's `sort` index.
+  // Persist a new top-to-bottom order by writing each collection's sort index.
   const reorder = useCallback(
     async (ids: string[]) => {
-      setCollections((prev) => {
-        const map = new Map(prev.map((c) => [c.id, c]));
-        return ids.map((id) => map.get(id)).filter((c): c is Collection => Boolean(c));
+      setCollections((previous) => {
+        const map = new Map(previous.map((collection) => [collection.id, collection]));
+        return ids.map((id) => map.get(id)).filter((collection): collection is Collection => Boolean(collection));
       });
       try {
-        await Promise.all(ids.map((id, i) => updateCollection(id, { sort: i })));
+        await Promise.all(ids.map((id, index) => updateCollection(id, { sort: index })));
       } finally {
         await refresh();
       }
