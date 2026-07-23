@@ -819,57 +819,70 @@ async function runCaptureCountdown(seconds: number): Promise<void> {
   }
 }
 
+let recordingStartInFlight = false;
 async function startRecording(options: RecordOptions): Promise<void> {
-  const state = await verifiedRecordingState();
-  if (state.isRecording) throw new Error('A recording is already running.');
-  const [tab] = await browser.tabs.query({ active: true, currentWindow: true });
-  if (!tab?.id) throw new Error('No active tab');
+  if (recordingStartInFlight) throw new Error('A recording is already starting.');
+  recordingStartInFlight = true;
+  try {
+    const state = await verifiedRecordingState();
+    if (state.isRecording) throw new Error('A recording is already running.');
+    const [tab] = await browser.tabs.query({ active: true, currentWindow: true });
+    if (!tab?.id) throw new Error('No active tab');
 
-  await ensureOffscreenDocument();
+    await ensureOffscreenDocument();
+    const countdown = options.countdownSeconds ?? 0;
+    // For tab capture, count down before minting the one-use stream token.
+    if (options.mode === 'tab' && countdown) await runCaptureCountdown(countdown);
 
-  let streamId: string;
-  if (options.mode === 'tab') {
-    streamId = await new Promise<string>((resolve, reject) => {
-      browser.tabCapture.getMediaStreamId({ targetTabId: tab.id }, (id: string) => {
-        if (id) resolve(id);
-        else reject(new Error(browser.runtime.lastError?.message || 'Could not capture this tab'));
+    let streamId: string;
+    if (options.mode === 'tab') {
+      streamId = await new Promise<string>((resolve, reject) => {
+        browser.tabCapture.getMediaStreamId({ targetTabId: tab.id }, (id: string) => {
+          if (id) resolve(id);
+          else reject(new Error(browser.runtime.lastError?.message || 'Could not capture this tab'));
+        });
       });
-    });
-  } else {
-    streamId = await new Promise<string>((resolve, reject) => {
-      browser.desktopCapture.chooseDesktopMedia(['screen', 'window', 'audio'] as any, (id: string) => {
-        if (id) resolve(id);
-        else reject(new Error('Capture was cancelled'));
+    } else {
+      const sources = options.systemAudio ? ['screen', 'window', 'audio'] : ['screen', 'window'];
+      streamId = await new Promise<string>((resolve, reject) => {
+        browser.desktopCapture.chooseDesktopMedia(sources as any, (id: string) => {
+          if (id) resolve(id);
+          else reject(new Error('Capture was cancelled'));
+        });
       });
-    });
-  }
+      if (countdown) await runCaptureCountdown(countdown);
+    }
 
-  const countdown = options.countdownSeconds ?? 0;
-  if (countdown) await runCaptureCountdown(countdown);
-  const startedAt = Date.now();
-  const started = (await browser.runtime.sendMessage({
-    target: 'ks-offscreen',
-    type: 'OFFSCREEN_START',
-    streamId,
-    options,
-  })) as { ok?: boolean; error?: string } | null;
-  if (!started?.ok) {
-    await browser.action.setBadgeText({ text: '' });
-    throw new Error(started?.error || 'The recorder could not start');
+    const startedAt = Date.now();
+    const started = (await browser.runtime.sendMessage({
+      target: 'ks-offscreen',
+      type: 'OFFSCREEN_START',
+      streamId,
+      options,
+    })) as { ok?: boolean; error?: string } | null;
+    if (!started?.ok) {
+      await browser.action.setBadgeText({ text: '' });
+      throw new Error(started?.error || 'The recorder could not start');
+    }
+    await recordingStateStore.setValue({
+      isRecording: true,
+      paused: false,
+      mode: options.mode,
+      startedAt,
+      pausedAt: null,
+      pausedDurationMs: 0,
+      tabId: tab.id,
+      quality: options.quality,
+      fps: options.fps,
+    });
+    await browser.action.setBadgeText({ text: 'REC' });
+    await browser.action.setBadgeBackgroundColor({ color: '#dc2626' });
+  } catch (error) {
+    await browser.action.setBadgeText({ text: '' }).catch(() => {});
+    throw error;
+  } finally {
+    recordingStartInFlight = false;
   }
-  await recordingStateStore.setValue({
-    isRecording: true,
-    paused: false,
-    mode: options.mode,
-    startedAt,
-    pausedAt: null,
-    pausedDurationMs: 0,
-    tabId: tab.id,
-    quality: options.quality,
-    fps: options.fps,
-  });
-  await browser.action.setBadgeText({ text: 'REC' });
-  await browser.action.setBadgeBackgroundColor({ color: '#dc2626' });
 }
 
 // Storage says "recording", but is the offscreen recorder actually alive?

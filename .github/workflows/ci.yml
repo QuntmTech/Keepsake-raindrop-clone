@@ -6,7 +6,7 @@ on:
     branches: [main]
 
 permissions:
-  contents: write
+  contents: read
 
 jobs:
   extension:
@@ -15,28 +15,6 @@ jobs:
     steps:
       - name: Check out repository
         uses: actions/checkout@v4
-        with:
-          ref: agent/8.13.0-capture-studio-uhd
-          fetch-depth: 0
-
-      - name: Apply async capture encoding and recording locks
-        shell: bash
-        run: |
-          set -o pipefail
-          python3 scripts/apply-813-encoding-locks.py 2>&1 | tee /tmp/generator.log
-
-      - name: Commit generated source
-        run: |
-          git checkout origin/main -- .github/workflows/ci.yml
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add -A
-          if git diff --cached --quiet; then
-            echo "No generated changes"
-          else
-            git commit -m "perf: encode UHD captures asynchronously and lock recording start"
-            git push origin HEAD:agent/8.13.0-capture-studio-uhd
-          fi
 
       - name: Set up Node.js
         uses: actions/setup-node@v4
@@ -47,21 +25,93 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
-      - name: Verify final capture paths
+      - name: Verify release version
+        shell: bash
+        run: |
+          set -o pipefail
+          npm run check:version 2>&1 | tee /tmp/version.log
+
+      - name: Run regression tests
+        shell: bash
+        run: |
+          set -o pipefail
+          npm test 2>&1 | tee /tmp/tests.log
+
+      - name: Type-check
         shell: bash
         run: |
           set -o pipefail
           npm run compile 2>&1 | tee /tmp/compile.log
-          npm run test:capture 2>&1 | tee /tmp/capture-tests.log
 
-      - name: Upload diagnostics
+      - name: Build extension
+        shell: bash
+        run: |
+          set -o pipefail
+          npm run build 2>&1 | tee /tmp/build.log
+
+      - name: Verify performance budgets
+        shell: bash
+        run: |
+          set -o pipefail
+          npm run check:bundle 2>&1 | tee /tmp/bundle-budget.log
+
+      - name: Build Chrome Web Store ZIP
+        shell: bash
+        run: |
+          set -o pipefail
+          npm run zip:store 2>&1 | tee /tmp/store-zip.log
+
+      - name: Verify store manifest
+        shell: bash
+        run: |
+          set -euo pipefail
+          ZIP="$(find .output -maxdepth 1 -type f -name '*.zip' | head -n 1)"
+          test -n "$ZIP"
+          MANIFEST_PATH="$(unzip -Z1 "$ZIP" | grep -E '(^|/)manifest\.json$' | head -n 1)"
+          test -n "$MANIFEST_PATH"
+          unzip -p "$ZIP" "$MANIFEST_PATH" > /tmp/keepsake-manifest.json
+          node --input-type=module <<'NODE' 2>&1 | tee /tmp/store-verify.log
+          import { readFile } from 'node:fs/promises';
+          const manifest = JSON.parse(await readFile('/tmp/keepsake-manifest.json', 'utf8'));
+          const pkg = JSON.parse(await readFile('package.json', 'utf8'));
+          if (manifest.key) throw new Error('Store ZIP still contains the development manifest key');
+          if (manifest.version !== pkg.version) {
+            throw new Error(`Store manifest version ${manifest.version} does not match package ${pkg.version}`);
+          }
+          console.log(`Store ZIP verified: version ${manifest.version}, no development key`);
+          NODE
+
+      - name: Upload unpacked Chrome extension
+        uses: actions/upload-artifact@v4
+        with:
+          name: keepsake-chrome-unpacked
+          path: .output/chrome-mv3/
+          include-hidden-files: true
+          if-no-files-found: error
+          retention-days: 14
+
+      - name: Upload Chrome Web Store ZIP
+        uses: actions/upload-artifact@v4
+        with:
+          name: keepsake-chrome-store-zip
+          path: .output/*.zip
+          include-hidden-files: true
+          if-no-files-found: error
+          retention-days: 14
+
+      - name: Upload CI diagnostics
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: keepsake-813-encoding-diagnostics
+          name: keepsake-ci-diagnostics
           path: |
-            /tmp/generator.log
+            /tmp/version.log
+            /tmp/tests.log
             /tmp/compile.log
-            /tmp/capture-tests.log
+            /tmp/build.log
+            /tmp/bundle-budget.log
+            /tmp/store-zip.log
+            /tmp/store-verify.log
+            /tmp/keepsake-manifest.json
           if-no-files-found: ignore
           retention-days: 7

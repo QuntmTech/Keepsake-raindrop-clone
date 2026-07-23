@@ -76,7 +76,7 @@ export function captureFullPageScript(): Promise<string> {
 
       const target = findTarget();
       const MAX_CANVAS_DIMENSION = 16384;
-      const MAX_CANVAS_PIXELS = 220_000_000;
+      const MAX_CANVAS_PIXELS = 80_000_000; // ~320 MB RGBA ceiling before encoder overhead
       const positions = (full: number, viewport: number): number[] => {
         const max = Math.max(0, full - viewport);
         if (!max) return [0];
@@ -227,18 +227,23 @@ export function captureFullPageScript(): Promise<string> {
         if (opaque < 20) return true;
         return max - min < 2 && (max < 3 || min > 252);
       };
-      const exportCanvas = (canvas: HTMLCanvasElement): string => {
+      const canvasBlob = (canvas: HTMLCanvasElement, type: string, quality?: number): Promise<Blob | null> =>
+        new Promise((done) => canvas.toBlob(done, type, quality));
+      const blobDataUrl = (blob: Blob): Promise<string> =>
+        new Promise((done, fail) => {
+          const reader = new FileReader();
+          reader.onload = () => done(String(reader.result || ''));
+          reader.onerror = () => fail(new Error('The stitched image could not be read'));
+          reader.readAsDataURL(blob);
+        });
+      const exportCanvas = async (canvas: HTMLCanvasElement): Promise<string> => {
         const pixels = canvas.width * canvas.height;
-        let dataUrl = '';
-        if (pixels <= 80_000_000) {
-          try {
-            dataUrl = canvas.toDataURL('image/png');
-          } catch {
-            dataUrl = '';
-          }
-        }
-        if (!dataUrl || dataUrl === 'data:,' || dataUrl.length < 256) dataUrl = canvas.toDataURL('image/jpeg', 0.98);
-        if (!dataUrl || dataUrl === 'data:,' || dataUrl.length < 256) throw new Error('The stitched image could not be encoded');
+        let blob: Blob | null = null;
+        if (pixels <= 80_000_000) blob = await canvasBlob(canvas, 'image/png');
+        if (!blob || blob.size < 128) blob = await canvasBlob(canvas, 'image/jpeg', 0.98);
+        if (!blob || blob.size < 128) throw new Error('The stitched image could not be encoded');
+        const dataUrl = await blobDataUrl(blob);
+        if (!dataUrl.startsWith('data:image/') || dataUrl.length < 256) throw new Error('The stitched image is invalid');
         return dataUrl;
       };
 
@@ -337,9 +342,9 @@ export function captureFullPageScript(): Promise<string> {
             partial.width = canvas.width;
             partial.height = Math.max(1, maxDrawY);
             partial.getContext('2d')!.drawImage(canvas, 0, 0);
-            resolve(exportCanvas(partial));
+            resolve(await exportCanvas(partial));
           } else {
-            resolve(exportCanvas(canvas));
+            resolve(await exportCanvas(canvas));
           }
         } catch (error) {
           reject(error);
