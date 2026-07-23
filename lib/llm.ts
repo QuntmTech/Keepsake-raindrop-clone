@@ -134,8 +134,36 @@ function combineSignals(signals: Array<AbortSignal | undefined>): AbortSignal {
   return controller.signal;
 }
 
+function timeoutSignal(timeout: number): AbortSignal {
+  const signalApi = AbortSignal as typeof AbortSignal & { timeout?: (milliseconds: number) => AbortSignal };
+  if (signalApi.timeout) return signalApi.timeout(timeout);
+  const controller = new AbortController();
+  setTimeout(() => controller.abort(new DOMException('The operation timed out.', 'TimeoutError')), timeout);
+  return controller.signal;
+}
+
 function requestSignal(timeout = REQUEST_TIMEOUT_MS, external?: AbortSignal): AbortSignal {
-  return combineSignals([external, AbortSignal.timeout(timeout)]);
+  return combineSignals([external, timeoutSignal(timeout)]);
+}
+
+async function abortableDelay(milliseconds: number, signal?: AbortSignal): Promise<void> {
+  if (!signal) {
+    await new Promise((resolve) => setTimeout(resolve, milliseconds));
+    return;
+  }
+  if (signal.aborted) throw signal.reason ?? new DOMException('Aborted', 'AbortError');
+  await new Promise<void>((resolve, reject) => {
+    const finish = () => {
+      signal.removeEventListener('abort', abort);
+      resolve();
+    };
+    const abort = () => {
+      clearTimeout(timer);
+      reject(signal.reason ?? new DOMException('Aborted', 'AbortError'));
+    };
+    const timer = setTimeout(finish, milliseconds);
+    signal.addEventListener('abort', abort, { once: true });
+  });
 }
 
 function requireText(value: string): string {
@@ -328,7 +356,7 @@ async function callWithRetry(adapter: Adapter, key: string, model: string, req: 
       last = error;
       if (req.signal?.aborted) throw req.signal.reason ?? error;
       if (!transient(error) || attempt === 1) throw error;
-      await new Promise((resolve) => setTimeout(resolve, 350 + Math.round(Math.random() * 250)));
+      await abortableDelay(350 + Math.round(Math.random() * 250), req.signal);
     }
   }
   throw last;
