@@ -98,6 +98,8 @@ export interface StudioItem {
   pageUrl?: string;
   pageTitle?: string;
   filename: string;
+  width?: number; // native screenshot pixels — avoids decoding twice in Studio
+  height?: number;
   durationMs?: number;
   saveId?: string; // library Save this capture was auto-filed into
   createdAt: string;

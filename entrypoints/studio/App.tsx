@@ -7,26 +7,41 @@ import { ImageEditor, type ImageEditorHandle } from './ImageEditor';
 import { VideoStudio, type VideoStudioHandle } from './VideoStudio';
 
 // Capture Studio — every screenshot and recording opens here right after
-// capture. Screenshots get a full annotate/crop editor; recordings get a
-// preview player with trim. Copy / download / save-to-library from one place.
+// capture. Screenshots get a full-resolution annotate/crop editor; recordings
+// get a preview player with trim. Export never uses the scaled screen preview.
 export default function App() {
   const { toast } = useToast();
   const [item, setItem] = useState<StudioItem | null | undefined>(undefined);
-  const [base, setBase] = useState(''); // editable filename (no folder, no extension)
-  const [saved, setSaved] = useState(false); // edits synced to the library copy
+  const [base, setBase] = useState('');
+  const [saved, setSaved] = useState(false);
   const [busy, setBusy] = useState<string | null>(null);
+  const [mediaInfo, setMediaInfo] = useState('');
   const imgRef = useRef<ImageEditorHandle>(null);
   const vidRef = useRef<VideoStudioHandle>(null);
 
   useEffect(() => {
     const id = location.hash.slice(1);
     if (!id) return setItem(null);
-    getStudioItem(id).then((it) => {
-      setItem(it ?? null);
-      if (it) {
-        const name = it.filename.split('/').pop() ?? it.filename;
-        setBase(name.replace(/\.[a-z0-9]+$/i, ''));
-        setSaved(Boolean(it.saveId)); // the raw capture was auto-filed on arrival
+    getStudioItem(id).then(async (next) => {
+      setItem(next ?? null);
+      if (!next) return;
+      const name = next.filename.split('/').pop() ?? next.filename;
+      setBase(name.replace(/\.[a-z0-9]+$/i, ''));
+      setSaved(Boolean(next.saveId));
+      const megabytes = next.blob.size / (1024 * 1024);
+      if (next.kind === 'screenshot') {
+        if (next.width && next.height) {
+          const megapixels = (next.width * next.height) / 1_000_000;
+          setMediaInfo(`${next.width.toLocaleString()} × ${next.height.toLocaleString()} px · ${megapixels.toFixed(1)} MP · ${megabytes.toFixed(1)} MB`);
+        } else {
+          // Older parked captures have no dimensions. Do not decode the giant
+          // bitmap a second time just for a label; the editor owns the one decode.
+          setMediaInfo(`${megabytes.toFixed(1)} MB · ${next.blob.type || 'image'}`);
+        }
+      } else {
+        const seconds = Math.max(0, Math.round((next.durationMs ?? 0) / 1000));
+        const duration = `${Math.floor(seconds / 60)}:${String(seconds % 60).padStart(2, '0')}`;
+        setMediaInfo(`${duration} · ${megabytes.toFixed(1)} MB · ${next.blob.type || 'video/webm'}`);
       }
     });
   }, []);
@@ -34,7 +49,6 @@ export default function App() {
   const ext = item ? (item.filename.match(/\.[a-z0-9]+$/i)?.[0] ?? (item.kind === 'recording' ? '.webm' : '.png')) : '';
   const isImage = item?.kind === 'screenshot';
 
-  // Current bytes: the editor's composed export (image) or working blob (video).
   const exportBlob = useCallback(async (forcePng = false): Promise<Blob> => {
     if (isImage) return imgRef.current!.exportBlob(forcePng);
     return vidRef.current!.exportBlob();
@@ -45,8 +59,8 @@ export default function App() {
     setBusy(label);
     try {
       await fn();
-    } catch (e) {
-      toast((e as Error)?.message || 'Something went wrong', 'error');
+    } catch (error) {
+      toast((error as Error)?.message || 'Something went wrong', 'error');
     } finally {
       setBusy(null);
     }
@@ -54,9 +68,9 @@ export default function App() {
 
   const copy = () =>
     withBusy('copy', async () => {
-      const blob = await exportBlob(true); // clipboard only accepts PNG
+      const blob = await exportBlob(true);
       await navigator.clipboard.write([new ClipboardItem({ 'image/png': blob })]);
-      toast('Copied to clipboard', 'success');
+      toast('Copied at full resolution', 'success');
     });
 
   const download = () =>
@@ -65,9 +79,8 @@ export default function App() {
       const url = URL.createObjectURL(blob);
       try {
         await browser.downloads.download({ url, filename: `Keepsake/${base || 'keepsake-capture'}${ext}` });
-        toast('Saved to Downloads/Keepsake', 'success');
+        toast('Saved at full resolution to Downloads/Keepsake', 'success');
       } finally {
-        // Give the download manager a beat to grab the bytes before revoking.
         setTimeout(() => URL.revokeObjectURL(url), 60_000);
       }
     });
@@ -93,9 +106,6 @@ export default function App() {
           toast('Saved on this device — upgrade to Pro to sync recordings to your library', 'info');
         }
       }
-      // Persist the edited bytes to the studio row (so reopening this tab shows
-      // the latest version) — but do NOT swap the live editor's source blob,
-      // or the annotations would be baked in AND re-drawn as vectors.
       await updateStudioItem(item.id, { saveId, blob, filename: `Keepsake/${base}${ext}` });
       setItem({ ...item, saveId });
       setSaved(true);
@@ -127,8 +137,8 @@ export default function App() {
             <input
               className="w-[26rem] max-w-[40vw] rounded-md border border-transparent bg-transparent px-1.5 py-0.5 text-sm font-semibold text-ink outline-none hover:border-line focus:border-brand"
               value={base}
-              onChange={(e) => {
-                setBase(e.target.value);
+              onChange={(event) => {
+                setBase(event.target.value);
                 setSaved(false);
               }}
               title="File name"
@@ -136,7 +146,8 @@ export default function App() {
             <span className="text-xs text-ink-faint">{ext}</span>
           </div>
           <p className="truncate px-1.5 text-[11px] text-ink-faint">
-            {isImage ? 'Screenshot' : 'Recording'}
+            {isImage ? 'Ultra HD screenshot' : 'Screen recording'}
+            {mediaInfo ? ` · ${mediaInfo}` : ''}
             {item.pageTitle ? ` · ${item.pageTitle}` : ''}
             {item.pageUrl && /^https?:/i.test(item.pageUrl) && (
               <>

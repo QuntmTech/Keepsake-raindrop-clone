@@ -7,7 +7,7 @@ export type IconName =
   | 'chevron' | 'close' | 'check' | 'highlight' | 'sun' | 'moon' | 'command'
   | 'video' | 'image' | 'pdf' | 'repo' | 'doc' | 'link' | 'logout' | 'import'
   | 'edit' | 'inbox' | 'copy' | 'grip' | 'camera' | 'record' | 'monitor' | 'mic'
-  | 'refresh' | 'upload' | 'download';
+  | 'refresh' | 'upload' | 'download' | 'crop' | 'box' | 'play' | 'pause';
 
 const paths: Record<IconName, string> = {
   bookmark: 'M6 4h12v16l-6-4-6 4z',
@@ -50,6 +50,10 @@ const paths: Record<IconName, string> = {
   refresh: 'M20 11a8 8 0 1 0-2.34 5.66M20 4v7h-7',
   upload: 'M12 16V4M7 9l5-5 5 5M4 18v2h16v-2',
   download: 'M12 4v12M7 11l5 5 5-5M4 20h16',
+  crop: 'M6 2v14a2 2 0 0 0 2 2h14M2 6h14a2 2 0 0 1 2 2v14',
+  box: 'M4 4h16v16H4zM8 8h8v8H8z',
+  play: 'M8 5v14l11-7z',
+  pause: 'M8 5h3v14H8zM14 5h3v14h-3z',
 };
 
 export function Icon({

@@ -1,6 +1,6 @@
 # Keepsake — bookmarks on steroids
 
-An AI-powered bookmark vault and customizable new-tab Home for Chrome/Firefox (MV3). Save pages with tags and collections, search your full library, highlight text, capture screenshots, monitor saved pages, rewrite selected text, and ask questions grounded in what you saved.
+An AI-powered bookmark vault and customizable new-tab Home for Chrome/Firefox (MV3). Save pages with tags and collections, search your full library, highlight text, capture and annotate Ultra HD screenshots, record screens, monitor saved pages, rewrite selected text, and ask questions grounded in what you saved.
 
 > **Local-first.** Keepsake works out of the box with on-device storage. A PocketBase backend is available behind the same interface for cross-device sync and hosted accounts.
 
@@ -26,7 +26,7 @@ Create an account in the extension and start saving. Local mode needs no server.
 ### Validation and production builds
 
 ```bash
-npm test              # retrieval + bulk + UI + Quick Bar + AI Writer regression tests
+npm test              # retrieval, UI, AI, performance, reliability, and capture regression tests
 npm run compile       # TypeScript check
 npm run build         # .output/chrome-mv3
 npm run check         # version + tests + type-check + build
@@ -70,7 +70,7 @@ The key is stored in `chrome.storage.local`, never synced, and only sent to the 
 - **Quick Bar** — a self-healing in-page command dock that drags vertically, snaps to either browser edge, collapses to a visible tab, opens AI Writer, browses collections, and reports failures instead of pretending success
 - **AI Writer** — load selected page or editable-field text, improve grammar, rewrite, shorten, expand, simplify, change tone, run custom instructions, copy, safely replace, undo, and attach results to a saved page
 - **Context-aware saving** — opening Save while browsing a collection preselects that collection; opening it from Unsorted preselects no collection
-- **Capture Studio** — visible/full-page screenshots, recordings, clipboard, and downloads
+- **Capture Studio** — validated native-resolution visible, selected-area, element, and full-page screenshots; nested-scroller/app-shell handling; annotations, full-resolution zoom and export; plus 720p–4K screen recording at 30/60 FPS with mic, system audio, countdown, pause, resume, preview, and trim
 - **AI filing** — optional summaries, tags, confidence-based filing, and an Inbox fallback
 - **Ask Your Library** — hybrid full-library retrieval, source snippets, numbered citations, follow-up context, and local fallback matches
 - **Ambient Recall** — surfaces related saved pages while browsing, with local matching and a domain blocklist
@@ -80,9 +80,9 @@ The key is stored in `chrome.storage.local`, never synced, and only sent to the 
 - **Find** — instant text search, keyless Smart Search with optional AI reranking, command palette, multiple sorts, and grid/list/masonry views
 - **Highlights** — quote-and-context anchored annotations that survive many page changes
 - **Portable** — imports from browser HTML, Raindrop, Pocket, and Keepsake JSON; exports JSON backups
-- **Resilient** — offline save queue, PocketBase request retries, cached startup data, durable Quick Bar state, and Home-field fallback storage
+- **Resilient** — offline save queue, PocketBase request retries, cached startup data, durable Quick Bar state, validated capture handoffs, bounded canvas memory, and Home-field fallback storage
 
-The Quick Bar and selected-text tools cannot run on Chrome-owned pages such as `chrome://extensions`, the Chrome Web Store, or some built-in new-tab pages because Chrome blocks content scripts there.
+The Quick Bar, selected-text tools, region/element selection, and full-page capture cannot run on Chrome-owned pages such as `chrome://extensions` or the Chrome Web Store because Chrome blocks injected scripts there. Visible-area capture may still be available after a direct user action.
 
 ---
 
@@ -90,20 +90,26 @@ The Quick Bar and selected-text tools cannot run on Chrome-owned pages such as `
 
 ```text
 entrypoints/
-  background.ts     service worker, capture, queues, watches, commands, billing handoff
+  background.ts     service worker, capture coordination, queues, watches, commands, billing handoff
   content.ts        self-healing Quick Bar, safe selected-text replacement, and highlights
+  offscreen/         image validation/cropping, local embeddings, watches, and durable recording
+  studio/            full-resolution screenshot editor and recording preview/trim workspace
   newtab/           Home launcher and widgets
   popup/            collection-aware quick save and compact library/settings surfaces
   sidepanel/        docked Save / Library / AI Workbench surfaces
   dashboard/        complete bookmark library, bulk cleanup, and smart search
   options/          account, AI, capture, appearance, import/export, billing
 components/
+  CaptureMenu.tsx    screenshot/recording launcher and persistent quality controls
   AIWriter.tsx       rewrite/grammar/tone UI with copy, replace, undo, and save
   AIWorkbench.tsx    compact Write / Ask Library switcher
   BulkActionBar.tsx  bounded multi-bookmark cleanup controls
   home/              Home widgets and customization controls
 lib/
   backend/           local and PocketBase implementations behind one interface
+  capture.ts         capture contracts, preferences, recording state, and quality profiles
+  captureRegion.ts   precise injected area/element selector
+  fullpage.ts        app-aware nested-scroller screenshot stitcher
   ai.ts              tags, summaries, hybrid retrieval, and grounded library Q&A
   aiWriter.ts        provider execution and session-persisted writer drafts
   aiWriterPrompt.ts  pure prompt construction, normalization, and change summaries
