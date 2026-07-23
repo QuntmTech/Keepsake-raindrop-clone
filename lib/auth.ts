@@ -48,7 +48,16 @@ export async function readCachedAuthUser(): Promise<AuthUser | null> {
 }
 
 export async function loadAuth(): Promise<void> {
-  await getBackend(); // getBackend() runs init() which restores and verifies the session
+  await getBackend(); // getBackend() runs init() which restores the session
+}
+
+// Used after the fast cached paint. This bypasses the local shortcut so the UI
+// always settles on the state owned by the initialized backend.
+export async function readVerifiedAuthState(): Promise<{ loggedIn: boolean; user: AuthUser | null }> {
+  const backend = await getBackend();
+  const loggedIn = await Promise.resolve(backend.isLoggedIn());
+  const user = await Promise.resolve(backend.currentUser());
+  return { loggedIn, user: loggedIn ? user : null };
 }
 
 export async function login(email: string, password: string): Promise<AuthUser> {
