@@ -135,6 +135,8 @@ export interface Settings {
   quickBarOrder: QuickBarAction[]; // action order; draggable directly on the rail
   quickBarColor: string;     // optional #RRGGBB override; empty follows the app accent
   quickBarSize: QuickBarSize;
+  quickBarWidth: number;      // horizontal dock width in CSS pixels
+  quickBarIconSize: number;   // action icon size in CSS pixels
   quickBarCustomUrl: string; // optional http(s) shortcut shown as the custom action
   quickBarCustomLabel: string;
   quickBarCustomIcon: QuickBarCustomIcon;
@@ -166,6 +168,8 @@ export const DEFAULT_SETTINGS: Settings = {
   quickBarOrder: ['popup', 'search', 'browse', 'ai', 'related', 'save', 'folder', 'dashboard', 'custom'],
   quickBarColor: '',
   quickBarSize: 'comfortable',
+  quickBarWidth: 50,
+  quickBarIconSize: 20,
   quickBarCustomUrl: '',
   quickBarCustomLabel: 'Open shortcut',
   quickBarCustomIcon: 'link',

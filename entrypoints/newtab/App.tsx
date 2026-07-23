@@ -19,7 +19,6 @@ import { Icon } from '@/components/Icon';
 import { useToast } from '@/components/Toast';
 import { searchBookmarks, updateBookmark, updateCollection, deleteBookmark, getAllTags, markVisited, watchVault } from '@/lib/bookmarks';
 import { syncHomeOverlay, watchHomeOverlay } from '@/lib/home';
-import { detectAndParse, importWithAi } from '@/lib/importer';
 import { WALLPAPERS, COLOR_SWATCHES, wallpaperCss, colorLuminance, wallpaperUpload, imageFileToDataUrl } from '@/lib/wallpaper';
 import { SEARCH_ENGINES, searchUrl } from '@/lib/search';
 import { normUrl } from '@/lib/apps';
@@ -148,11 +147,11 @@ export default function App() {
   }
 
   const reloadAll = useCallback(() => {
-    // Keep current links on screen if the request is slow/fails — never blank out.
-    // home: true fetches ONLY launcher rows (pinned || homeOnly), projected light
-    // (no cached page content), so a new tab loads a few small tiles instead of
-    // the whole library. Home only ever renders pinned items anyway.
+    // Primary visual data only. Nonvisual tags and overlay healing run later so
+    // tiles never wait behind secondary backend work.
     searchBookmarks('', { home: true, perPage: 500 }).then(setAll).catch(() => {});
+  }, []);
+  const reloadTags = useCallback(() => {
     getAllTags().then((t) => setAllTags(t.map((x) => x.tag))).catch(() => {});
   }, []);
 
@@ -177,13 +176,21 @@ export default function App() {
     return () => clearInterval(id);
   }, []);
   useEffect(() => {
-    if (authed) reloadAll();
-  }, [authed, reloadAll]);
+    if (!authed) return;
+    reloadAll();
+    const tagTimer = window.setTimeout(reloadTags, 500);
+    return () => window.clearTimeout(tagTimer);
+  }, [authed, reloadAll, reloadTags]);
   // Retry pushing overlay-held pin state to the server (heals once the
   // PocketBase schema gains the pinned/sort/homeOnly fields), then repaint.
   useEffect(() => {
     if (!authed) return;
-    syncHomeOverlay().then(reloadAll).catch(() => {});
+    // Overlay repair is important but not first-paint work. Running it immediately
+    // caused a second full Home refresh while the first request was still active.
+    const timer = window.setTimeout(() => {
+      syncHomeOverlay().then(reloadAll).catch(() => {});
+    }, 1200);
+    return () => window.clearTimeout(timer);
   }, [authed, reloadAll]);
 
   // Boot diagnostics: the moment the first real frame paints, log the boot as
@@ -224,18 +231,29 @@ export default function App() {
   }, []);
   useEffect(() => {
     if (!authed) return;
+    let vaultTimer: number | undefined;
+    let overlayTimer: number | undefined;
     const unVault = watchVault(() => {
-      reloadAll();
-      c.refresh();
+      window.clearTimeout(vaultTimer);
+      vaultTimer = window.setTimeout(() => {
+        reloadAll();
+        reloadTags();
+        c.refresh();
+      }, 80);
     });
-    // Pins can also change via the overlay alone (e.g. added from the popup
-    // while this tab is open) — that write never touches the vault stores.
-    const unOverlay = watchHomeOverlay(reloadAll);
+    // Pins can also change via the overlay alone. Coalesce the several storage
+    // writes from one drag/pin action into one launcher repaint.
+    const unOverlay = watchHomeOverlay(() => {
+      window.clearTimeout(overlayTimer);
+      overlayTimer = window.setTimeout(reloadAll, 60);
+    });
     return () => {
+      window.clearTimeout(vaultTimer);
+      window.clearTimeout(overlayTimer);
       unVault();
       unOverlay();
     };
-  }, [authed, reloadAll, c]);
+  }, [authed, reloadAll, reloadTags, c.refresh]);
 
   useEffect(() => {
     if (!authed) return;
@@ -510,6 +528,7 @@ export default function App() {
     const file = e.target.files?.[0];
     if (!file) return;
     const text = await file.text();
+    const { detectAndParse, importWithAi } = await import('@/lib/importer');
     const { items } = detectAndParse(file.name, text);
     if (!items.length) {
       toast('No links found in that file', 'error');

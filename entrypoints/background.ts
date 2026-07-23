@@ -1,6 +1,6 @@
 import { getBackend } from '@/lib/backend';
 import { getSettings, watchSettings } from '@/lib/settings';
-import { findByUrl, saveBookmark } from '@/lib/bookmarks';
+import { countByCollection, createCollection, deleteBookmark, findByUrl, listCollections, saveBookmark, searchBookmarks, updateBookmark } from '@/lib/bookmarks';
 import { enqueueSave, flushQueue } from '@/lib/queue';
 import { type Message, type ScreenshotResult, type MetaResult, type SaveCurrentPageResult, dataUrlToBlob } from '@/lib/messaging';
 import { extractPageMeta, type PageMeta } from '@/lib/metadata';
@@ -15,7 +15,6 @@ import { inferType, safeDomain } from '@/lib/util';
 import { type UiSurface } from '@/lib/types';
 import { migrateToSaves, pruneStudioItems, stashStudioItem } from '@/lib/save';
 import { saveCaptureToLibrary } from '@/lib/captureSave';
-import { deleteBookmark, searchBookmarks, updateBookmark } from '@/lib/bookmarks';
 import { agoLabel, autofileSave, undoFiling, type FiledResult } from '@/lib/autofile';
 import { processQueueTick, scheduleQueue, scheduleQueueSoon, QUEUE_ALARM } from '@/lib/aiQueue';
 import { matchPage, recallAllowed, type RecallResult } from '@/lib/recall';
@@ -27,6 +26,7 @@ import { canSaveBookmark, storageRemaining, refreshEntitlements } from '@/lib/en
 import { storage } from 'wxt/utils/storage';
 import { normalizeQuickBarUrl, resolveSaveCollection, sameCanonicalUrl } from '@/lib/quickbarConfig';
 import { requestSidepanelTarget } from '@/lib/sidepanelTarget';
+import { createHighlight, highlightsForUrl } from '@/lib/highlights';
 import { setWriterDraft } from '@/lib/aiWriter';
 
 // The background "service worker" is event-driven and can be killed at any time by Chrome.
@@ -34,8 +34,14 @@ import { setWriterDraft } from '@/lib/aiWriter';
 
 // Renew the auth token twice a day so sessions never hard-expire server-side.
 const AUTH_REFRESH_ALARM = 'ks-auth-refresh';
+const MAINTENANCE_ALARM = 'ks-maintenance';
 function scheduleAuthRefresh(): void {
   browser.alarms.create(AUTH_REFRESH_ALARM, { periodInMinutes: 720, delayInMinutes: 5 });
+}
+function scheduleMaintenance(): void {
+  // Chrome startup should paint Home/popup first. Queue recovery, migration,
+  // and overlay repair are durable maintenance and can safely wait 30s.
+  browser.alarms.create(MAINTENANCE_ALARM, { delayInMinutes: 0.5 });
 }
 
 export default defineBackground(() => {
@@ -49,23 +55,19 @@ export default defineBackground(() => {
     await ensureContextMenu();
     const settings = await getSettings();
     await applyActionBehavior(settings.primarySurface);
-    await flushQueue().catch(() => {});
     scheduleQueue();
     scheduleWatchAlarm();
     scheduleAuthRefresh();
-    await runMigration();
-    syncHomeOverlay().catch(() => {});
+    scheduleMaintenance();
   });
 
   browser.runtime.onStartup?.addListener(async () => {
     const settings = await getSettings();
     await applyActionBehavior(settings.primarySurface);
-    await flushQueue().catch(() => {});
     scheduleQueue();
     scheduleWatchAlarm();
     scheduleAuthRefresh();
-    await runMigration();
-    syncHomeOverlay().catch(() => {});
+    scheduleMaintenance();
   });
 
   // Batch AI queue + Living Bookmarks scheduler. Alarms are re-registered on
@@ -87,6 +89,11 @@ export default defineBackground(() => {
       // (the refresh itself is throttled through storage, so this is cheap).
       const backend = await getBackend().catch(() => null);
       await backend?.renewAuthToken?.().catch(() => {});
+    }
+    if (alarm.name === MAINTENANCE_ALARM) {
+      await flushQueue().catch(() => {});
+      await runMigration().catch(() => {});
+      await syncHomeOverlay().catch(() => {});
     }
   });
 
@@ -164,21 +171,33 @@ export default defineBackground(() => {
   });
 
   // ── Ambient Recall (Phase 2) ──────────────────────────────────────────────
+  const pageIntelligenceTimers = new Map<number, ReturnType<typeof setTimeout>>();
+  const schedulePageIntelligence = (tabId: number, url: string, delay = 450) => {
+    const previous = pageIntelligenceTimers.get(tabId);
+    if (previous) clearTimeout(previous);
+    const timer = setTimeout(() => {
+      pageIntelligenceTimers.delete(tabId);
+      runRecall(tabId, url).catch(() => {});
+      checkOnVisit(tabId, url).catch(() => {});
+    }, delay);
+    pageIntelligenceTimers.set(tabId, timer);
+  };
   // On navigation, match the page against the library — locally only — and
   // show a per-tab badge. Debounced per tab+URL; opt-in via Settings.
   browser.webNavigation?.onCompleted.addListener((details) => {
     if (details.frameId !== 0) return;
-    runRecall(details.tabId, details.url).catch(() => {});
-    // JS-rendered watched pages re-check from the live DOM on visit.
-    checkOnVisit(details.tabId, details.url).catch(() => {});
+    schedulePageIntelligence(details.tabId, details.url);
+  });
+  browser.webNavigation?.onHistoryStateUpdated.addListener((details) => {
+    if (details.frameId !== 0) return;
+    browser.tabs.sendMessage(details.tabId, { type: 'KS_PAGE_NAVIGATED', url: details.url }).catch(() => {});
+    schedulePageIntelligence(details.tabId, details.url, 300);
   });
   browser.tabs.onRemoved.addListener((tabId) => {
-    recallCache.getValue().then((cache) => {
-      if (cache[tabId]) {
-        delete cache[tabId];
-        recallCache.setValue(cache);
-      }
-    });
+    const intelligenceTimer = pageIntelligenceTimers.get(tabId);
+    if (intelligenceTimer) clearTimeout(intelligenceTimer);
+    pageIntelligenceTimers.delete(tabId);
+    mutateRecallCache((cache) => { delete cache[tabId]; }).catch(() => {});
     // Stripe Checkout/Portal tab closed — re-read entitlements. The redirect
     // itself proves nothing (the webhook is the source of truth), so this is
     // just "a good moment to check," backstopped by the poll below.
@@ -194,6 +213,16 @@ export default defineBackground(() => {
 // Per-tab recall results; session-scoped so the side panel can read them and
 // nothing persists across browser restarts.
 const recallCache = storage.defineItem<Record<number, RecallResult>>('session:recall_cache', { fallback: {} });
+let recallCacheMutation: Promise<unknown> = Promise.resolve();
+function mutateRecallCache(mutator: (cache: Record<number, RecallResult>) => void): Promise<void> {
+  const next = recallCacheMutation.then(async () => {
+    const cache = await recallCache.getValue();
+    mutator(cache);
+    await recallCache.setValue(cache);
+  });
+  recallCacheMutation = next.catch(() => undefined);
+  return next;
+}
 
 async function runRecall(tabId: number, url: string): Promise<void> {
   if (!(await recallAllowed(url))) return;
@@ -216,9 +245,9 @@ async function runRecall(tabId: number, url: string): Promise<void> {
   }
 
   const result = await matchPage({ url, title: tab.title, description });
-  const fresh = await recallCache.getValue();
-  fresh[tabId] = result;
-  await recallCache.setValue(fresh);
+  const liveTab = await browser.tabs.get(tabId).catch(() => null);
+  if (!liveTab || liveTab.url !== url) return;
+  await mutateRecallCache((cache) => { cache[tabId] = result; });
 
   // Badge: count of related saves; exact matches get the distinct green.
   try {
@@ -233,11 +262,69 @@ async function runRecall(tabId: number, url: string): Promise<void> {
   }
 }
 
-async function handleMessage(msg: Message, sender?: { tab?: { id?: number; windowId?: number } }): Promise<unknown> {
-  await getBackend(); // restore session
+async function handleMessage(msg: Message, sender?: { tab?: { id?: number; windowId?: number; url?: string } }): Promise<unknown> {
+  // Do not initialize PocketBase for UI-only messages such as Open URL/Popup.
+  // Data facades initialize the backend only in the cases that actually need it.
   switch (msg.type) {
     case 'PING':
       return { ok: true };
+
+    case 'KS_HIGHLIGHT_CREATE': {
+      if (sender?.tab?.url && !sameCanonicalUrl(sender.tab.url, msg.url)) {
+        return { ok: false, error: 'The page changed before the highlight was saved.' };
+      }
+      const highlight = await createHighlight({
+        url: msg.url,
+        text: msg.text.slice(0, 20_000),
+        color: msg.color,
+        anchor: msg.anchor,
+      });
+      return { ok: true, highlight };
+    }
+
+    case 'KS_HIGHLIGHTS_FOR_URL': {
+      if (sender?.tab?.url && !sameCanonicalUrl(sender.tab.url, msg.url)) {
+        return { ok: false, highlights: [], error: 'The page changed.' };
+      }
+      const highlights = await highlightsForUrl(msg.url);
+      return { ok: true, highlights };
+    }
+
+    case 'KS_QUICKBAR_BOOTSTRAP': {
+      const requestUrl = msg.url;
+      if (sender?.tab?.url && !sameCanonicalUrl(sender.tab.url, requestUrl)) {
+        return { ok: false, loggedIn: false, existing: null, url: requestUrl, error: 'The page changed.' };
+      }
+      const backend = await getBackend();
+      const loggedIn = await backend.isLoggedIn();
+      const existing = loggedIn ? await findByUrl(requestUrl).catch(() => null) : null;
+      return { ok: true, loggedIn, existing, url: requestUrl };
+    }
+
+    case 'KS_QUICKBAR_COLLECTIONS': {
+      const backend = await getBackend();
+      if (!(await backend.isLoggedIn())) return { ok: false, collections: [], counts: {}, error: 'Sign in first.' };
+      const [collections, counts] = await Promise.all([listCollections(), countByCollection()]);
+      return { ok: true, collections, counts };
+    }
+
+    case 'KS_QUICKBAR_SEARCH': {
+      const backend = await getBackend();
+      if (!(await backend.isLoggedIn())) return { ok: false, items: [], error: 'Sign in first.' };
+      const query = msg.query.trim().slice(0, 240);
+      const requested = Number.isFinite(msg.perPage) ? Number(msg.perPage) : 50;
+      const perPage = Math.max(1, Math.min(msg.unsorted ? 300 : 60, requested));
+      let items = await searchBookmarks(query, { collection: msg.collection, perPage });
+      if (msg.unsorted) items = items.filter((item) => !item.collection);
+      return { ok: true, items: items.filter((item) => !item.homeOnly).slice(0, 50) };
+    }
+
+    case 'KS_QUICKBAR_CREATE_COLLECTION': {
+      const name = msg.name.trim().slice(0, 80);
+      if (!name) return { ok: false, error: 'Add a collection name.' };
+      const collection = await createCollection({ name });
+      return { ok: true, collection };
+    }
 
     case 'CAPTURE_SCREENSHOT': {
       const dataUrl = await captureVisibleTab();
@@ -716,6 +803,18 @@ async function extractMeta(tabId?: number): Promise<PageMeta | null> {
 // Map of "Filed: …" notification id → save id (session-scoped; survives SW restarts).
 const filedNotifs = storage.defineItem<Record<string, string>>('session:filed_notifs', { fallback: {} });
 
+async function settleWithin<T>(promise: Promise<T>, timeoutMs: number, fallback: T): Promise<T> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    return await Promise.race([
+      promise.catch(() => fallback),
+      new Promise<T>((resolve) => { timer = setTimeout(() => resolve(fallback), timeoutMs); }),
+    ]);
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
+}
+
 // Full save pipeline used by the context menu + keyboard shortcut.
 // Phase 1 UX: dedupe → INSTANT save → background AI pass (extract/embed/file)
 // → "Filed: …" notification with Undo. The user never waits on AI.
@@ -779,7 +878,10 @@ async function saveTab(
         }
       })()
     : Promise.resolve(undefined);
-  const [meta, screenshotBlob] = await Promise.all([metaPromise, screenshotPromise]);
+  const [meta, screenshotBlob] = await Promise.all([
+    settleWithin(metaPromise, 1800, null),
+    settleWithin(screenshotPromise, 1800, undefined),
+  ]);
 
   const input = {
     url: tab.url,
@@ -808,6 +910,16 @@ async function saveTab(
         'Upgrade to Pro for unlimited cloud bookmarks, the full Capture Studio, and 25 watches.',
       );
       return { ok: false, status: 'blocked', error: 'Free plan bookmark limit reached.' };
+    }
+    const status = (error as { status?: number })?.status ?? 0;
+    const transient = status === 0 || status === 408 || status === 429 || status >= 500;
+    if (!transient) {
+      await flash('!', '#dc2626');
+      return {
+        ok: false,
+        status: 'blocked',
+        error: (error as Error)?.message || 'The server rejected this save.',
+      };
     }
     await enqueueSave(input);
     await flash('…', '#f59e0b');

@@ -1,10 +1,8 @@
 import { getSettings, setSettings } from './settings';
-import { getBackend } from './backend';
-import { listCollections, createCollection, findByUrl, searchBookmarks, countByCollection } from './bookmarks';
 import { send, type SaveCurrentPageResult } from './messaging';
 import { ACCENTS } from './theme';
 import { clampQuickBarTop, quickBarFractionFromTop, quickBarSideForPointer } from './uiContext';
-import { normalizeQuickBarColor, normalizeQuickBarOrder, normalizeQuickBarUrl, rememberRecentCollection, reorderQuickBarAction, splitRecentCollections } from './quickbarConfig';
+import { QUICKBAR_ICON_DEFAULT, QUICKBAR_WIDTH_DEFAULT, normalizeQuickBarColor, normalizeQuickBarIconSize, normalizeQuickBarOrder, normalizeQuickBarUrl, normalizeQuickBarWidth, rememberRecentCollection, reorderQuickBarAction, splitRecentCollections } from './quickbarConfig';
 import { type Bookmark, type Collection, type QuickBarAction, type QuickBarCustomIcon, type QuickBarSide, type Settings } from './types';
 import { type RecallItem, type RecallResult } from './recall';
 
@@ -13,11 +11,30 @@ import { type RecallItem, type RecallResult } from './recall';
 // to a visible edge tab instead of disappearing.
 export interface QuickBarApi {
   openFolders: () => void;
+  refreshPage: () => void;
   update: (settings: Settings) => void;
   destroy: () => void;
 }
 
 type QuickBarHost = HTMLDivElement & { __keepsakeApi?: QuickBarApi };
+
+interface QuickBarBootstrapResult {
+  ok?: boolean;
+  loggedIn: boolean;
+  existing?: Bookmark | null;
+  url: string;
+  error?: string;
+}
+
+interface QuickBarCollectionsResult {
+  ok?: boolean;
+  collections?: Collection[];
+  counts?: Record<string, number>;
+  error?: string;
+}
+
+interface QuickBarSearchResult { ok?: boolean; items?: Bookmark[]; error?: string }
+interface QuickBarCreateCollectionResult { ok?: boolean; collection?: Collection; error?: string }
 
 const SVG = {
   grip: '<circle cx="9" cy="6" r="1.4"/><circle cx="15" cy="6" r="1.4"/><circle cx="9" cy="12" r="1.4"/><circle cx="15" cy="12" r="1.4"/><circle cx="9" cy="18" r="1.4"/><circle cx="15" cy="18" r="1.4"/>',
@@ -52,18 +69,22 @@ function setButtonBusy(button: HTMLButtonElement, busy: boolean) {
   button.style.pointerEvents = busy ? 'none' : '';
 }
 
-export async function mountQuickBar(): Promise<QuickBarApi | null> {
+export async function mountQuickBar(initialSettings?: Settings): Promise<QuickBarApi | null> {
   const existing = document.getElementById('keepsake-quickbar') as QuickBarHost | null;
   if (existing?.__keepsakeApi) return existing.__keepsakeApi;
   existing?.remove();
 
-  const settings = await getSettings();
+  const settings = initialSettings ?? await getSettings();
   let currentSettings = settings;
+  let railWidth = normalizeQuickBarWidth(settings.quickBarWidth);
+  let actionIconSize = normalizeQuickBarIconSize(settings.quickBarIconSize);
   let accent = normalizeQuickBarColor(settings.quickBarColor) || ACCENTS.find((item) => item.key === settings.accent)?.swatch || '#2563eb';
 
   const host = document.createElement('div') as QuickBarHost;
   host.id = 'keepsake-quickbar';
   host.style.setProperty('--ks-accent', accent);
+  host.style.setProperty('--ks-rail-width', `${railWidth}px`);
+  host.style.setProperty('--ks-icon-size', `${actionIconSize}px`);
   const shadow = host.attachShadow({ mode: 'open' });
   (document.documentElement || document.body).appendChild(host);
 
@@ -73,27 +94,28 @@ export async function mountQuickBar(): Promise<QuickBarApi | null> {
     * { box-sizing: border-box; }
     button { font: inherit; }
     .rail { position: fixed; z-index: 2147483646; display: flex; flex-direction: column;
-      align-items: center; gap: 3px; padding: 7px 5px; color: #fff;
+      align-items: center; gap: 3px; width: var(--ks-rail-width, 50px); padding: 7px 5px; color: #fff;
       background: linear-gradient(180deg, rgba(32,34,44,.96), rgba(18,20,27,.98));
       backdrop-filter: blur(12px) saturate(1.3); -webkit-backdrop-filter: blur(12px) saturate(1.3);
       border: 1px solid rgba(255,255,255,.12); box-shadow: 0 12px 34px rgba(0,0,0,.38),
       0 2px 8px rgba(0,0,0,.25), inset 0 1px 0 rgba(255,255,255,.07);
       font-family: ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
-      opacity: .86; transition: opacity .16s, filter .16s; }
+      opacity: .86; transition: opacity .16s, filter .16s, width .08s ease; }
+    .rail.resizing { opacity: 1; transition: none; user-select: none; }
     .rail.right { right: 0; left: auto; border-right: none; border-radius: 16px 0 0 16px; }
     .rail.left { left: 0; right: auto; border-left: none; border-radius: 0 16px 16px 0; }
     .rail:hover, .rail.dragging { opacity: 1; filter: brightness(1.04); }
-    .grip { width: 38px; height: 22px; display: grid; place-items: center; color: rgba(255,255,255,.55);
+    .grip { width: 100%; height: 22px; display: grid; place-items: center; color: rgba(255,255,255,.55);
       cursor: grab; border-radius: 8px; touch-action: none; user-select: none; }
     .grip:hover { color: #fff; background: rgba(255,255,255,.1); }
     .grip:active { cursor: grabbing; }
-    .mini { width: 38px; height: 22px; display: grid; place-items: center; color: rgba(255,255,255,.56);
+    .mini { width: 100%; height: 22px; display: grid; place-items: center; color: rgba(255,255,255,.56);
       background: transparent; border: none; border-radius: 8px; cursor: pointer;
       transition: color .12s, background .12s; }
     .mini:hover { color: #fff; background: rgba(255,255,255,.12); }
     .hide { opacity: .65; }
     .rail:not(:hover) .hide { opacity: .25; }
-    .btn { width: 38px; height: 38px; display: grid; place-items: center; color: rgba(255,255,255,.92);
+    .btn { width: 100%; height: 38px; display: grid; place-items: center; color: rgba(255,255,255,.92);
       background: transparent; border: none; border-radius: 11px; cursor: pointer;
       transition: background .12s, transform .12s, color .12s, box-shadow .12s; }
     .btn:hover { background: rgba(255,255,255,.13); color: #fff; transform: scale(1.06); }
@@ -112,14 +134,24 @@ export async function mountQuickBar(): Promise<QuickBarApi | null> {
     [data-tooltip]:hover::after, [data-tooltip]:focus-visible::after { opacity: 1; visibility: visible;
       transform: translate(0,-50%); transition-delay: .08s; transition-property: opacity, transform, visibility; }
     .rail.dragging [data-tooltip]::after, .dragging-action::after { display: none; }
-    .actions { display: flex; flex-direction: column; align-items: center; gap: 3px; }
+    .actions { width: 100%; display: flex; flex-direction: column; align-items: center; gap: 3px; }
+    .btn svg { width: var(--ks-icon-size, 20px); height: var(--ks-icon-size, 20px); max-width: calc(100% - 4px); max-height: calc(100% - 4px); }
+    .mini svg, .grip svg { width: calc(var(--ks-icon-size, 20px) - 3px); height: calc(var(--ks-icon-size, 20px) - 3px); }
+    .resize-handle { position: absolute; top: 14px; bottom: 14px; width: 8px; z-index: 3; cursor: ew-resize; touch-action: none; opacity: 0; transition: opacity .12s; }
+    .resize-handle::after { content: ''; position: absolute; top: 35%; bottom: 35%; width: 2px; border-radius: 99px; background: rgba(255,255,255,.5); }
+    .rail.right .resize-handle { left: -4px; }
+    .rail.right .resize-handle::after { left: 3px; }
+    .rail.left .resize-handle { right: -4px; }
+    .rail.left .resize-handle::after { right: 3px; }
+    .rail:hover .resize-handle, .rail.resizing .resize-handle, .resize-handle:focus-visible { opacity: .9; }
+    .resize-handle:focus-visible { outline: 2px solid var(--ks-accent); outline-offset: 1px; }
     .action[draggable="true"] { cursor: grab; }
     .action.dragging-action { opacity: .42; transform: scale(.9); }
     .action.drop-target { outline: 2px solid var(--ks-accent); outline-offset: 2px; }
     .rail.compact { padding: 5px 4px; gap: 2px; border-radius: 13px 0 0 13px; }
     .rail.left.compact { border-radius: 0 13px 13px 0; }
-    .rail.compact .btn { width: 32px; height: 32px; border-radius: 9px; }
-    .rail.compact .mini, .rail.compact .grip { width: 32px; height: 19px; }
+    .rail.compact .btn { width: 100%; height: 32px; border-radius: 9px; }
+    .rail.compact .mini, .rail.compact .grip { width: 100%; height: 19px; }
     .btn.save { position: relative; color: #fff; background: linear-gradient(135deg, var(--ks-accent), var(--ks-accent));
       box-shadow: 0 3px 12px var(--ks-accent); }
     .btn.save:hover { filter: brightness(1.12); }
@@ -187,6 +219,7 @@ export async function mountQuickBar(): Promise<QuickBarApi | null> {
   const rail = document.createElement('div');
   rail.className = 'rail';
   rail.innerHTML = `
+    <div class="resize-handle" role="separator" tabindex="0" aria-orientation="vertical" aria-valuemin="34" aria-valuemax="86" aria-label="Resize Quick Bar horizontally" data-tooltip="Drag to resize width"></div>
     <button class="mini hide" type="button" aria-label="Hide Quick Bar" data-tooltip="Hide Quick Bar">${icon('close')}</button>
     <button class="mini collapse" type="button" aria-label="Collapse Quick Bar" data-tooltip="Collapse Quick Bar"></button>
     <div class="grip" role="button" tabindex="0" aria-label="Drag Quick Bar" data-tooltip="Drag or move sides">${icon('grip')}</div>
@@ -212,6 +245,7 @@ export async function mountQuickBar(): Promise<QuickBarApi | null> {
   tab.dataset.tooltip = 'Expand Quick Bar';
   shadow.appendChild(tab);
 
+  const resizeHandle = rail.querySelector('.resize-handle') as HTMLDivElement;
   const hideButton = rail.querySelector('.hide') as HTMLButtonElement;
   const collapseButton = rail.querySelector('.collapse') as HTMLButtonElement;
   const grip = rail.querySelector('.grip') as HTMLElement;
@@ -233,10 +267,13 @@ export async function mountQuickBar(): Promise<QuickBarApi | null> {
   let popover: HTMLDivElement | null = null;
   let destroyed = false;
   let dragging = false;
+  let resizing = false;
   let saving = false;
   let existingBookmark: Bookmark | null = null;
+  let authenticated: boolean | null = null;
+  let authCheckedAt = 0;
   let related: RecallItem[] = [];
-  let collectionCache: { items: Collection[]; at: number } | null = null;
+  let collectionCache: { items: Collection[]; counts: Record<string, number>; at: number } | null = null;
   let searchSequence = 0;
 
   const closePopover = () => {
@@ -270,8 +307,18 @@ export async function mountQuickBar(): Promise<QuickBarApi | null> {
     applyTop();
   };
 
+  const applySizing = () => {
+    railWidth = normalizeQuickBarWidth(railWidth);
+    actionIconSize = normalizeQuickBarIconSize(actionIconSize);
+    host.style.setProperty('--ks-rail-width', `${railWidth}px`);
+    host.style.setProperty('--ks-icon-size', `${actionIconSize}px`);
+    resizeHandle.setAttribute('aria-valuenow', String(railWidth));
+    applyTop();
+  };
+
   const applyAll = () => {
     applyEdge();
+    applySizing();
     applyCollapsed();
   };
 
@@ -304,6 +351,8 @@ export async function mountQuickBar(): Promise<QuickBarApi | null> {
     currentY = next.quickBarY;
     side = next.quickBarSide;
     collapsed = next.quickBarCollapsed;
+    railWidth = normalizeQuickBarWidth(next.quickBarWidth);
+    actionIconSize = normalizeQuickBarIconSize(next.quickBarIconSize);
     accent = normalizeQuickBarColor(next.quickBarColor) || ACCENTS.find((item) => item.key === next.accent)?.swatch || '#2563eb';
     host.style.setProperty('--ks-accent', accent);
     if (!next.recallEnabled) related = [];
@@ -354,6 +403,49 @@ export async function mountQuickBar(): Promise<QuickBarApi | null> {
 
   grip.addEventListener('pointerup', finishDrag);
   grip.addEventListener('pointercancel', finishDrag);
+
+  const finishResize = async () => {
+    if (!resizing) return;
+    resizing = false;
+    rail.classList.remove('resizing');
+    await setSettings({ quickBarWidth: railWidth });
+  };
+
+  resizeHandle.addEventListener('pointerdown', (event) => {
+    resizing = true;
+    rail.classList.add('resizing');
+    resizeHandle.setPointerCapture(event.pointerId);
+    closePopover();
+    event.preventDefault();
+    event.stopPropagation();
+  });
+  resizeHandle.addEventListener('pointermove', (event) => {
+    if (!resizing) return;
+    railWidth = normalizeQuickBarWidth(side === 'right' ? window.innerWidth - event.clientX : event.clientX);
+    applySizing();
+  });
+  resizeHandle.addEventListener('pointerup', finishResize);
+  resizeHandle.addEventListener('pointercancel', finishResize);
+  resizeHandle.addEventListener('dblclick', async () => {
+    railWidth = QUICKBAR_WIDTH_DEFAULT;
+    applySizing();
+    updateFromSettings(await setSettings({ quickBarWidth: railWidth }));
+  });
+  resizeHandle.addEventListener('keydown', (event) => {
+    let next = railWidth;
+    if (event.key === 'ArrowLeft') next += side === 'right' ? 2 : -2;
+    else if (event.key === 'ArrowRight') next += side === 'right' ? -2 : 2;
+    else if (event.key === 'Home') next = 34;
+    else if (event.key === 'End') next = 86;
+    else return;
+    event.preventDefault();
+    railWidth = normalizeQuickBarWidth(next);
+    applySizing();
+  });
+  resizeHandle.addEventListener('keyup', (event) => {
+    if (!['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(event.key)) return;
+    setSettings({ quickBarWidth: railWidth }).catch(() => {});
+  });
 
   let draggedAction: QuickBarAction | null = null;
   for (const button of [popupButton, searchButton, browseButton, aiButton, relatedButton, saveButton, folderButton, dashboardButton, customButton]) {
@@ -435,12 +527,21 @@ export async function mountQuickBar(): Promise<QuickBarApi | null> {
     shadow.appendChild(popover);
   }
 
+  async function refreshBootstrap(): Promise<boolean> {
+    const pageUrl = location.href;
+    const response = await send<QuickBarBootstrapResult>({ type: 'KS_QUICKBAR_BOOTSTRAP', url: pageUrl }).catch(() => null);
+    if (!response?.ok || response.url !== pageUrl || location.href !== pageUrl) return authenticated ?? false;
+    authenticated = response.loggedIn;
+    authCheckedAt = Date.now();
+    existingBookmark = response.loggedIn ? response.existing ?? null : null;
+    paintSave();
+    return response.loggedIn;
+  }
+
   async function loggedIn(): Promise<boolean> {
-    try {
-      return (await getBackend()).isLoggedIn();
-    } catch {
-      return false;
-    }
+    const ttl = authenticated ? 30_000 : 3_000;
+    if (authenticated != null && Date.now() - authCheckedAt < ttl) return authenticated;
+    return refreshBootstrap();
   }
 
   const saveIcon = icon('bookmark', true);
@@ -454,11 +555,26 @@ export async function mountQuickBar(): Promise<QuickBarApi | null> {
     saveButton.dataset.tooltip = existingBookmark ? 'Already saved — manage' : 'Save page';
   };
 
-  const loadCollections = async (): Promise<Collection[]> => {
-    if (collectionCache && Date.now() - collectionCache.at < 60_000) return collectionCache.items;
-    const items = await listCollections();
-    collectionCache = { items, at: Date.now() };
-    return items;
+  const loadCollectionData = async (): Promise<{ items: Collection[]; counts: Record<string, number> }> => {
+    if (collectionCache && Date.now() - collectionCache.at < 60_000) return collectionCache;
+    const response = await send<QuickBarCollectionsResult>({ type: 'KS_QUICKBAR_COLLECTIONS' }).catch(() => null);
+    if (!response?.ok) throw new Error(response?.error || 'Collections are unavailable.');
+    collectionCache = { items: response.collections ?? [], counts: response.counts ?? {}, at: Date.now() };
+    return collectionCache;
+  };
+
+  const loadCollections = async (): Promise<Collection[]> => (await loadCollectionData()).items;
+
+  const searchVault = async (query: string, options: { collection?: string; unsorted?: boolean; perPage?: number } = {}) => {
+    const response = await send<QuickBarSearchResult>({
+      type: 'KS_QUICKBAR_SEARCH',
+      query,
+      collection: options.collection,
+      unsorted: options.unsorted,
+      perPage: options.perPage,
+    }).catch(() => null);
+    if (!response?.ok) throw new Error(response?.error || 'Search is unavailable.');
+    return response.items ?? [];
   };
 
   const collectionLabel = async (id?: string): Promise<string> => {
@@ -476,8 +592,7 @@ export async function mountQuickBar(): Promise<QuickBarApi | null> {
   };
 
   const refreshExisting = async () => {
-    existingBookmark = await findByUrl(location.href).catch(() => null);
-    paintSave();
+    await refreshBootstrap();
   };
 
   async function quickSave(collection?: string, force = false, explicitCollection = false) {
@@ -507,11 +622,15 @@ export async function mountQuickBar(): Promise<QuickBarApi | null> {
         return;
       }
       if (response.status === 'queued') {
+        authenticated = true;
+        authCheckedAt = Date.now();
         paintSave();
         showMessage('Saved offline — Keepsake will sync it automatically when your connection returns.');
         return;
       }
 
+      authenticated = true;
+      authCheckedAt = Date.now();
       await rememberCollection(collection || response.collection);
       await refreshExisting();
       saveButton.classList.add('ok');
@@ -653,10 +772,11 @@ export async function mountQuickBar(): Promise<QuickBarApi | null> {
       }
       create.disabled = true;
       try {
-        const created = await createCollection({ name });
+        const response = await send<QuickBarCreateCollectionResult>({ type: 'KS_QUICKBAR_CREATE_COLLECTION', name }).catch(() => null);
+        if (!response?.ok || !response.collection) throw new Error(response?.error || 'Collection creation failed.');
         collectionCache = null;
-        if (moveMode) await moveExisting(created.id);
-        else await quickSave(created.id, false, true);
+        if (moveMode) await moveExisting(response.collection.id);
+        else await quickSave(response.collection.id, false, true);
       } catch {
         showMessage('The collection could not be created. Try again.');
       } finally {
@@ -829,7 +949,7 @@ export async function mountQuickBar(): Promise<QuickBarApi | null> {
     };
 
     try {
-      const [collections, counts] = await Promise.all([loadCollections(), countByCollection()]);
+      const { items: collections, counts } = await loadCollectionData();
       if (popover !== panel) return;
       list.replaceChildren();
       addCollectionRow('All bookmarks', accent, undefined);
@@ -881,12 +1001,13 @@ export async function mountQuickBar(): Promise<QuickBarApi | null> {
       const current = ++sequence;
       const query = input.value.trim();
       results.innerHTML = '<div class="empty">Loading bookmarks…</div>';
-      let items = await searchBookmarks(query, {
-        collection: collectionId,
-        perPage: unsorted ? 300 : 50,
-      }).catch(() => []);
-      if (unsorted) items = items.filter((item) => !item.collection);
-      items = items.filter((item) => !item.homeOnly).slice(0, 50);
+      let items: Bookmark[];
+      try {
+        items = await searchVault(query, { collection: collectionId, unsorted, perPage: unsorted ? 300 : 50 });
+      } catch {
+        if (popover === panel && current === sequence) results.innerHTML = '<div class="empty">Bookmarks could not be loaded. Try again.</div>';
+        return;
+      }
       if (popover !== panel || current !== sequence) return;
       addBookmarkRows(results, items, query ? 'No matching bookmarks.' : 'This collection is empty.');
       if (items.length) {
@@ -929,9 +1050,15 @@ export async function mountQuickBar(): Promise<QuickBarApi | null> {
       const sequence = ++searchSequence;
       const query = input.value.trim();
       results.innerHTML = '<div class="empty">Searching…</div>';
-      const items = await searchBookmarks(query, { perPage: 8 }).catch(() => []);
+      let items: Bookmark[];
+      try {
+        items = await searchVault(query, { perPage: 8 });
+      } catch {
+        if (sequence === searchSequence && popover === panel) results.innerHTML = '<div class="empty">Search is unavailable. Try again.</div>';
+        return;
+      }
       if (sequence !== searchSequence || popover !== panel) return;
-      addBookmarkRows(results, items.filter((item) => !item.homeOnly), query ? 'No matching saves.' : 'Your library is empty.');
+      addBookmarkRows(results, items, query ? 'No matching saves.' : 'Your library is empty.');
     };
     input.addEventListener('input', () => {
       window.clearTimeout(timer);
@@ -1004,7 +1131,7 @@ export async function mountQuickBar(): Promise<QuickBarApi | null> {
 
     const hint = document.createElement('p');
     hint.className = 'hint';
-    hint.textContent = 'Drag any action button directly on the dock to reorder it.';
+    hint.textContent = 'Drag actions to reorder. Drag the dock’s inner edge to resize it horizontally.';
     form.appendChild(hint);
 
     const sizeWrap = document.createElement('div');
@@ -1021,6 +1148,42 @@ export async function mountQuickBar(): Promise<QuickBarApi | null> {
       sizeWrap.appendChild(button);
     }
     form.appendChild(sizeWrap);
+
+    const widthLabel = document.createElement('label');
+    const widthText = document.createElement('span');
+    widthText.textContent = `Dock width — ${railWidth}px`;
+    const widthInput = document.createElement('input');
+    widthInput.type = 'range';
+    widthInput.min = '34';
+    widthInput.max = '86';
+    widthInput.step = '1';
+    widthInput.value = String(railWidth);
+    widthInput.oninput = () => {
+      railWidth = normalizeQuickBarWidth(widthInput.value);
+      widthText.textContent = `Dock width — ${railWidth}px`;
+      applySizing();
+    };
+    widthInput.onchange = async () => updateFromSettings(await setSettings({ quickBarWidth: railWidth }));
+    widthLabel.append(widthText, widthInput);
+    form.appendChild(widthLabel);
+
+    const iconLabel = document.createElement('label');
+    const iconText = document.createElement('span');
+    iconText.textContent = `Icon size — ${actionIconSize}px`;
+    const iconInput = document.createElement('input');
+    iconInput.type = 'range';
+    iconInput.min = '14';
+    iconInput.max = '26';
+    iconInput.step = '1';
+    iconInput.value = String(actionIconSize);
+    iconInput.oninput = () => {
+      actionIconSize = normalizeQuickBarIconSize(iconInput.value);
+      iconText.textContent = `Icon size — ${actionIconSize}px`;
+      applySizing();
+    };
+    iconInput.onchange = async () => updateFromSettings(await setSettings({ quickBarIconSize: actionIconSize }));
+    iconLabel.append(iconText, iconInput);
+    form.appendChild(iconLabel);
 
     const colorLabel = document.createElement('label');
     colorLabel.textContent = 'Dock color';
@@ -1089,6 +1252,14 @@ export async function mountQuickBar(): Promise<QuickBarApi | null> {
       updateFromSettings(await setSettings({ quickBarOrder: ['popup', 'search', 'browse', 'ai', 'related', 'save', 'folder', 'dashboard', 'custom'] }));
       openCustomize();
     };
+    const resetSize = document.createElement('button');
+    resetSize.type = 'button';
+    resetSize.className = 'chip';
+    resetSize.textContent = 'Reset size';
+    resetSize.onclick = async () => {
+      updateFromSettings(await setSettings({ quickBarWidth: QUICKBAR_WIDTH_DEFAULT, quickBarIconSize: QUICKBAR_ICON_DEFAULT }));
+      openCustomize();
+    };
     const save = document.createElement('button');
     save.type = 'button';
     save.className = 'primary-small';
@@ -1107,7 +1278,7 @@ export async function mountQuickBar(): Promise<QuickBarApi | null> {
       }));
       closePopover();
     };
-    buttons.append(reset, save);
+    buttons.append(reset, resetSize, save);
     form.appendChild(buttons);
     popover.appendChild(form);
     shadow.appendChild(popover);
@@ -1127,15 +1298,31 @@ export async function mountQuickBar(): Promise<QuickBarApi | null> {
   customButton.onclick = openCustomShortcut;
   customizeButton.onclick = openCustomize;
 
-  if (await loggedIn()) {
-    await refreshExisting();
-    if (currentSettings.recallEnabled) window.setTimeout(() => loadRelated().catch(() => {}), 700);
-  } else {
+  const hydratePageState = async () => {
+    const pageUrl = location.href;
+    const yes = await refreshBootstrap();
+    if (!yes || destroyed || location.href !== pageUrl) return;
+    if (currentSettings.recallEnabled) window.setTimeout(() => loadRelated().catch(() => {}), 450);
+  };
+
+  const refreshPage = () => {
+    closePopover();
+    existingBookmark = null;
+    related = [];
+    searchSequence++;
     paintSave();
-  }
+    renderActions();
+    window.setTimeout(() => hydratePageState().catch(() => {}), 0);
+  };
+
+  // Paint immediately. Auth, duplicate lookup, and Recall hydrate after the
+  // dock is already interactive so a slow cloud backend never delays the UI.
+  paintSave();
+  window.setTimeout(() => hydratePageState().catch(() => {}), 0);
 
   const api: QuickBarApi = {
     openFolders,
+    refreshPage,
     update: updateFromSettings,
     destroy: () => {
       if (destroyed) return;

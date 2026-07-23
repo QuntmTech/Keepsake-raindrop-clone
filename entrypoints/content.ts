@@ -1,13 +1,11 @@
-import { getBackend } from '@/lib/backend';
 import { getSettings, watchSettings } from '@/lib/settings';
-import { createHighlight, highlightsForUrl, parseAnchor } from '@/lib/highlights';
 import { mountQuickBar, type QuickBarApi } from '@/lib/quickbar';
 import {
   type AiSelectionReplaceResult,
   type AiSelectionResult,
   type Message,
 } from '@/lib/messaging';
-import { type HighlightColor, type TextQuoteAnchor } from '@/lib/types';
+import { type Highlight, type HighlightColor, type TextQuoteAnchor } from '@/lib/types';
 
 type TextInput = HTMLInputElement | HTMLTextAreaElement;
 
@@ -166,13 +164,13 @@ function undoCapturedReplacement(): AiSelectionReplaceResult {
 // selected-text AI actions, and robust quote-based highlights.
 export default defineContentScript({
   matches: ['<all_urls>'],
-  runAt: 'document_idle',
+  runAt: 'document_end',
 
-  async main() {
-    // Authentication/backend startup must never prevent the in-page control from
-    // mounting. The Quick Bar handles signed-out and offline states itself.
-    await getBackend().catch(() => null);
+  async main(ctx) {
+    // Read only the tiny synced settings record before painting. Backend/auth
+    // startup is deferred inside the Quick Bar and can never block the page UI.
     const settings = await getSettings();
+    let latestSettings = settings;
 
     let quickBarEnabled = settings.enableQuickBar;
     let quickBar: QuickBarApi | null = null;
@@ -182,7 +180,7 @@ export default defineContentScript({
       if (!quickBarEnabled) return null;
       if (quickBar && document.getElementById('keepsake-quickbar')) return quickBar;
       if (mounting) return mounting;
-      mounting = mountQuickBar()
+      mounting = mountQuickBar(latestSettings)
         .then((api) => {
           quickBar = api;
           return api;
@@ -194,11 +192,21 @@ export default defineContentScript({
       return mounting;
     };
 
-    if (quickBarEnabled) await ensureQuickBar();
+    if (quickBarEnabled) ensureQuickBar().catch(() => {});
 
-    browser.runtime.onMessage.addListener((message: Message) => {
+    const onRuntimeMessage = (message: Message) => {
       if (message.type === 'OPEN_QUICKBAR') {
         ensureQuickBar().then((api) => api?.openFolders()).catch(() => {});
+        return undefined;
+      }
+      if (message.type === 'KS_PAGE_NAVIGATED') {
+        capturedSelection = null;
+        selectionUndo = null;
+        quickBar?.refreshPage();
+        if (latestSettings.enableHighlights) {
+          clearAppliedHighlights();
+          ctx.setTimeout(() => reapplyHighlights().catch(() => {}), 300);
+        }
         return undefined;
       }
       if (message.type === 'KS_AI_SELECTION_GET') return Promise.resolve(selectionResult());
@@ -207,16 +215,23 @@ export default defineContentScript({
       }
       if (message.type === 'KS_AI_SELECTION_UNDO') return Promise.resolve(undoCapturedReplacement());
       return undefined;
-    });
+    };
+    browser.runtime.onMessage.addListener(onRuntimeMessage);
+    ctx.onInvalidated(() => browser.runtime.onMessage.removeListener(onRuntimeMessage));
 
-    const rememberSoon = () => window.setTimeout(() => rememberSelection(), 0);
-    document.addEventListener('selectionchange', rememberSelection, true);
-    document.addEventListener('mouseup', rememberSoon, true);
-    document.addEventListener('keyup', rememberSoon, true);
-    document.addEventListener('focusin', rememberSoon, true);
-    document.addEventListener('input', rememberSoon, true);
+    let rememberTimer = 0;
+    const rememberSoon = () => {
+      window.clearTimeout(rememberTimer);
+      rememberTimer = ctx.setTimeout(() => rememberSelection(), 0);
+    };
+    ctx.addEventListener(document, 'selectionchange', rememberSelection, true);
+    ctx.addEventListener(document, 'mouseup', rememberSoon, true);
+    ctx.addEventListener(document, 'keyup', rememberSoon, true);
+    ctx.addEventListener(document, 'focusin', rememberSoon, true);
+    ctx.addEventListener(document, 'input', rememberSoon, true);
 
-    watchSettings(async (next) => {
+    const unwatchSettings = watchSettings(async (next) => {
+      latestSettings = next;
       quickBarEnabled = next.enableQuickBar;
       if (!quickBarEnabled) {
         quickBar?.destroy();
@@ -226,6 +241,7 @@ export default defineContentScript({
       const api = await ensureQuickBar();
       api?.update(next);
     });
+    ctx.onInvalidated(unwatchSettings);
 
     // Some highly dynamic sites replace documentElement children. If they remove
     // the host, clean up stale listeners and remount automatically.
@@ -237,10 +253,18 @@ export default defineContentScript({
     });
     observer.observe(document.documentElement, { childList: true });
 
+    ctx.onInvalidated(() => {
+      observer.disconnect();
+      quickBar?.destroy();
+      quickBar = null;
+    });
+
     if (!settings.enableHighlights) return;
 
     injectStyles();
-    await reapplyHighlights();
+    // Rebuilding quote anchors walks page text; keep it off the critical render
+    // path and let the page/Quick Bar become interactive first.
+    ctx.setTimeout(() => reapplyHighlights().catch(() => {}), 350);
 
     let toolbar: HTMLDivElement | null = null;
     const closeToolbar = () => {
@@ -248,13 +272,13 @@ export default defineContentScript({
       toolbar = null;
     };
 
-    document.addEventListener('mousedown', (event) => {
+    ctx.addEventListener(document, 'mousedown', (event) => {
       if (toolbar && !toolbar.contains(event.target as Node)) closeToolbar();
     });
 
-    document.addEventListener('mouseup', (event) => {
+    ctx.addEventListener(document, 'mouseup', (event) => {
       if (toolbar && toolbar.contains(event.target as Node)) return;
-      setTimeout(() => {
+      ctx.setTimeout(() => {
         const selection = window.getSelection();
         const text = selection?.toString().trim();
         if (!text || !selection || selection.rangeCount === 0) {
@@ -370,8 +394,9 @@ function wrapRange(start: number, length: number, segs: Seg[], full: string, bac
 function buildToolbar(rect: DOMRect, onPick: (color: HighlightColor) => void): HTMLDivElement {
   const bar = document.createElement('div');
   bar.className = 'ks-toolbar';
-  bar.style.top = `${window.scrollY + rect.top - 46}px`;
-  bar.style.left = `${window.scrollX + rect.left}px`;
+  const toolbarWidth = 150;
+  bar.style.top = `${Math.max(8, rect.top - 46)}px`;
+  bar.style.left = `${Math.max(8, Math.min(rect.left, window.innerWidth - toolbarWidth - 8))}px`;
   (Object.keys(COLORS) as HighlightColor[]).forEach((color) => {
     const dot = document.createElement('button');
     dot.className = 'ks-dot';
@@ -387,35 +412,51 @@ function buildToolbar(rect: DOMRect, onPick: (color: HighlightColor) => void): H
   return bar;
 }
 
-async function saveSelection(text: string, anchor: TextQuoteAnchor, color: HighlightColor) {
-  const { text: full, segs } = buildIndex();
-  const start = locate(full, anchor);
-  if (start >= 0) wrapRange(start, text.length, segs, full, COLORS[color]);
-  try {
-    await createHighlight({ url: location.href, text, color, anchor });
-  } catch {
-    /* visual highlight remains for this session */
+function parseAnchor(raw?: string): TextQuoteAnchor | null {
+  if (!raw) return null;
+  try { return JSON.parse(raw) as TextQuoteAnchor; } catch { return null; }
+}
+
+function clearAppliedHighlights() {
+  for (const mark of document.querySelectorAll('mark.ks-highlight')) {
+    const parent = mark.parentNode;
+    mark.replaceWith(document.createTextNode(mark.textContent ?? ''));
+    parent?.normalize();
   }
 }
 
+async function saveSelection(text: string, anchor: TextQuoteAnchor, color: HighlightColor) {
+  const pageUrl = location.href;
+  const { text: full, segs } = buildIndex();
+  const start = locate(full, anchor);
+  if (start >= 0) wrapRange(start, text.length, segs, full, COLORS[color]);
+  await browser.runtime.sendMessage({
+    type: 'KS_HIGHLIGHT_CREATE',
+    url: pageUrl,
+    text,
+    color,
+    anchor,
+  }).catch(() => null);
+}
+
 async function reapplyHighlights() {
-  try {
-    const saved = await highlightsForUrl(location.href);
-    for (const highlight of saved) {
-      const { text: full, segs } = buildIndex();
-      const anchor = parseAnchor(highlight.anchor) ?? { exact: highlight.text };
-      const start = locate(full, anchor);
-      if (start >= 0) wrapRange(start, anchor.exact.length, segs, full, COLORS[highlight.color]);
-    }
-  } catch {
-    /* not logged in or offline */
+  const pageUrl = location.href;
+  const response = (await browser.runtime
+    .sendMessage({ type: 'KS_HIGHLIGHTS_FOR_URL', url: pageUrl })
+    .catch(() => null)) as { ok?: boolean; highlights?: Highlight[] } | null;
+  if (!response?.ok || location.href !== pageUrl) return;
+  for (const highlight of response.highlights ?? []) {
+    const { text: full, segs } = buildIndex();
+    const anchor = parseAnchor(highlight.anchor) ?? { exact: highlight.text };
+    const start = locate(full, anchor);
+    if (start >= 0) wrapRange(start, anchor.exact.length, segs, full, COLORS[highlight.color]);
   }
 }
 
 function injectStyles() {
   const style = document.createElement('style');
   style.textContent = `
-    .ks-toolbar { position: absolute; z-index: 2147483647; display: flex; gap: 6px;
+    .ks-toolbar { position: fixed; z-index: 2147483647; display: flex; gap: 6px;
       padding: 7px 9px; background: #1f2937; border-radius: 10px;
       box-shadow: 0 6px 20px rgba(0,0,0,.35); }
     .ks-dot { width: 20px; height: 20px; border-radius: 50%;

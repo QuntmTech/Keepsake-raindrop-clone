@@ -30,11 +30,19 @@ test('dynamic labels explain duplicate, related, and custom states', () => {
   assert.match(source, /customButton\.dataset\.tooltip = currentSettings\.quickBarCustomLabel/);
 });
 
-
 test('collection launcher opens inward with searchable bookmark drill-down', () => {
   assert.match(source, /data-action="browse"/);
   assert.match(source, /async function openCollectionLauncher/);
   assert.match(source, /async function openCollectionBookmarks/);
-  assert.match(source, /countByCollection/);
+  assert.match(source, /KS_QUICKBAR_COLLECTIONS/);
+  assert.match(source, /loadCollectionData/);
+  assert.doesNotMatch(source, /countByCollection/);
   assert.match(source, /input\.placeholder = 'Search ' \+ label\.toLowerCase\(\)/);
+});
+
+
+test('highlight toolbar stays inside the visible viewport', async () => {
+  const content = await readFile(new URL('../entrypoints/content.ts', import.meta.url), 'utf8');
+  assert.match(content, /position: fixed/);
+  assert.match(content, /window\.innerWidth - toolbarWidth/);
 });

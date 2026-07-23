@@ -102,6 +102,11 @@ function Vault() {
   const [homeOnlyCols, setHomeOnlyCols] = useState<string[]>([]);
   const [tour, setTour] = useState(false);
   const uidRef = useRef<string | null>(null);
+  const collectionsRef = useRef(collectionsApi.collections);
+  const countsRef = useRef(collectionsApi.counts);
+
+  useEffect(() => { collectionsRef.current = collectionsApi.collections; }, [collectionsApi.collections]);
+  useEffect(() => { countsRef.current = collectionsApi.counts; }, [collectionsApi.counts]);
 
   useEffect(() => {
     onboardingStage.getValue().then((stage) => {
@@ -128,8 +133,8 @@ function Vault() {
         writeSnapshot({
           uid: uidRef.current ?? '',
           bookmarks: list,
-          collections: collectionsApi.collections,
-          counts: collectionsApi.counts,
+          collections: collectionsRef.current,
+          counts: countsRef.current,
         });
       }
     } catch {
@@ -137,7 +142,7 @@ function Vault() {
     } finally {
       setLoading(false);
     }
-  }, [filter, query, collectionsApi.collections, collectionsApi.counts]);
+  }, [filter, query]);
 
   const refreshMeta = useCallback(async () => {
     try {
@@ -166,21 +171,32 @@ function Vault() {
   }, []);
 
   useEffect(() => {
-    const timer = setTimeout(run, 60);
+    const timer = setTimeout(run, query.trim() ? 120 : 20);
     return () => clearTimeout(timer);
   }, [run]);
 
   useEffect(() => {
-    refreshMeta();
+    // Stats/tags are secondary UI. Let cached rows and the primary bookmark query
+    // paint first instead of competing for the backend during popup startup.
+    const timer = window.setTimeout(refreshMeta, 240);
+    return () => window.clearTimeout(timer);
   }, [refreshMeta]);
 
   useEffect(() => {
-    return watchVault(() => {
-      run();
-      refreshMeta();
-      collectionsApi.refresh();
+    let timer: number | undefined;
+    const unwatch = watchVault(() => {
+      window.clearTimeout(timer);
+      timer = window.setTimeout(() => {
+        run();
+        refreshMeta();
+        collectionsApi.refresh();
+      }, 70);
     });
-  }, [run, refreshMeta, collectionsApi]);
+    return () => {
+      window.clearTimeout(timer);
+      unwatch();
+    };
+  }, [run, refreshMeta, collectionsApi.refresh]);
 
   async function remove(id: string) {
     await deleteBookmark(id);

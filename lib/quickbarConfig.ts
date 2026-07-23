@@ -55,6 +55,27 @@ export function reorderQuickBarAction(
   return without;
 }
 
+export const QUICKBAR_WIDTH_MIN = 34;
+export const QUICKBAR_WIDTH_MAX = 86;
+export const QUICKBAR_WIDTH_DEFAULT = 50;
+export const QUICKBAR_ICON_MIN = 14;
+export const QUICKBAR_ICON_MAX = 26;
+export const QUICKBAR_ICON_DEFAULT = 20;
+
+function clampNumber(value: unknown, fallback: number, min: number, max: number): number {
+  const parsed = typeof value === 'number' ? value : Number(value);
+  if (!Number.isFinite(parsed)) return fallback;
+  return Math.round(Math.max(min, Math.min(max, parsed)));
+}
+
+export function normalizeQuickBarWidth(value: unknown): number {
+  return clampNumber(value, QUICKBAR_WIDTH_DEFAULT, QUICKBAR_WIDTH_MIN, QUICKBAR_WIDTH_MAX);
+}
+
+export function normalizeQuickBarIconSize(value: unknown): number {
+  return clampNumber(value, QUICKBAR_ICON_DEFAULT, QUICKBAR_ICON_MIN, QUICKBAR_ICON_MAX);
+}
+
 export function normalizeQuickBarColor(value: unknown): string {
   if (typeof value !== 'string') return '';
   const trimmed = value.trim();

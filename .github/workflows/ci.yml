@@ -11,7 +11,7 @@ permissions:
 jobs:
   extension:
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 20
     steps:
       - name: Check out repository
         uses: actions/checkout@v4
@@ -48,6 +48,12 @@ jobs:
         run: |
           set -o pipefail
           npm run build 2>&1 | tee /tmp/build.log
+
+      - name: Verify performance budgets
+        shell: bash
+        run: |
+          set -o pipefail
+          npm run check:bundle 2>&1 | tee /tmp/bundle-budget.log
 
       - name: Build Chrome Web Store ZIP
         shell: bash
@@ -103,6 +109,7 @@ jobs:
             /tmp/tests.log
             /tmp/compile.log
             /tmp/build.log
+            /tmp/bundle-budget.log
             /tmp/store-zip.log
             /tmp/store-verify.log
             /tmp/keepsake-manifest.json
