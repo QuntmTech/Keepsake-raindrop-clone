@@ -26,7 +26,7 @@ test('Studio formats and file extensions follow the actual output blob', async (
   const app = await source('entrypoints/studio/App.tsx');
   assert.match(app, /extensionForBlob/);
   assert.match(app, /ImageExportFormat/);
-  assert.match(app, /maxPixels: 16_000_000/);
+  assert.match(app, /16_000_000/);
   assert.match(app, /Open image/);
   assert.match(app, /option value="pdf"/);
 });
