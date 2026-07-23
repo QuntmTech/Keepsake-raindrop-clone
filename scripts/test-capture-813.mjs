@@ -79,11 +79,12 @@ test('offscreen runtime crops images and preserves tab audio', () => {
   assert.match(offscreenSource, /resolveRecordProfile/);
 });
 
-test('Capture Studio has full-resolution preview zoom', () => {
+test('Capture Studio has preview zoom plus full-resolution composition', () => {
   assert.match(editorSource, /25%/);
   assert.match(editorSource, /100%/);
   assert.match(editorSource, /200%/);
-  assert.match(editorSource, /exports always remain full resolution/);
+  assert.match(editorSource, /ctx\.scale\(outputScale, outputScale\)/);
+  assert.match(editorSource, /PREVIEW_MAX_PIXELS/);
 });
 
 test('capture contracts include all new messages', () => {
