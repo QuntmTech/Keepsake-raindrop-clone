@@ -1,0 +1,79 @@
+name: Keepsake 8.16 AI selection command center
+
+on:
+  push:
+    branches:
+      - agent/8.16.0-ai-selection-command-center
+    paths:
+      - scripts/apply-816-selection-command-center.mjs
+      - .github/workflows/keepsake-816-selection-command-center.yml
+  pull_request:
+    branches:
+      - main
+    paths:
+      - scripts/apply-816-selection-command-center.mjs
+      - .github/workflows/keepsake-816-selection-command-center.yml
+
+permissions:
+  contents: write
+
+concurrency:
+  group: keepsake-816-ai-selection-command-center
+  cancel-in-progress: false
+
+jobs:
+  validate-and-commit:
+    if: github.event_name == 'push' || github.head_ref == 'agent/8.16.0-ai-selection-command-center'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Check out feature branch
+        uses: actions/checkout@v4
+        with:
+          ref: agent/8.16.0-ai-selection-command-center
+          fetch-depth: 0
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install exact dependencies
+        run: npm ci
+
+      - name: Materialize 8.16 source integration
+        run: node scripts/apply-816-selection-command-center.mjs
+
+      - name: Reject malformed patches
+        run: git diff --check
+
+      - name: Run tests, TypeScript, and production build
+        run: npm run check
+
+      - name: Enforce bundle budget
+        run: npm run check:bundle
+
+      - name: Build Chrome Web Store ZIP
+        run: npm run zip:store
+
+      - name: Verify packaged manifest
+        shell: bash
+        run: |
+          set -euo pipefail
+          zip_file="$(find .output -maxdepth 1 -type f -name '*.zip' | head -n 1)"
+          test -n "$zip_file"
+          unzip -p "$zip_file" manifest.json > /tmp/keepsake-manifest.json
+          node -e "const m=require('/tmp/keepsake-manifest.json'); if(m.manifest_version!==3) throw new Error('Not MV3'); if(m.version!=='8.16.0') throw new Error('Wrong packaged version: '+m.version); console.log('Verified MV3 package', m.version)"
+
+      - name: Commit only after every gate passes
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git diff --cached --stat
+          git diff --cached --quiet && { echo 'No changes to commit'; exit 1; }
+          git commit -m "Release 8.16.0: add customizable AI selection command center"
+          git push origin HEAD:agent/8.16.0-ai-selection-command-center
