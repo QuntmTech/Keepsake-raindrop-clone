@@ -1,12 +1,54 @@
-import { getBackend } from './backend';
+import { storage } from 'wxt/utils/storage';
+import { getBackend, HOSTED } from './backend';
 import { type AuthUser } from './backend/types';
 
 // Auth facade. Routes to whichever backend is active (local or PocketBase).
+// Hosted builds also keep a tiny local mirror so Home can paint immediately
+// instead of waiting for backend construction on every new tab.
 
 export type { AuthUser };
 
+const authMirror = storage.defineItem<string | null>('local:pb_auth', { fallback: null });
+
+function tokenIsFresh(token: string): boolean {
+  const payloadPart = token.split('.')[1];
+  if (!payloadPart) return true;
+  try {
+    const normalized = payloadPart.replace(/-/g, '+').replace(/_/g, '/');
+    const padded = normalized.padEnd(Math.ceil(normalized.length / 4) * 4, '=');
+    const payload = JSON.parse(atob(padded)) as { exp?: number };
+    return !payload.exp || payload.exp * 1000 > Date.now() + 5_000;
+  } catch {
+    // PocketBase currently uses JWTs, but a future token format must not make
+    // startup fail. The initialized backend remains the final authority.
+    return true;
+  }
+}
+
+export async function readCachedAuthUser(): Promise<AuthUser | null> {
+  if (!HOSTED) return null;
+  const raw = await authMirror.getValue();
+  if (!raw) return null;
+  try {
+    const parsed = JSON.parse(raw) as {
+      token?: string;
+      record?: { id?: string; email?: string; name?: string; plan?: string };
+    };
+    if (!parsed.token || !tokenIsFresh(parsed.token) || !parsed.record?.id) return null;
+    const plan = parsed.record.plan === 'owner' || parsed.record.plan === 'pro' ? parsed.record.plan : 'free';
+    return {
+      id: parsed.record.id,
+      email: parsed.record.email ?? '',
+      name: parsed.record.name,
+      plan,
+    };
+  } catch {
+    return null;
+  }
+}
+
 export async function loadAuth(): Promise<void> {
-  await getBackend(); // getBackend() runs init() which restores the session
+  await getBackend(); // getBackend() runs init() which restores and verifies the session
 }
 
 export async function login(email: string, password: string): Promise<AuthUser> {
@@ -34,18 +76,19 @@ export async function requestPasswordReset(email: string): Promise<void> {
 }
 
 export async function isLoggedIn(): Promise<boolean> {
+  const cached = await readCachedAuthUser();
+  if (cached) return true;
   return (await getBackend()).isLoggedIn();
 }
 
 export async function currentUser(): Promise<AuthUser | null> {
+  const cached = await readCachedAuthUser();
+  if (cached) return cached;
   return (await getBackend()).currentUser();
 }
 
 // Force a fresh read of the signed-in user record from the server (bypassing
-// the background refresh throttle), to catch a plan change made elsewhere —
-// e.g. an upgrade completed on the keepsaketab.com web checkout that never
-// touched the extension. Returns the fresh user, or the cached user on
-// backends without the hook (local mode).
+// the background refresh throttle), to catch a plan change made elsewhere.
 export async function refreshUserPlan(): Promise<AuthUser | null> {
   const backend = await getBackend();
   if (backend.refreshUser) {
@@ -55,16 +98,16 @@ export async function refreshUserPlan(): Promise<AuthUser | null> {
   return backend.currentUser();
 }
 
-// Subscribe to live auth-record changes (any context) — e.g. a Stripe upgrade
-// picked up by a background refresh — so open UIs can re-read plan/email
-// without a full reload. No-op (never fires) on backends without the hook
-// (local mode). Returns an unsubscribe function.
+// Hosted auth changes are already mirrored through chrome.storage. Watching the
+// mirror directly avoids constructing PocketBase solely to register a listener.
 export function watchAuth(cb: () => void): () => void {
+  if (HOSTED) return authMirror.watch(() => cb());
+
   let unsub = () => {};
   let cancelled = false;
-  getBackend().then((b) => {
+  getBackend().then((backend) => {
     if (cancelled) return;
-    unsub = b.watchAuthChange?.(cb) ?? (() => {});
+    unsub = backend.watchAuthChange?.(cb) ?? (() => {});
   });
   return () => {
     cancelled = true;
