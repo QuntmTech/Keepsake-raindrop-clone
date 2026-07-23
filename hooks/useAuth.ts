@@ -1,9 +1,7 @@
 import { useEffect, useState } from 'react';
 import {
-  loadAuth,
-  isLoggedIn,
-  currentUser,
   readCachedAuthUser,
+  readVerifiedAuthState,
   watchAuth,
   refreshUserPlan,
   login as doLogin,
@@ -14,7 +12,8 @@ import { mark } from '@/lib/boottrace';
 import { clearSnapshot } from '@/lib/cache';
 import { type Plan } from '@/lib/types';
 
-// Tiny auth hook shared by every UI surface. Backend-agnostic.
+// Tiny auth hook shared by every UI surface. Hosted builds paint from the local
+// auth mirror first, then reconcile with the initialized backend immediately.
 export function useAuth() {
   const [ready, setReady] = useState(false);
   const [authed, setAuthed] = useState(false);
@@ -27,8 +26,6 @@ export function useAuth() {
     (async () => {
       mark('init');
 
-      // The local mirror is enough to paint the last known signed-in Home shell.
-      // PocketBase still initializes immediately afterward and remains authoritative.
       const cached = await readCachedAuthUser();
       if (cached && !cancelled) {
         setAuthed(true);
@@ -39,16 +36,16 @@ export function useAuth() {
       }
 
       try {
-        await loadAuth();
+        const verified = await readVerifiedAuthState();
         mark('auth');
-        const [loggedIn, user] = await Promise.all([isLoggedIn(), currentUser()]);
         if (cancelled) return;
-        setAuthed(loggedIn);
-        setEmail(user?.email ?? null);
-        setPlan(user?.plan ?? 'free');
+        setAuthed(verified.loggedIn);
+        setEmail(verified.user?.email ?? null);
+        setPlan(verified.user?.plan ?? 'free');
       } catch {
-        // Offline or a temporarily unavailable backend must not leave Home on an
-        // endless splash screen. Cached content remains usable where available.
+        // Offline or a temporary backend problem must not trap Home on a splash
+        // screen. A valid cached session remains usable until a request proves it
+        // invalid; users without a cache get the normal signed-out surface.
       } finally {
         if (!cancelled) {
           setReady(true);
@@ -62,15 +59,13 @@ export function useAuth() {
     };
   }, []);
 
-  // Re-read plan/email whenever the auth record changes in ANY context — e.g.
-  // a completed Stripe upgrade lands via the webhook.
+  // Re-read plan/email whenever the mirrored auth record changes in any context.
   useEffect(() => {
-    return watchAuth(() => {
-      isLoggedIn().then(setAuthed);
-      currentUser().then((user) => {
-        setEmail(user?.email ?? null);
-        setPlan(user?.plan ?? 'free');
-      });
+    return watchAuth(async () => {
+      const cached = await readCachedAuthUser();
+      setAuthed(Boolean(cached));
+      setEmail(cached?.email ?? null);
+      setPlan(cached?.plan ?? 'free');
     });
   }, []);
 
@@ -102,6 +97,8 @@ export function useAuth() {
 
   async function login(em: string, password: string) {
     const user = await doLogin(em, password);
+    // Never let a snapshot from a previous account flash under this account.
+    await clearSnapshot();
     setAuthed(true);
     setEmail(user.email);
     setPlan(user.plan);
@@ -109,6 +106,7 @@ export function useAuth() {
 
   async function signup(em: string, password: string, name?: string) {
     const user = await doSignup(em, password, name);
+    await clearSnapshot();
     setAuthed(true);
     setEmail(user.email);
     setPlan(user.plan);
