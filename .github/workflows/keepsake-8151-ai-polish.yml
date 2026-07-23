@@ -7,6 +7,12 @@ on:
     paths:
       - scripts/apply-8151-ai-polish.mjs
       - .github/workflows/keepsake-8151-ai-polish.yml
+  pull_request:
+    branches:
+      - main
+    paths:
+      - scripts/apply-8151-ai-polish.mjs
+      - .github/workflows/keepsake-8151-ai-polish.yml
 
 permissions:
   contents: write
@@ -17,6 +23,7 @@ concurrency:
 
 jobs:
   validate-and-commit:
+    if: github.event_name == 'push' || github.head_ref == 'agent/8.15.1-ai-micro-polish'
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
