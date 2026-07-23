@@ -10,6 +10,9 @@ export type WriterAction =
   | 'humanize'
   | 'persuasive'
   | 'reply'
+  | 'summarize'
+  | 'explain'
+  | 'keypoints'
   | 'translate'
   | 'custom';
 
@@ -37,6 +40,9 @@ const ACTION_LABELS: Record<WriterAction, string> = {
   humanize: 'Make it natural',
   persuasive: 'Make persuasive',
   reply: 'Draft a reply',
+  summarize: 'Summarize',
+  explain: 'Explain simply',
+  keypoints: 'Extract key points',
   translate: 'Translate',
   custom: 'Custom instruction',
 };
@@ -56,6 +62,12 @@ const ACTION_INSTRUCTIONS: Record<Exclude<WriterAction, 'translate' | 'custom'>,
     'Rewrite to be more persuasive and action-oriented. Strengthen the benefit, clarity, and call to action without inventing claims or using manipulative pressure.',
   reply:
     'Write a ready-to-send reply to the source message. Infer an appropriate response from the message itself, stay concise, and do not mention that you are an AI.',
+  summarize:
+    'Summarize the source accurately and concisely. Preserve the main conclusion, important names, numbers, dates, caveats, and action items. Do not add outside facts.',
+  explain:
+    'Explain the source in clear plain language. Define difficult ideas, preserve important details, and do not introduce claims that are not supported by the source.',
+  keypoints:
+    'Extract the most useful key points as concise bullet points. Preserve important names, numbers, dates, caveats, conclusions, and action items. Do not invent facts.',
 };
 
 export function writerActionLabel(action: WriterAction): string {
@@ -93,7 +105,18 @@ export function buildWriterPrompt(request: WriterRequest): { system: string; pro
     instruction = `Translate the source text into ${language}. Preserve meaning, names, numbers, links, formatting, and natural idioms.`;
   } else instruction = ACTION_INSTRUCTIONS[request.action];
 
-  const maxTokens = length === 'longer' ? 3000 : length === 'shorter' ? 900 : 1800;
+  const maxTokens =
+    request.action === 'keypoints'
+      ? 1400
+      : request.action === 'explain'
+        ? 2200
+        : request.action === 'summarize'
+          ? 1200
+          : length === 'longer'
+            ? 3000
+            : length === 'shorter'
+              ? 900
+              : 1800;
 
   return {
     maxTokens,
