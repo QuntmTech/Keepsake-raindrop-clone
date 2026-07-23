@@ -1,0 +1,66 @@
+name: Finalize Keepsake 8.14
+
+on:
+  push:
+    branches: [agent/8.14.0-clean-performance-capture]
+
+permissions:
+  contents: write
+
+jobs:
+  finalize:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: agent/8.14.0-clean-performance-capture
+          fetch-depth: 0
+
+      - name: Fix PDF BlobPart typing
+        shell: bash
+        run: |
+          set -euo pipefail
+          python <<'PY'
+          from pathlib import Path
+          path = Path('entrypoints/studio/ImageEditor.tsx')
+          source = path.read_text(encoding='utf-8')
+          old = "  return new Blob(chunks, { type: 'application/pdf' });"
+          new = """  const parts: BlobPart[] = chunks.map((chunk) => {
+    const copy = new Uint8Array(chunk.byteLength);
+    copy.set(chunk);
+    return copy.buffer;
+  });
+  return new Blob(parts, { type: 'application/pdf' });"""
+          if source.count(old) != 1:
+              raise SystemExit(f'Expected exactly one PDF Blob return, found {source.count(old)}')
+          path.write_text(source.replace(old, new, 1), encoding='utf-8')
+          PY
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install and verify complete release
+        run: |
+          set -euo pipefail
+          npm ci
+          npm run check:version
+          npm test
+          npm run compile
+          npm run build
+          npm run check:bundle
+          npm run zip:store
+
+      - name: Commit verified fix and remove temporary workflow
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -f .github/workflows/finalize-814.yml .tmp/finalize-814-trigger.txt
+          git config user.name 'keepsake-release-bot'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add -A
+          git commit -m 'fix(studio): finalize PDF export and verify 8.14 release'
+          git push origin HEAD:agent/8.14.0-clean-performance-capture
