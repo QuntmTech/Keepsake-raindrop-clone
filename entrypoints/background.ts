@@ -487,13 +487,15 @@ async function handleMessage(msg: Message, sender?: { tab?: { id?: number; windo
     case 'KS_CAPTURE_VISIBLE': {
       const [tab] = await browser.tabs.query({ active: true, currentWindow: true });
       if (!tab?.id) return { ok: false, error: 'No active tab' };
-      const dataUrl = await captureValidatedPng(tab.windowId);
+      const captured = await captureValidatedPng(tab.windowId);
       await openStudio({
         kind: 'screenshot',
-        blob: dataUrlToBlob(dataUrl),
+        blob: dataUrlToBlob(captured.dataUrl),
         pageUrl: tab.url,
         pageTitle: tab.title,
         filename: screenshotFilename('visible'),
+        width: captured.analysis.width,
+        height: captured.analysis.height,
       });
       return { ok: true };
     }
@@ -513,7 +515,7 @@ async function handleMessage(msg: Message, sender?: { tab?: { id?: number; windo
         return { ok: false, error: 'This browser page does not allow area capture.' };
       }
       if (!selection) return { ok: false, cancelled: true };
-      const source = await captureValidatedPng(tab.windowId);
+      const { dataUrl: source } = await captureValidatedPng(tab.windowId);
       const cropped = await cropImage(source, selection);
       const analysis = await analyzeImage(cropped);
       if (analysis.blank) return { ok: false, error: 'The selected area was blank. Try selecting a slightly larger area.' };
@@ -523,6 +525,8 @@ async function handleMessage(msg: Message, sender?: { tab?: { id?: number; windo
         pageUrl: tab.url,
         pageTitle: tab.title,
         filename: screenshotFilename(msg.mode),
+        width: analysis.width,
+        height: analysis.height,
       });
       return { ok: true };
     }
@@ -732,13 +736,13 @@ async function cropImage(dataUrl: string, rect: CaptureRect): Promise<string> {
   return result.dataUrl;
 }
 
-async function captureValidatedPng(windowId?: number): Promise<string> {
+async function captureValidatedPng(windowId?: number): Promise<{ dataUrl: string; analysis: ImageAnalysis }> {
   let last = '';
   for (let attempt = 0; attempt < 2; attempt++) {
     await tileGate();
     last = await captureTabPng(windowId);
     const analysis = await analyzeImage(last);
-    if (!analysis.blank) return last;
+    if (!analysis.blank) return { dataUrl: last, analysis };
     await new Promise((resolve) => setTimeout(resolve, 240));
   }
   throw new Error('Chrome returned a blank screenshot twice. Refresh the page and try again.');
@@ -773,6 +777,8 @@ async function captureFullPage(tabId: number): Promise<void> {
     pageUrl: tab?.url ?? undefined,
     pageTitle: tab?.title ?? undefined,
     filename,
+    width: analysis.width,
+    height: analysis.height,
   });
 }
 
@@ -784,6 +790,8 @@ async function openStudio(opts: {
   pageUrl?: string;
   pageTitle?: string;
   filename: string;
+  width?: number;
+  height?: number;
   durationMs?: number;
 }): Promise<void> {
   if (opts.blob.size < 512) throw new Error('The capture produced no usable data.');
@@ -845,7 +853,10 @@ async function startRecording(options: RecordOptions): Promise<void> {
     streamId,
     options,
   })) as { ok?: boolean; error?: string } | null;
-  if (!started?.ok) throw new Error(started?.error || 'The recorder could not start');
+  if (!started?.ok) {
+    await browser.action.setBadgeText({ text: '' });
+    throw new Error(started?.error || 'The recorder could not start');
+  }
   await recordingStateStore.setValue({
     isRecording: true,
     paused: false,

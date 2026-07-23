@@ -30,12 +30,12 @@ export default function App() {
       setSaved(Boolean(next.saveId));
       const megabytes = next.blob.size / (1024 * 1024);
       if (next.kind === 'screenshot') {
-        try {
-          const bitmap = await createImageBitmap(next.blob);
-          const megapixels = (bitmap.width * bitmap.height) / 1_000_000;
-          setMediaInfo(`${bitmap.width.toLocaleString()} × ${bitmap.height.toLocaleString()} px · ${megapixels.toFixed(1)} MP · ${megabytes.toFixed(1)} MB`);
-          bitmap.close();
-        } catch {
+        if (next.width && next.height) {
+          const megapixels = (next.width * next.height) / 1_000_000;
+          setMediaInfo(`${next.width.toLocaleString()} × ${next.height.toLocaleString()} px · ${megapixels.toFixed(1)} MP · ${megabytes.toFixed(1)} MB`);
+        } else {
+          // Older parked captures have no dimensions. Do not decode the giant
+          // bitmap a second time just for a label; the editor owns the one decode.
           setMediaInfo(`${megabytes.toFixed(1)} MB · ${next.blob.type || 'image'}`);
         }
       } else {

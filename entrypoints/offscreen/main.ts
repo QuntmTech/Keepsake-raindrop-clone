@@ -384,57 +384,63 @@ async function buildAudioTracks(options: RecordOptions): Promise<MediaStreamTrac
 async function startRecording(streamId: string, options: RecordOptions): Promise<void> {
   if (mediaRecorder && mediaRecorder.state !== 'inactive') throw new Error('Already recording');
   await cleanup();
-
-  const profile = resolveRecordProfile(options.quality, options.fps);
-  const source = options.mode === 'desktop' ? 'desktop' : 'tab';
-  const constraints: any = {
-    audio: options.systemAudio
-      ? { mandatory: { chromeMediaSource: source, chromeMediaSourceId: streamId } }
-      : false,
-    video: {
-      mandatory: {
-        chromeMediaSource: source,
-        chromeMediaSourceId: streamId,
-        maxWidth: profile.width,
-        maxHeight: profile.height,
-        maxFrameRate: profile.fps,
+  try {
+    const profile = resolveRecordProfile(options.quality, options.fps);
+    const source = options.mode === 'desktop' ? 'desktop' : 'tab';
+    const constraints: any = {
+      audio: options.systemAudio
+        ? { mandatory: { chromeMediaSource: source, chromeMediaSourceId: streamId } }
+        : false,
+      video: {
+        mandatory: {
+          chromeMediaSource: source,
+          chromeMediaSourceId: streamId,
+          maxWidth: profile.width,
+          maxHeight: profile.height,
+          maxFrameRate: profile.fps,
+        },
       },
-    },
-  };
-  mediaStream = await navigator.mediaDevices.getUserMedia(constraints);
+    };
+    mediaStream = await navigator.mediaDevices.getUserMedia(constraints);
 
-  recorderStream = new MediaStream();
-  const videoTrack = mediaStream.getVideoTracks()[0];
-  if (!videoTrack) throw new Error('No video track available for recording');
-  recorderStream.addTrack(videoTrack);
-  for (const track of await buildAudioTracks(options)) {
-    if (!recorderStream.getAudioTracks().some((current) => current.id === track.id)) recorderStream.addTrack(track);
-  }
-
-  const codecs = ['video/webm;codecs=vp9,opus', 'video/webm;codecs=vp9', 'video/webm;codecs=vp8,opus', 'video/webm;codecs=vp8', 'video/webm'];
-  const mimeType = codecs.find((value) => MediaRecorder.isTypeSupported(value)) ?? 'video/webm';
-  recordedChunks = [];
-  startTime = Date.now();
-  pausedAt = 0;
-  pausedDurationMs = 0;
-  mediaRecorder = new MediaRecorder(recorderStream, { mimeType, videoBitsPerSecond: profile.bitrate });
-  mediaRecorder.ondataavailable = (event) => {
-    if (event.data && event.data.size > 0) recordedChunks.push(event.data);
-  };
-  mediaRecorder.onerror = (event) => {
-    const message = (event as Event & { error?: DOMException }).error?.message || 'Recorder failed';
-    chrome.runtime.sendMessage({ type: 'KS_RECORDING_ERROR', error: message }).catch(() => {});
-  };
-
-  const onTrackEnd = () => {
-    if (mediaRecorder && mediaRecorder.state !== 'inactive') {
-      stopRecording().catch((error) =>
-        chrome.runtime.sendMessage({ type: 'KS_RECORDING_ERROR', error: (error as Error)?.message || 'Stop failed' }).catch(() => {}),
-      );
+    recorderStream = new MediaStream();
+    const videoTrack = mediaStream.getVideoTracks()[0];
+    if (!videoTrack) throw new Error('No video track available for recording');
+    recorderStream.addTrack(videoTrack);
+    for (const track of await buildAudioTracks(options)) {
+      if (!recorderStream.getAudioTracks().some((current) => current.id === track.id)) recorderStream.addTrack(track);
     }
-  };
-  mediaStream.getTracks().forEach((track) => track.addEventListener('ended', onTrackEnd, { once: true }));
-  mediaRecorder.start(1000);
+
+    const codecs = ['video/webm;codecs=vp9,opus', 'video/webm;codecs=vp9', 'video/webm;codecs=vp8,opus', 'video/webm;codecs=vp8', 'video/webm'];
+    const mimeType = codecs.find((value) => MediaRecorder.isTypeSupported(value)) ?? 'video/webm';
+    recordedChunks = [];
+    startTime = Date.now();
+    pausedAt = 0;
+    pausedDurationMs = 0;
+    mediaRecorder = new MediaRecorder(recorderStream, { mimeType, videoBitsPerSecond: profile.bitrate });
+    mediaRecorder.ondataavailable = (event) => {
+      if (event.data && event.data.size > 0) recordedChunks.push(event.data);
+    };
+    mediaRecorder.onerror = (event) => {
+      const message = (event as Event & { error?: DOMException }).error?.message || 'Recorder failed';
+      cleanup()
+        .catch(() => {})
+        .finally(() => chrome.runtime.sendMessage({ type: 'KS_RECORDING_ERROR', error: message }).catch(() => {}));
+    };
+
+    const onTrackEnd = () => {
+      if (mediaRecorder && mediaRecorder.state !== 'inactive') {
+        stopRecording().catch((error) =>
+          chrome.runtime.sendMessage({ type: 'KS_RECORDING_ERROR', error: (error as Error)?.message || 'Stop failed' }).catch(() => {}),
+        );
+      }
+    };
+    mediaStream.getTracks().forEach((track) => track.addEventListener('ended', onTrackEnd, { once: true }));
+    mediaRecorder.start(1000);
+  } catch (error) {
+    await cleanup();
+    throw error;
+  }
 }
 
 function pauseRecording(): void {
@@ -491,6 +497,7 @@ async function stopRecording(): Promise<void> {
     anchor.click();
     anchor.remove();
   }
+  setTimeout(() => URL.revokeObjectURL(url), 60_000);
 }
 
 async function cleanup(): Promise<void> {
