@@ -6,12 +6,14 @@ on:
       - agent/8.15.1-ai-micro-polish
     paths:
       - scripts/apply-8151-ai-polish.mjs
+      - scripts/finalize-8151-ai-polish.mjs
       - .github/workflows/keepsake-8151-ai-polish.yml
   pull_request:
     branches:
       - main
     paths:
       - scripts/apply-8151-ai-polish.mjs
+      - scripts/finalize-8151-ai-polish.mjs
       - .github/workflows/keepsake-8151-ai-polish.yml
 
 permissions:
@@ -43,7 +45,9 @@ jobs:
         run: npm ci
 
       - name: Apply AI micro-polish source changes
-        run: node scripts/apply-8151-ai-polish.mjs
+        run: |
+          node scripts/apply-8151-ai-polish.mjs
+          node scripts/finalize-8151-ai-polish.mjs
 
       - name: Reject malformed patches
         run: git diff --check
