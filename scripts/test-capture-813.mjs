@@ -6,12 +6,18 @@ import { pathToFileURL } from 'node:url';
 import test from 'node:test';
 import ts from 'typescript';
 
-async function loadTs(path) {
-  const source = await readFile(new URL(`../${path}`, import.meta.url), 'utf8');
+async function loadPureCaptureModule() {
+  const raw = await readFile(new URL('../lib/capture.ts', import.meta.url), 'utf8');
+  // The functions under test are pure. Remove WXT storage wiring so this Node
+  // regression test does not need a browser extension runtime.
+  const source = raw
+    .replace("import { storage } from 'wxt/utils/storage';\n", '')
+    .replace(/export const capturePreferencesStore = storage\.defineItem<CapturePreferences>[\s\S]*?\n\}\);\n/, '')
+    .replace(/export const recordingStateStore = storage\.defineItem<RecordingState>[\s\S]*?\n\}\);\n/, '');
   const compiled = ts.transpileModule(source, {
     compilerOptions: { module: ts.ModuleKind.ESNext, target: ts.ScriptTarget.ES2022 },
     reportDiagnostics: true,
-    fileName: path,
+    fileName: 'lib/capture.ts',
   });
   const errors = (compiled.diagnostics ?? []).filter((item) => item.category === ts.DiagnosticCategory.Error);
   if (errors.length) throw new Error(errors.map((item) => ts.flattenDiagnosticMessageText(item.messageText, '\n')).join('\n'));
@@ -25,9 +31,10 @@ const fullPageSource = await readFile(new URL('../lib/fullpage.ts', import.meta.
 const menuSource = await readFile(new URL('../components/CaptureMenu.tsx', import.meta.url), 'utf8');
 const backgroundSource = await readFile(new URL('../entrypoints/background.ts', import.meta.url), 'utf8');
 const offscreenSource = await readFile(new URL('../entrypoints/offscreen/main.ts', import.meta.url), 'utf8');
+const editorSource = await readFile(new URL('../entrypoints/studio/ImageEditor.tsx', import.meta.url), 'utf8');
 
 test('recording profiles scale quality and bitrate', async () => {
-  const { resolveRecordProfile } = await loadTs('lib/capture.ts');
+  const { resolveRecordProfile } = await loadPureCaptureModule();
   const hd = resolveRecordProfile('1080p', 30);
   const ultra = resolveRecordProfile('4k', 60);
   assert.deepEqual([hd.width, hd.height, hd.fps], [1920, 1080, 30]);
@@ -37,7 +44,7 @@ test('recording profiles scale quality and bitrate', async () => {
 });
 
 test('recording state migration adds pause and quality fields', async () => {
-  const { normalizeRecordingState } = await loadTs('lib/capture.ts');
+  const { normalizeRecordingState } = await loadPureCaptureModule();
   const state = normalizeRecordingState({ isRecording: true, startedAt: 123, mode: 'tab', tabId: 7 });
   assert.equal(state.paused, false);
   assert.equal(state.pausedDurationMs, 0);
@@ -70,6 +77,13 @@ test('offscreen runtime crops images and preserves tab audio', () => {
   assert.match(offscreenSource, /analyzeImageDataUrl/);
   assert.match(offscreenSource, /systemSource\.connect\(audioContext\.destination\)/);
   assert.match(offscreenSource, /resolveRecordProfile/);
+});
+
+test('Capture Studio has full-resolution preview zoom', () => {
+  assert.match(editorSource, /25%/);
+  assert.match(editorSource, /100%/);
+  assert.match(editorSource, /200%/);
+  assert.match(editorSource, /exports always remain full resolution/);
 });
 
 test('capture contracts include all new messages', () => {
