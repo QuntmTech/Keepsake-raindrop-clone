@@ -1,1 +1,1 @@
-Run the one-time final 8.14 compiler fix and verification.
+Apply the final compiler patch immediately and remove the one-time workflow.
