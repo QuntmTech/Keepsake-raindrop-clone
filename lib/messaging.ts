@@ -40,14 +40,14 @@ export type Message =
   | { type: 'DELETE_BOOKMARK'; id: string }
   | { type: 'MOVE_BOOKMARK'; id: string; collection?: string }
   | { type: 'REFRESH_BOOKMARK'; id: string; url: string }
-  | { type: 'CAPTURE_SCREENSHOT' }       // background -> JPEG dataURL of the visible tab
-  | { type: 'EXTRACT_META'; tabId?: number } // background -> PageMeta for a tab
+  | { type: 'CAPTURE_SCREENSHOT' }
+  | { type: 'EXTRACT_META'; tabId?: number }
   | { type: 'OPEN_DASHBOARD' }
-  | { type: 'OPEN_POPUP' } // content Quick Bar -> toolbar action dropdown
-  | { type: 'OPEN_URL'; url: string } // validated http(s) custom Quick Bar shortcut
+  | { type: 'OPEN_POPUP' }
+  | { type: 'OPEN_URL'; url: string }
   | { type: 'OPEN_SURFACE'; surface: 'popup' | 'sidepanel' | 'dashboard' }
-  | { type: 'OPEN_QUICKBAR' } // background -> content: pop the quick-save folder picker
-  | { type: 'KS_PAGE_NAVIGATED'; url: string } // background -> content after SPA history navigation
+  | { type: 'OPEN_QUICKBAR' }
+  | { type: 'KS_PAGE_NAVIGATED'; url: string }
   | { type: 'KS_HIGHLIGHT_CREATE'; url: string; text: string; color: HighlightColor; anchor?: TextQuoteAnchor }
   | { type: 'KS_HIGHLIGHTS_FOR_URL'; url: string }
   | { type: 'KS_QUICKBAR_BOOTSTRAP'; url: string }
@@ -68,14 +68,11 @@ export type Message =
   | { type: 'CREATE_HIGHLIGHT'; url: string; text: string; color: HighlightColor; anchor?: string }
   | { type: 'FLUSH_QUEUE' }
   | { type: 'PING' }
-  // AI-native core (v8.2)
   | { type: 'KS_AUTOFILE'; id: string; tabId?: number }
   | { type: 'KS_GET_RECALL'; tabId?: number }
   | { type: 'KS_WATCH_START'; saveId: string; cfg: WatchConfig }
   | { type: 'KS_WATCH_STOP'; saveId: string }
   | { type: 'KS_PICK_SELECTOR' }
-  // Home overlay single-writer: every context routes overlay mutations through
-  // the background so concurrent writes can't clobber each other (lib/home.ts).
   | {
       type: 'KS_OVERLAY_WRITE';
       user: string;
@@ -84,7 +81,7 @@ export type Message =
       verified: ('pinned' | 'sort' | 'homeOnly')[];
     }
   | { type: 'KS_OVERLAY_FORGET'; user: string; id: string }
-  | { type: 'KS_START_CHECKOUT'; plan: 'pro' | 'max'; interval: 'month' | 'year' }
+  | { type: 'KS_START_CHECKOUT'; plan?: 'pro' | 'max'; interval: 'month' | 'year' }
   | { type: 'KS_OPEN_BILLING_PORTAL' }
   | CaptureMessage;
 
