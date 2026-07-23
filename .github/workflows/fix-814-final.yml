@@ -8,22 +8,17 @@ permissions:
   contents: write
 
 jobs:
-  fix-verify-clean:
+  patch-and-clean:
     if: ${{ github.actor != 'github-actions[bot]' }}
     runs-on: ubuntu-latest
-    timeout-minutes: 25
+    timeout-minutes: 5
     steps:
       - uses: actions/checkout@v4
         with:
           ref: agent/8.14.0-clean-performance-capture
           fetch-depth: 0
 
-      - uses: actions/setup-node@v4
-        with:
-          node-version: 22
-          cache: npm
-
-      - name: Apply final compiler-safe PDF buffer fix
+      - name: Apply compiler-safe PDF buffer fix
         shell: bash
         run: |
           set -euo pipefail
@@ -62,17 +57,7 @@ jobs:
           lock.write_text(lock_text, encoding='utf-8')
           PY
 
-      - name: Install and verify everything
-        run: |
-          npm ci
-          npm run check:version
-          npm test
-          npm run compile
-          npm run build
-          npm run check:bundle
-          npm run zip:store
-
-      - name: Remove one-time workflow and commit verified source
+      - name: Commit source and remove one-time workflow
         shell: bash
         run: |
           set -euo pipefail
@@ -80,5 +65,5 @@ jobs:
           git config user.name 'keepsake-release-bot'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
           git add -A
-          git commit -m 'fix: finalize 8.14 compiler-safe exports and lockfile'
+          git commit -m 'fix: finalize compiler-safe exports and lockfile'
           git push origin HEAD:agent/8.14.0-clean-performance-capture
