@@ -58,9 +58,26 @@ export interface Highlight {
 
 export type HighlightColor = 'yellow' | 'green' | 'blue' | 'pink' | 'orange';
 
-// Account tier. `owner` is you (unlimited, forever); `pro` is a paid customer;
+export type AiSelectionBuiltinAction =
+  | 'improve'
+  | 'summarize'
+  | 'explain'
+  | 'keypoints'
+  | 'reply'
+  | 'translate'
+  | 'grammar'
+  | 'shorten'
+  | 'professional';
+export type AiSelectionActionRef = AiSelectionBuiltinAction | `custom:${string}`;
+export interface AiSelectionCustomAction {
+  id: string;
+  label: string;
+  instruction: string;
+}
+
+// Account tier. `owner` is you (unlimited, forever); `pro` and `max` are paid;
 // `free` is the default limited tier. Stored on the user record (`plan`).
-export type Plan = 'free' | 'pro' | 'owner';
+export type Plan = 'free' | 'pro' | 'max' | 'owner';
 
 // Robust highlight anchor — quote + surrounding context survives DOM changes
 // far better than a raw first-match search. Serialized into Highlight.anchor.
@@ -127,6 +144,12 @@ export interface Settings {
   // Feature toggles — let the user turn pieces on/off.
   enableHighlights: boolean;
   enableAiSelectionTools: boolean; // selected-text AI helper; never sends a whole field implicitly
+  aiSelectionActions: AiSelectionActionRef[];
+  aiSelectionCustomActions: AiSelectionCustomAction[];
+  aiSelectionBlockedSites: string[];
+  aiSelectionTranslateLanguage: string;
+  aiSelectionShowForReading: boolean;
+  aiSelectionShowForWriting: boolean;
   enableAutoScreenshot: boolean;
   enableMetadata: boolean;   // fetch og:image / favicon / reading time on save
   enableQuickBar: boolean;   // draggable in-page quick-save widget
@@ -161,6 +184,12 @@ export const DEFAULT_SETTINGS: Settings = {
   primarySurface: 'popup',
   enableHighlights: true,
   enableAiSelectionTools: true,
+  aiSelectionActions: ['improve', 'summarize', 'explain', 'reply', 'translate', 'shorten'],
+  aiSelectionCustomActions: [],
+  aiSelectionBlockedSites: [],
+  aiSelectionTranslateLanguage: 'English',
+  aiSelectionShowForReading: true,
+  aiSelectionShowForWriting: true,
   enableAutoScreenshot: true,
   enableMetadata: true,
   enableQuickBar: true,
