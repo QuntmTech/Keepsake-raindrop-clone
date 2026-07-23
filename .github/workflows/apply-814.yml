@@ -1,0 +1,43 @@
+name: Apply Keepsake 8.14 generator
+
+on:
+  push:
+    branches: [agent/8.14.0-visual-capture-studio]
+
+permissions:
+  contents: write
+
+jobs:
+  apply:
+    if: contains(github.event.head_commit.message, 'run Keepsake 8.14 generator')
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: agent/8.14.0-visual-capture-studio
+          fetch-depth: 0
+      - name: Verify and extract exact source payload
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p /tmp/ks814src .tmp/ks814/entrypoints/studio .tmp/ks814/components
+          base64 --decode .tmp/ks814/payload.b64 > /tmp/ks814-payload.tgz
+          echo '8e637d982df8a96120ddf566c1d3a44359b5a64dc1b6e90053d08c927be66f6d  /tmp/ks814-payload.tgz' | sha256sum --check
+          tar -xzf /tmp/ks814-payload.tgz -C /tmp/ks814src
+          cp /tmp/ks814src/entrypoints/studio/ImageEditor.tsx .tmp/ks814/entrypoints/studio/ImageEditor.tsx
+          cp /tmp/ks814src/entrypoints/studio/App.tsx .tmp/ks814/entrypoints/studio/App.tsx
+          cp /tmp/ks814src/components/CaptureMenu.tsx .tmp/ks814/components/CaptureMenu.tsx
+          cp /tmp/ks814src/scripts/apply-814.mjs scripts/apply-814.mjs
+      - name: Generate release source
+        run: node scripts/apply-814.mjs
+      - name: Commit generated release
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -rf .tmp/ks814 scripts/apply-814.mjs
+          git config user.name 'keepsake-release-bot'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add -A
+          git commit -m 'Release 8.14.0: visual library and pro Capture Studio'
+          git push origin HEAD:agent/8.14.0-visual-capture-studio
