@@ -41,9 +41,6 @@ export interface SearchOpts {
   sort?: SortMode;
   page?: number;
   perPage?: number;
-  // Home fast-path: return ONLY launcher rows (pinned || homeOnly) and, on
-  // backends that support it, project away the heavy cached-content column so
-  // a new tab transfers a few small tiles instead of the whole library.
   home?: boolean;
 }
 
@@ -63,8 +60,6 @@ export interface AuthUser {
   plan: Plan;
 }
 
-// Owner admin: the single Stripe config row (test|live flag + PUBLIC
-// publishable keys). Secret keys are NEVER part of this shape.
 export interface BillingConfig {
   mode: 'test' | 'live';
   pkTest: string;
@@ -78,8 +73,7 @@ export interface BillingEvent {
   handled?: boolean;
 }
 
-// Row shape of the PocketBase `plans` config collection. The extension can
-// understand Free/Pro/Max rows; the server remains authoritative.
+// Client-side row contract. PocketBase/server changes are tracked separately.
 export interface PlanConfigRow {
   key: string; // 'free' | 'pro' | 'max'
   max_bookmarks: number | null;
@@ -93,20 +87,19 @@ export interface PlanConfigRow {
   stripe_price_year: string;
 }
 
-// Every data backend (local chrome.storage, PocketBase, …) implements this.
 export interface Backend {
   readonly kind: 'local' | 'pocketbase';
 
-  // auth
   init(): Promise<void>;
   renewAuthToken?(): Promise<void>;
   refreshUser?(): Promise<AuthUser | null>;
   fetchPlans?(): Promise<PlanConfigRow[]>;
   watchAuthChange?(cb: () => void): () => void;
-  createCheckoutSession?(plan: 'pro' | 'max', interval: 'month' | 'year'): Promise<{ url: string }>;
+  // Max checkout is added by backend issue #20; keep the existing Pro contract
+  // compatible until that server route exists.
+  createCheckoutSession?(plan: 'pro', interval: 'month' | 'year'): Promise<{ url: string }>;
   createPortalSession?(): Promise<{ url: string }>;
 
-  // Optional owner-admin config. Server rules are authoritative.
   getBillingConfig?(): Promise<BillingConfig | null>;
   updateBillingConfig?(patch: Partial<BillingConfig>): Promise<BillingConfig>;
   recentBillingEvents?(limit?: number): Promise<BillingEvent[]>;
@@ -117,7 +110,6 @@ export interface Backend {
   currentUser(): AuthUser | null;
   isLoggedIn(): boolean;
 
-  // bookmarks
   saveBookmark(input: SaveBookmarkInput): Promise<Bookmark>;
   watch?(cb: () => void): () => void;
   bulkSave?(inputs: SaveBookmarkInput[]): Promise<number>;
@@ -130,13 +122,11 @@ export interface Backend {
   countByCollection(): Promise<Record<string, number>>;
   vaultStats(): Promise<VaultStats>;
 
-  // collections
   listCollections(): Promise<Collection[]>;
   createCollection(data: { name: string; color?: string; icon?: string; parent?: string }): Promise<Collection>;
   updateCollection(id: string, patch: Partial<Collection>): Promise<Collection>;
   deleteCollection(id: string): Promise<void>;
 
-  // highlights
   createHighlight(input: CreateHighlightInput): Promise<Highlight>;
   highlightsForUrl(url: string): Promise<Highlight[]>;
   allHighlights(limit?: number): Promise<Highlight[]>;
