@@ -5,7 +5,7 @@
 // download. Blobs can't cross the message boundary (JSON serialization), but a
 // blob: URL string can — and it stays valid while this document lives.
 
-import { recordingFilename, type OffscreenCommand, type RecordOptions } from '@/lib/capture';
+import { recordingFilename, resolveRecordProfile, type CaptureRect, type ImageAnalysis, type OffscreenCommand, type RecordOptions } from '@/lib/capture';
 import { db } from '@/lib/save';
 
 // ── Local embedding engine (Phase 1) ────────────────────────────────────────
@@ -102,8 +102,8 @@ let audioContext: AudioContext | null = null;
 let mediaRecorder: MediaRecorder | null = null;
 let recordedChunks: Blob[] = [];
 let startTime = 0;
-
-const QUALITY = { width: 1920, height: 1080, fps: 30, bitrate: 8_000_000 };
+let pausedAt = 0;
+let pausedDurationMs = 0;
 
 chrome.runtime.onMessage.addListener((msg: OffscreenCommand, _sender, sendResponse) => {
   if (msg?.target !== 'ks-offscreen') return;
@@ -112,13 +112,25 @@ chrome.runtime.onMessage.addListener((msg: OffscreenCommand, _sender, sendRespon
       case 'OFFSCREEN_START':
         await startRecording(msg.streamId, msg.options);
         return { ok: true };
+      case 'OFFSCREEN_PAUSE':
+        pauseRecording();
+        return { ok: true };
+      case 'OFFSCREEN_RESUME':
+        resumeRecording();
+        return { ok: true };
       case 'OFFSCREEN_STOP':
         await stopRecording();
         return { ok: true };
-      case 'OFFSCREEN_GET_STATE' as never:
-        // The recorder's real state — the background can't infer it from the
-        // document's existence anymore (the embedder keeps this doc alive).
-        return { ok: true, recording: Boolean(mediaRecorder && mediaRecorder.state !== 'inactive') };
+      case 'OFFSCREEN_GET_STATE':
+        return {
+          ok: true,
+          recording: Boolean(mediaRecorder && mediaRecorder.state !== 'inactive'),
+          paused: mediaRecorder?.state === 'paused',
+        };
+      case 'OFFSCREEN_ANALYZE_IMAGE':
+        return { ok: true, analysis: await analyzeImageDataUrl(msg.dataUrl) };
+      case 'OFFSCREEN_CROP_IMAGE':
+        return { ok: true, dataUrl: await cropImageDataUrl(msg.dataUrl, msg.rect) };
       case 'OFFSCREEN_EMBED' as never: {
         const m = msg as unknown as { texts: string[] };
         return { ok: true, vectors: await embed(m.texts) };
@@ -285,28 +297,96 @@ async function watchFetch(url: string, mode: string | null, selector?: string, p
   return out;
 }
 
+async function decodeImage(dataUrl: string): Promise<ImageBitmap> {
+  const response = await fetch(dataUrl);
+  const blob = await response.blob();
+  if (!blob.type.startsWith('image/') || blob.size < 64) throw new Error('The screenshot data is invalid.');
+  return createImageBitmap(blob);
+}
+
+async function analyzeImageDataUrl(dataUrl: string): Promise<ImageAnalysis> {
+  const image = await decodeImage(dataUrl);
+  try {
+    const sample = document.createElement('canvas');
+    sample.width = 48;
+    sample.height = 48;
+    const context = sample.getContext('2d', { willReadFrequently: true })!;
+    context.drawImage(image, 0, 0, image.width, image.height, 0, 0, sample.width, sample.height);
+    const pixels = context.getImageData(0, 0, sample.width, sample.height).data;
+    let opaque = 0;
+    let min = 255;
+    let max = 0;
+    for (let index = 0; index < pixels.length; index += 4) {
+      if (pixels[index + 3] < 8) continue;
+      opaque++;
+      const luminance = Math.round(pixels[index] * 0.2126 + pixels[index + 1] * 0.7152 + pixels[index + 2] * 0.0722);
+      min = Math.min(min, luminance);
+      max = Math.max(max, luminance);
+    }
+    const total = sample.width * sample.height;
+    const opaqueRatio = opaque / total;
+    const luminanceRange = opaque ? max - min : 0;
+    const blank = image.width < 2 || image.height < 2 || opaqueRatio < 0.02 || (luminanceRange < 2 && (max < 3 || min > 252));
+    return { width: image.width, height: image.height, opaqueRatio, luminanceRange, blank };
+  } finally {
+    image.close();
+  }
+}
+
+async function cropImageDataUrl(dataUrl: string, rect: CaptureRect): Promise<string> {
+  const image = await decodeImage(dataUrl);
+  try {
+    const scaleX = image.width / Math.max(1, rect.viewportWidth);
+    const scaleY = image.height / Math.max(1, rect.viewportHeight);
+    const sourceX = Math.max(0, Math.floor(rect.x * scaleX));
+    const sourceY = Math.max(0, Math.floor(rect.y * scaleY));
+    const sourceWidth = Math.min(image.width - sourceX, Math.max(1, Math.ceil(rect.width * scaleX)));
+    const sourceHeight = Math.min(image.height - sourceY, Math.max(1, Math.ceil(rect.height * scaleY)));
+    if (sourceWidth < 2 || sourceHeight < 2) throw new Error('The selected area is too small.');
+    const canvas = document.createElement('canvas');
+    canvas.width = sourceWidth;
+    canvas.height = sourceHeight;
+    const context = canvas.getContext('2d')!;
+    context.imageSmoothingEnabled = false;
+    context.drawImage(image, sourceX, sourceY, sourceWidth, sourceHeight, 0, 0, sourceWidth, sourceHeight);
+    const output = canvas.toDataURL('image/png');
+    if (!output || output === 'data:,' || output.length < 128) throw new Error('The selected area could not be encoded.');
+    return output;
+  } finally {
+    image.close();
+  }
+}
+
 // System audio comes with the capture stream; the microphone is a separate
 // getUserMedia stream. When both are on, mix them through WebAudio into one
 // track (a MediaRecorder can only record a single audio track).
 async function buildAudioTracks(options: RecordOptions): Promise<MediaStreamTrack[]> {
   const systemTracks = options.systemAudio ? mediaStream?.getAudioTracks() ?? [] : [];
-  if (!options.microphone) return systemTracks;
-  microphoneStream = await navigator.mediaDevices.getUserMedia({ audio: true, video: false });
-  const micTracks = microphoneStream.getAudioTracks();
+  microphoneStream = options.microphone
+    ? await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: true, noiseSuppression: true }, video: false })
+    : null;
+  const micTracks = microphoneStream?.getAudioTracks() ?? [];
   if (!systemTracks.length) return micTracks;
+
+  // Mix tab/system audio and microphone into one recorder track. For tab capture,
+  // route the captured audio back to speakers too; Chrome otherwise silences the
+  // tab while tabCapture is active. Desktop capture is not played back to avoid
+  // feedback loops.
   audioContext = new AudioContext();
-  const dest = audioContext.createMediaStreamDestination();
-  audioContext.createMediaStreamSource(new MediaStream(systemTracks)).connect(dest);
-  if (micTracks.length) audioContext.createMediaStreamSource(new MediaStream(micTracks)).connect(dest);
-  return dest.stream.getAudioTracks();
+  const destination = audioContext.createMediaStreamDestination();
+  const systemSource = audioContext.createMediaStreamSource(new MediaStream(systemTracks));
+  systemSource.connect(destination);
+  if (options.mode === 'tab') systemSource.connect(audioContext.destination);
+  if (micTracks.length) audioContext.createMediaStreamSource(new MediaStream(micTracks)).connect(destination);
+  return destination.stream.getAudioTracks();
 }
 
 async function startRecording(streamId: string, options: RecordOptions): Promise<void> {
   if (mediaRecorder && mediaRecorder.state !== 'inactive') throw new Error('Already recording');
   await cleanup();
 
+  const profile = resolveRecordProfile(options.quality, options.fps);
   const source = options.mode === 'desktop' ? 'desktop' : 'tab';
-  // chromeMediaSource constraints are Chrome-only and untyped.
   const constraints: any = {
     audio: options.systemAudio
       ? { mandatory: { chromeMediaSource: source, chromeMediaSourceId: streamId } }
@@ -315,9 +395,9 @@ async function startRecording(streamId: string, options: RecordOptions): Promise
       mandatory: {
         chromeMediaSource: source,
         chromeMediaSourceId: streamId,
-        maxWidth: QUALITY.width,
-        maxHeight: QUALITY.height,
-        maxFrameRate: QUALITY.fps,
+        maxWidth: profile.width,
+        maxHeight: profile.height,
+        maxFrameRate: profile.fps,
       },
     },
   };
@@ -328,70 +408,88 @@ async function startRecording(streamId: string, options: RecordOptions): Promise
   if (!videoTrack) throw new Error('No video track available for recording');
   recorderStream.addTrack(videoTrack);
   for (const track of await buildAudioTracks(options)) {
-    try {
-      recorderStream.addTrack(track);
-    } catch {
-      /* duplicate track */
-    }
+    if (!recorderStream.getAudioTracks().some((current) => current.id === track.id)) recorderStream.addTrack(track);
   }
 
-  // Negotiate the best supported codec, newest first.
   const codecs = ['video/webm;codecs=vp9,opus', 'video/webm;codecs=vp9', 'video/webm;codecs=vp8,opus', 'video/webm;codecs=vp8', 'video/webm'];
-  const mimeType = codecs.find((m) => MediaRecorder.isTypeSupported(m)) ?? 'video/webm';
-
+  const mimeType = codecs.find((value) => MediaRecorder.isTypeSupported(value)) ?? 'video/webm';
   recordedChunks = [];
   startTime = Date.now();
-  mediaRecorder = new MediaRecorder(recorderStream, { mimeType, videoBitsPerSecond: QUALITY.bitrate });
-  mediaRecorder.ondataavailable = (e) => {
-    if (e.data && e.data.size > 0) recordedChunks.push(e.data);
+  pausedAt = 0;
+  pausedDurationMs = 0;
+  mediaRecorder = new MediaRecorder(recorderStream, { mimeType, videoBitsPerSecond: profile.bitrate });
+  mediaRecorder.ondataavailable = (event) => {
+    if (event.data && event.data.size > 0) recordedChunks.push(event.data);
   };
-  mediaRecorder.onerror = () => {
-    chrome.runtime.sendMessage({ type: 'KS_RECORDING_ERROR', error: 'Recorder failed' }).catch(() => {});
+  mediaRecorder.onerror = (event) => {
+    const message = (event as Event & { error?: DOMException }).error?.message || 'Recorder failed';
+    chrome.runtime.sendMessage({ type: 'KS_RECORDING_ERROR', error: message }).catch(() => {});
   };
 
-  // The user can end the capture from Chrome's own "stop sharing" UI — treat
-  // that exactly like pressing Stop, or the extension stays stuck recording.
   const onTrackEnd = () => {
     if (mediaRecorder && mediaRecorder.state !== 'inactive') {
-      stopRecording().catch((e) =>
-        chrome.runtime.sendMessage({ type: 'KS_RECORDING_ERROR', error: (e as Error)?.message || 'Stop failed' }).catch(() => {}),
+      stopRecording().catch((error) =>
+        chrome.runtime.sendMessage({ type: 'KS_RECORDING_ERROR', error: (error as Error)?.message || 'Stop failed' }).catch(() => {}),
       );
     }
   };
-  mediaStream.getTracks().forEach((t) => t.addEventListener('ended', onTrackEnd, { once: true }));
-
-  // 1s timeslice keeps memory bounded on long recordings.
+  mediaStream.getTracks().forEach((track) => track.addEventListener('ended', onTrackEnd, { once: true }));
   mediaRecorder.start(1000);
+}
+
+function pauseRecording(): void {
+  if (!mediaRecorder || mediaRecorder.state !== 'recording') throw new Error('No active recording to pause');
+  mediaRecorder.requestData();
+  mediaRecorder.pause();
+  pausedAt = Date.now();
+}
+
+function resumeRecording(): void {
+  if (!mediaRecorder || mediaRecorder.state !== 'paused') throw new Error('The recording is not paused');
+  pausedDurationMs += pausedAt ? Date.now() - pausedAt : 0;
+  pausedAt = 0;
+  mediaRecorder.resume();
 }
 
 async function stopRecording(): Promise<void> {
   if (!mediaRecorder || mediaRecorder.state === 'inactive') throw new Error('No active recording');
   const recorder = mediaRecorder;
+  if (recorder.state === 'paused') {
+    pausedDurationMs += pausedAt ? Date.now() - pausedAt : 0;
+    pausedAt = 0;
+    recorder.resume();
+  }
+  try {
+    recorder.requestData();
+  } catch {
+    /* some encoders flush automatically on stop */
+  }
   const stopped = new Promise<void>((resolve) => recorder.addEventListener('stop', () => resolve(), { once: true }));
   recorder.stop();
   await stopped;
 
   const mimeType = recorder.mimeType || 'video/webm';
   const blob = new Blob(recordedChunks, { type: mimeType });
-  const durationMs = Date.now() - startTime;
-  const url = URL.createObjectURL(blob); // stays alive with this document — do not revoke before download
+  const effectiveDurationMs = Math.max(0, Date.now() - startTime - pausedDurationMs);
+  if (blob.size < 1024 || effectiveDurationMs < 100) {
+    await cleanup();
+    throw new Error('The recording ended before usable video was produced.');
+  }
+  const url = URL.createObjectURL(blob);
   const ext = mimeType.includes('mp4') ? 'mp4' : 'webm';
-
+  const filename = recordingFilename(startTime, ext);
   await cleanup();
 
-  const filename = recordingFilename(startTime, ext);
-  const resp = await chrome.runtime
-    .sendMessage({ type: 'KS_RECORDING_READY', url, filename, size: blob.size, durationMs })
+  const response = await chrome.runtime
+    .sendMessage({ type: 'KS_RECORDING_READY', url, filename, size: blob.size, durationMs: effectiveDurationMs })
     .catch(() => null);
-  if (!(resp as { ok?: boolean } | null)?.ok) {
-    // Background couldn't run downloads.download — save straight from this
-    // document instead (an anchor click needs no extra permissions).
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = filename.split('/').pop() ?? 'keepsake-recording.webm';
-    document.body.appendChild(a);
-    a.click();
-    a.remove();
+  if (!(response as { ok?: boolean } | null)?.ok) {
+    const anchor = document.createElement('a');
+    anchor.href = url;
+    anchor.download = filename.split('/').pop() ?? 'keepsake-recording.webm';
+    document.body.appendChild(anchor);
+    anchor.click();
+    anchor.remove();
   }
 }
 
@@ -402,6 +500,8 @@ async function cleanup(): Promise<void> {
   recorderStream = mediaStream = microphoneStream = null;
   mediaRecorder = null;
   recordedChunks = [];
+  pausedAt = 0;
+  pausedDurationMs = 0;
   if (audioContext) {
     await audioContext.close().catch(() => {});
     audioContext = null;

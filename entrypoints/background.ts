@@ -5,10 +5,14 @@ import { enqueueSave, flushQueue } from '@/lib/queue';
 import { type Message, type ScreenshotResult, type MetaResult, type SaveCurrentPageResult, dataUrlToBlob } from '@/lib/messaging';
 import { extractPageMeta, type PageMeta } from '@/lib/metadata';
 import { captureFullPageScript } from '@/lib/fullpage';
+import { selectCaptureRegion } from '@/lib/captureRegion';
 import {
   IDLE_RECORDING_STATE,
+  normalizeRecordingState,
   recordingStateStore,
   screenshotFilename,
+  type CaptureRect,
+  type ImageAnalysis,
   type RecordOptions,
 } from '@/lib/capture';
 import { inferType, safeDomain } from '@/lib/util';
@@ -481,14 +485,44 @@ async function handleMessage(msg: Message, sender?: { tab?: { id?: number; windo
     // preview/trim recordings, then copy/download/save from there.
 
     case 'KS_CAPTURE_VISIBLE': {
-      const dataUrl = await browser.tabs.captureVisibleTab(undefined as any, { format: 'png' });
       const [tab] = await browser.tabs.query({ active: true, currentWindow: true });
+      if (!tab?.id) return { ok: false, error: 'No active tab' };
+      const dataUrl = await captureValidatedPng(tab.windowId);
       await openStudio({
         kind: 'screenshot',
         blob: dataUrlToBlob(dataUrl),
-        pageUrl: tab?.url,
-        pageTitle: tab?.title,
+        pageUrl: tab.url,
+        pageTitle: tab.title,
         filename: screenshotFilename('visible'),
+      });
+      return { ok: true };
+    }
+
+    case 'KS_CAPTURE_REGION': {
+      const [tab] = await browser.tabs.query({ active: true, currentWindow: true });
+      if (!tab?.id) return { ok: false, error: 'No active tab' };
+      let selection: CaptureRect | null = null;
+      try {
+        const [result] = await browser.scripting.executeScript({
+          target: { tabId: tab.id },
+          func: selectCaptureRegion,
+          args: [msg.mode],
+        });
+        selection = (result?.result as CaptureRect | null) ?? null;
+      } catch {
+        return { ok: false, error: 'This browser page does not allow area capture.' };
+      }
+      if (!selection) return { ok: false, cancelled: true };
+      const source = await captureValidatedPng(tab.windowId);
+      const cropped = await cropImage(source, selection);
+      const analysis = await analyzeImage(cropped);
+      if (analysis.blank) return { ok: false, error: 'The selected area was blank. Try selecting a slightly larger area.' };
+      await openStudio({
+        kind: 'screenshot',
+        blob: dataUrlToBlob(cropped),
+        pageUrl: tab.url,
+        pageTitle: tab.title,
+        filename: screenshotFilename(msg.mode),
       });
       return { ok: true };
     }
@@ -497,15 +531,22 @@ async function handleMessage(msg: Message, sender?: { tab?: { id?: number; windo
     // at ~2 calls/second — pace ourselves so a long page never hits the quota.
     case 'KS_CAPTURE_VIEWPORT': {
       await tileGate();
-      const dataUrl = await browser.tabs.captureVisibleTab(undefined as any, { format: 'png' });
-      return { dataUrl };
+      try {
+        const dataUrl = await browser.tabs.captureVisibleTab(sender?.tab?.windowId, { format: 'png' });
+        return { dataUrl };
+      } catch (error) {
+        return { dataUrl: '', error: (error as Error)?.message || 'Viewport capture failed' };
+      }
     }
 
     case 'KS_CAPTURE_FULL': {
       const [tab] = await browser.tabs.query({ active: true, currentWindow: true });
       if (!tab?.id) return { ok: false, error: 'No active tab' };
-      // Ack immediately so the popup can close — the capture keeps running.
-      captureFullPage(tab.id).catch((e) => notify('Full-page capture failed', String((e as Error)?.message ?? e)));
+      if (activeFullCaptures.has(tab.id)) return { ok: false, error: 'A full-page capture is already running in this tab.' };
+      activeFullCaptures.add(tab.id);
+      captureFullPage(tab.id)
+        .catch((error) => notify('Full-page capture failed', String((error as Error)?.message ?? error)))
+        .finally(() => activeFullCaptures.delete(tab.id!));
       return { ok: true };
     }
 
@@ -513,15 +554,41 @@ async function handleMessage(msg: Message, sender?: { tab?: { id?: number; windo
       await startRecording(msg.options);
       return { ok: true };
 
+    case 'KS_PAUSE_RECORDING': {
+      const response = (await browser.runtime.sendMessage({ target: 'ks-offscreen', type: 'OFFSCREEN_PAUSE' }).catch(() => null)) as { ok?: boolean; error?: string } | null;
+      if (!response?.ok) return { ok: false, error: response?.error || 'The recorder could not pause.' };
+      const state = normalizeRecordingState(await recordingStateStore.getValue());
+      if (state.isRecording && !state.paused) {
+        state.paused = true;
+        state.pausedAt = Date.now();
+        await recordingStateStore.setValue(state);
+        await browser.action.setBadgeText({ text: 'II' });
+      }
+      return { ok: true };
+    }
+
+    case 'KS_RESUME_RECORDING': {
+      const response = (await browser.runtime.sendMessage({ target: 'ks-offscreen', type: 'OFFSCREEN_RESUME' }).catch(() => null)) as { ok?: boolean; error?: string } | null;
+      if (!response?.ok) return { ok: false, error: response?.error || 'The recorder could not resume.' };
+      const state = normalizeRecordingState(await recordingStateStore.getValue());
+      if (state.isRecording && state.paused) {
+        state.pausedDurationMs += state.pausedAt ? Date.now() - state.pausedAt : 0;
+        state.paused = false;
+        state.pausedAt = null;
+        await recordingStateStore.setValue(state);
+        await browser.action.setBadgeText({ text: 'REC' });
+      }
+      return { ok: true };
+    }
+
     case 'KS_STOP_RECORDING': {
       const resp = (await browser.runtime
         .sendMessage({ target: 'ks-offscreen', type: 'OFFSCREEN_STOP' })
         .catch(() => null)) as { ok?: boolean } | null;
       if (!resp?.ok) {
-        // The recorder is gone (crashed / never started) — clear the stuck
-        // state instead of pretending the stop worked.
         await recordingStateStore.setValue(IDLE_RECORDING_STATE);
         await browser.action.setBadgeText({ text: '' });
+        return { ok: false, error: 'The recorder was no longer running.' };
       }
       return { ok: true };
     }
@@ -537,6 +604,7 @@ async function handleMessage(msg: Message, sender?: { tab?: { id?: number; windo
       await browser.action.setBadgeText({ text: '' });
       try {
         const blob = await (await fetch(msg.url)).blob();
+        if (blob.size < 1024) throw new Error('The recorder produced an empty video.');
         const tab = prior.tabId ? await browser.tabs.get(prior.tabId).catch(() => null) : null;
         await openStudio({
           kind: 'recording',
@@ -626,27 +694,71 @@ async function runMigration() {
 
 // ---- capture plumbing ----
 
-// Minimum spacing between captureVisibleTab calls (Chrome quota ≈ 2/sec).
+// Minimum spacing between captureVisibleTab calls (Chrome quota is roughly 2/sec).
 let lastTileAt = 0;
+const activeFullCaptures = new Set<number>();
 async function tileGate(): Promise<void> {
-  const MIN_GAP = 600;
-  const wait = lastTileAt + MIN_GAP - Date.now();
-  if (wait > 0) await new Promise((r) => setTimeout(r, wait));
+  const wait = lastTileAt + 600 - Date.now();
+  if (wait > 0) await new Promise((resolve) => setTimeout(resolve, wait));
   lastTileAt = Date.now();
 }
 
-// Run the scroll-and-stitch capture and return the stitched image data URL.
+async function analyzeImage(dataUrl: string): Promise<ImageAnalysis> {
+  await ensureOffscreenDocument();
+  const result = (await browser.runtime.sendMessage({
+    target: 'ks-offscreen',
+    type: 'OFFSCREEN_ANALYZE_IMAGE',
+    dataUrl,
+  })) as { ok?: boolean; analysis?: ImageAnalysis; error?: string } | null;
+  if (!result?.ok || !result.analysis) throw new Error(result?.error || 'The screenshot could not be validated.');
+  return result.analysis;
+}
+
+async function cropImage(dataUrl: string, rect: CaptureRect): Promise<string> {
+  await ensureOffscreenDocument();
+  const result = (await browser.runtime.sendMessage({
+    target: 'ks-offscreen',
+    type: 'OFFSCREEN_CROP_IMAGE',
+    dataUrl,
+    rect,
+  })) as { ok?: boolean; dataUrl?: string; error?: string } | null;
+  if (!result?.ok || !result.dataUrl) throw new Error(result?.error || 'The selected area could not be cropped.');
+  return result.dataUrl;
+}
+
+async function captureValidatedPng(windowId?: number): Promise<string> {
+  let last = '';
+  for (let attempt = 0; attempt < 2; attempt++) {
+    await tileGate();
+    last = await browser.tabs.captureVisibleTab(windowId, { format: 'png' });
+    const analysis = await analyzeImage(last);
+    if (!analysis.blank) return last;
+    await new Promise((resolve) => setTimeout(resolve, 240));
+  }
+  throw new Error('Chrome returned a blank screenshot twice. Refresh the page and try again.');
+}
+
 async function grabFullPageDataUrl(tabId: number): Promise<string | null> {
-  const [res] = await browser.scripting.executeScript({
+  const [result] = await browser.scripting.executeScript({
     target: { tabId },
     func: captureFullPageScript,
   });
-  return (res?.result as string | null) ?? null;
+  return (result?.result as string | null) ?? null;
 }
 
 async function captureFullPage(tabId: number): Promise<void> {
-  const dataUrl = await grabFullPageDataUrl(tabId);
-  if (!dataUrl) throw new Error('Capture returned nothing');
+  let dataUrl = await grabFullPageDataUrl(tabId);
+  if (!dataUrl) throw new Error('The full-page capture returned no image.');
+  let analysis = await analyzeImage(dataUrl);
+  if (analysis.blank) {
+    // A transient paint failure can produce a white first pass. Retry the entire
+    // capture once; never open a knowingly blank image in Capture Studio.
+    await new Promise((resolve) => setTimeout(resolve, 350));
+    dataUrl = await grabFullPageDataUrl(tabId);
+    if (!dataUrl) throw new Error('The full-page retry returned no image.');
+    analysis = await analyzeImage(dataUrl);
+  }
+  if (analysis.blank) throw new Error('Chrome returned a blank full-page image. Try Element capture for this app-style page.');
   const filename = screenshotFilename('full').replace(/\.png$/, dataUrl.startsWith('data:image/jpeg') ? '.jpg' : '.png');
   const tab = await browser.tabs.get(tabId).catch(() => null);
   await openStudio({
@@ -668,12 +780,10 @@ async function openStudio(opts: {
   filename: string;
   durationMs?: number;
 }): Promise<void> {
+  if (opts.blob.size < 512) throw new Error('The capture produced no usable data.');
   const result = await saveCaptureToLibrary(opts).catch(() => undefined);
   const id = await stashStudioItem({ ...opts, saveId: result?.saveId });
   await browser.tabs.create({ url: browser.runtime.getURL('/studio.html') + `#${id}` });
-  // A recording that was kept local-only (Free plan) still downloads/edits
-  // fine — only cross-device sync was withheld. Tell the user once, with a
-  // path to upgrade, instead of silently doing something they didn't expect.
   if (opts.kind === 'recording' && result && !result.cloudSaved) {
     notifyUpgrade(
       'ks-upgrade-recording-',
@@ -687,9 +797,17 @@ async function openStudio(opts: {
 // exports the single memoized creator (one offscreen document per extension).
 const ensureOffscreenDocument = ensureOffscreen;
 
+async function runCaptureCountdown(seconds: number): Promise<void> {
+  for (let remaining = seconds; remaining > 0; remaining--) {
+    await browser.action.setBadgeText({ text: String(remaining) });
+    await browser.action.setBadgeBackgroundColor({ color: '#4f7cff' });
+    await new Promise((resolve) => setTimeout(resolve, 1000));
+  }
+}
+
 async function startRecording(options: RecordOptions): Promise<void> {
   const state = await verifiedRecordingState();
-  if (state.isRecording) throw new Error('Already recording');
+  if (state.isRecording) throw new Error('A recording is already running.');
   const [tab] = await browser.tabs.query({ active: true, currentWindow: true });
   if (!tab?.id) throw new Error('No active tab');
 
@@ -704,10 +822,6 @@ async function startRecording(options: RecordOptions): Promise<void> {
       });
     });
   } else {
-    // Chrome's picker: user chooses a screen or a window (audio = system audio).
-    // NO target tab here: a tab-scoped streamId can only be consumed by that
-    // tab, but our consumer is the offscreen recorder — omitting the tab keys
-    // the stream to the extension itself (getUserMedia in offscreen works).
     streamId = await new Promise<string>((resolve, reject) => {
       browser.desktopCapture.chooseDesktopMedia(['screen', 'window', 'audio'] as any, (id: string) => {
         if (id) resolve(id);
@@ -716,8 +830,9 @@ async function startRecording(options: RecordOptions): Promise<void> {
     });
   }
 
-  // The offscreen recorder can fail to start (bad streamId, no encoder…) —
-  // surface that instead of pretending the recording is running.
+  const countdown = options.countdownSeconds ?? 0;
+  if (countdown) await runCaptureCountdown(countdown);
+  const startedAt = Date.now();
   const started = (await browser.runtime.sendMessage({
     target: 'ks-offscreen',
     type: 'OFFSCREEN_START',
@@ -727,9 +842,14 @@ async function startRecording(options: RecordOptions): Promise<void> {
   if (!started?.ok) throw new Error(started?.error || 'The recorder could not start');
   await recordingStateStore.setValue({
     isRecording: true,
+    paused: false,
     mode: options.mode,
-    startedAt: Date.now(),
+    startedAt,
+    pausedAt: null,
+    pausedDurationMs: 0,
     tabId: tab.id,
+    quality: options.quality,
+    fps: options.fps,
   });
   await browser.action.setBadgeText({ text: 'REC' });
   await browser.action.setBadgeBackgroundColor({ color: '#dc2626' });
@@ -739,20 +859,27 @@ async function startRecording(options: RecordOptions): Promise<void> {
 // The offscreen document itself is NOT proof — the embedder/recall/watcher
 // keep one alive constantly — so ask the recorder for its real state.
 async function verifiedRecordingState() {
-  const state = await recordingStateStore.getValue();
+  const state = normalizeRecordingState(await recordingStateStore.getValue());
   if (!state.isRecording) return state;
   const contexts = await (browser.runtime as any).getContexts({ contextTypes: ['OFFSCREEN_DOCUMENT'] });
   let live = false;
+  let paused = state.paused;
   if (contexts.length > 0) {
-    const resp = (await browser.runtime
+    const response = (await browser.runtime
       .sendMessage({ target: 'ks-offscreen', type: 'OFFSCREEN_GET_STATE' })
-      .catch(() => null)) as { ok?: boolean; recording?: boolean } | null;
-    live = Boolean(resp?.recording);
+      .catch(() => null)) as { ok?: boolean; recording?: boolean; paused?: boolean } | null;
+    live = Boolean(response?.recording);
+    paused = Boolean(response?.paused);
   }
   if (!live) {
     await recordingStateStore.setValue(IDLE_RECORDING_STATE);
     await browser.action.setBadgeText({ text: '' });
     return IDLE_RECORDING_STATE;
+  }
+  if (paused !== state.paused) {
+    state.paused = paused;
+    state.pausedAt = paused ? state.pausedAt ?? Date.now() : null;
+    await recordingStateStore.setValue(state);
   }
   return state;
 }
