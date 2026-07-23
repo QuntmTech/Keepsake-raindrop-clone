@@ -64,7 +64,12 @@ export async function runWriterDetailed(
   request: WriterRequest & { quality?: AiRouteMode; signal?: AbortSignal; overallTimeoutMs?: number },
 ): Promise<LlmResult> {
   const built = buildWriterPrompt(request);
-  const contextHeavy = request.action === 'custom' || request.action === 'reply' || request.action === 'translate';
+  const contextHeavy =
+    request.action === 'custom' ||
+    request.action === 'reply' ||
+    request.action === 'translate' ||
+    request.action === 'explain' ||
+    request.action === 'keypoints';
   return llmCompleteDetailed({
     tier: contextHeavy ? 'smart' : 'fast',
     task: request.action === 'custom' ? 'custom-writer' : 'writer',
