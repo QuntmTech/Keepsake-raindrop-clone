@@ -51,6 +51,7 @@ export const ImageEditor = forwardRef<ImageEditorHandle, { blob: Blob; onEdited:
     const [tool, setTool] = useState<Tool>('pen');
     const [color, setColor] = useState(COLORS[0]);
     const [sizeKey, setSizeKey] = useState('m');
+    const [zoom, setZoom] = useState<'fit' | 25 | 50 | 100 | 200>('fit');
     const [loaded, setLoaded] = useState(false);
     const [cropPending, setCropPending] = useState<Rect | null>(null);
     const [textDraft, setTextDraft] = useState<{ x: number; y: number } | null>(null);
@@ -362,6 +363,24 @@ export const ImageEditor = forwardRef<ImageEditorHandle, { blob: Blob; onEdited:
             ))}
           </div>
           <span className="h-6 w-px bg-line" />
+          <label className="flex items-center gap-1.5 text-xs text-ink-faint" title="Preview zoom — exports always remain full resolution">
+            Zoom
+            <select
+              className="rounded-md border border-line bg-surface px-2 py-1 text-xs text-ink"
+              value={String(zoom)}
+              onChange={(event) => {
+                const value = event.target.value;
+                setZoom(value === 'fit' ? 'fit' : (Number(value) as 25 | 50 | 100 | 200));
+              }}
+            >
+              <option value="fit">Fit</option>
+              <option value="25">25%</option>
+              <option value="50">50%</option>
+              <option value="100">100%</option>
+              <option value="200">200%</option>
+            </select>
+          </label>
+          <span className="h-6 w-px bg-line" />
           <button className="btn-ghost px-2.5 py-1.5 text-xs" onClick={undo} disabled={!undoRef.current.length} title="Undo (Ctrl+Z)">
             ↩ Undo
           </button>
@@ -385,9 +404,10 @@ export const ImageEditor = forwardRef<ImageEditorHandle, { blob: Blob; onEdited:
           <div className="relative mx-auto w-fit">
             <canvas
               ref={canvasRef}
-              className={`block max-w-full rounded-lg border border-line bg-white shadow-card ${
-                tool === 'text' ? 'cursor-text' : 'cursor-crosshair'
-              }`}
+              className={`block rounded-lg border border-line bg-white shadow-card ${
+                zoom === 'fit' ? 'max-w-full' : 'max-w-none'
+              } ${tool === 'text' ? 'cursor-text' : 'cursor-crosshair'}`}
+              style={zoom === 'fit' ? undefined : { width: `${(baseRef.current?.width ?? 1) * (zoom / 100)}px` }}
               onPointerDown={onDown}
               onPointerMove={onMove}
               onPointerUp={onUp}
