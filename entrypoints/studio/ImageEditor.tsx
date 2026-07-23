@@ -865,13 +865,15 @@ async function canvasBlob(canvas: HTMLCanvasElement, type: string, quality?: num
 async function jpegToPdf(jpeg: Blob, width: number, height: number): Promise<Blob> {
   const image = new Uint8Array(await jpeg.arrayBuffer());
   const encoder = new TextEncoder();
-  const chunks: Uint8Array[] = [];
+  const chunks: ArrayBuffer[] = [];
   const offsets: number[] = [0];
   let length = 0;
   const push = (value: string | Uint8Array) => {
     const bytes = typeof value === 'string' ? encoder.encode(value) : value;
-    chunks.push(bytes);
-    length += bytes.length;
+    const copy = new Uint8Array(bytes.byteLength);
+    copy.set(bytes);
+    chunks.push(copy.buffer);
+    length += copy.byteLength;
   };
   const object = (id: number, body: () => void) => {
     offsets[id] = length;

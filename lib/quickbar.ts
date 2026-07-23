@@ -200,9 +200,13 @@ export async function mountQuickBar(initialSettings?: Settings): Promise<QuickBa
     .section-title { margin: 8px 8px 3px; color: rgba(255,255,255,.42); font-size: 10px; font-weight: 750; text-transform: uppercase; letter-spacing: .06em; }
     .search-input { width: calc(100% - 8px); margin: 0 4px 7px; border: 1px solid rgba(255,255,255,.14); border-radius: 10px; background: rgba(255,255,255,.07); color: #fff; padding: 10px 11px; outline: none; font: 13px ui-sans-serif,system-ui; }
     .search-input:focus { border-color: var(--ks-accent); box-shadow: 0 0 0 2px color-mix(in srgb, var(--ks-accent) 25%, transparent); }
-    .result { align-items: flex-start; padding: 9px 10px; }
-    .result-copy { min-width: 0; display: flex; flex-direction: column; gap: 2px; }
-    .result-title { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: #fff; font-size: 12px; font-weight: 650; }
+    .result { align-items: center; min-height: 52px; padding: 7px 8px; }
+    .result-thumb { position: relative; width: 38px; height: 38px; flex: none; overflow: hidden; display: grid; place-items: center; border: 1px solid rgba(255,255,255,.1); border-radius: 9px; background: hsl(var(--ks-thumb-hue, 220) 42% 29%); color: rgba(255,255,255,.9); font-size: 14px; font-weight: 800; box-shadow: inset 0 1px 0 rgba(255,255,255,.08); }
+    .result-thumb img { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; background: #252833; }
+    .result-letter { position: relative; z-index: 0; }
+    .result-play { position: absolute; right: 3px; bottom: 3px; z-index: 2; display: grid; width: 14px; height: 14px; place-items: center; border-radius: 50%; background: rgba(0,0,0,.68); color: #fff; font-size: 8px; box-shadow: 0 1px 4px rgba(0,0,0,.35); }
+    .result-copy { min-width: 0; flex: 1; display: flex; flex-direction: column; gap: 2px; }
+    .result-title { overflow: hidden; display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; color: #fff; font-size: 12px; font-weight: 650; line-height: 1.25; }
     .result-meta { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: rgba(255,255,255,.48); font-size: 10px; }
     .empty { padding: 18px 12px; color: rgba(255,255,255,.52); font-size: 12px; text-align: center; }
     .danger { color: #fca5a5; }
@@ -793,6 +797,77 @@ export async function mountQuickBar(initialSettings?: Settings): Promise<QuickBa
     input.focus();
   }
 
+
+  function youtubeThumbnail(url: string): string | null {
+    try {
+      const parsed = new URL(url);
+      const host = parsed.hostname.replace(/^www./, '').toLowerCase();
+      let id = '';
+      if (host === 'youtu.be') id = parsed.pathname.split('/').filter(Boolean)[0] ?? '';
+      else if (host === 'youtube.com' || host.endsWith('.youtube.com')) {
+        id = parsed.searchParams.get('v') ?? '';
+        if (!id) {
+          const parts = parsed.pathname.split('/').filter(Boolean);
+          if (['shorts', 'embed', 'live'].includes(parts[0] ?? '')) id = parts[1] ?? '';
+        }
+      }
+      return /^[A-Za-z0-9_-]{6,20}$/.test(id) ? `https://i.ytimg.com/vi/${id}/hqdefault.jpg` : null;
+    } catch {
+      return null;
+    }
+  }
+
+  function createBookmarkThumbnail(bookmark: Bookmark | RecallItem): HTMLSpanElement {
+    const visual = bookmark as Bookmark;
+    const youtube = youtubeThumbnail(bookmark.url);
+    const candidates = [...new Set(
+      [youtube, visual.cover, visual.screenshot, visual.favicon]
+        .filter((value): value is string => Boolean(value)),
+    )];
+    const wrapper = document.createElement('span');
+    wrapper.className = 'result-thumb';
+    wrapper.setAttribute('aria-hidden', 'true');
+
+    const seed = bookmark.domain || bookmark.title || bookmark.url;
+    let hash = 0;
+    for (let index = 0; index < seed.length; index++) hash = (hash * 31 + seed.charCodeAt(index)) >>> 0;
+    wrapper.style.setProperty('--ks-thumb-hue', String(hash % 360));
+
+    const letter = document.createElement('span');
+    letter.className = 'result-letter';
+    letter.textContent = (bookmark.title || bookmark.domain || '?').trim().charAt(0).toUpperCase() || '?';
+    wrapper.appendChild(letter);
+
+    if (candidates.length) {
+      const image = document.createElement('img');
+      image.alt = '';
+      image.loading = 'lazy';
+      image.decoding = 'async';
+      image.referrerPolicy = 'no-referrer';
+      let index = 0;
+      const loadNext = () => {
+        const next = candidates[index++];
+        if (!next) {
+          image.remove();
+          return;
+        }
+        image.src = next;
+      };
+      image.addEventListener('error', loadNext);
+      loadNext();
+      wrapper.appendChild(image);
+    }
+
+    if (youtube) {
+      const play = document.createElement('span');
+      play.className = 'result-play';
+      play.textContent = '▶';
+      wrapper.appendChild(play);
+    }
+
+    return wrapper;
+  }
+
   function addBookmarkRows(container: HTMLElement, items: (Bookmark | RecallItem)[], emptyMessage: string) {
     container.replaceChildren();
     if (!items.length) {
@@ -817,7 +892,7 @@ export async function mountQuickBar(initialSettings?: Settings): Promise<QuickBa
         try { return new URL(bookmark.url).hostname; } catch { return bookmark.url; }
       })();
       copy.append(title, meta);
-      row.appendChild(copy);
+      row.append(createBookmarkThumbnail(bookmark), copy);
       row.onclick = () => {
         send({ type: 'OPEN_URL', url: bookmark.url });
         closePopover();

@@ -56,7 +56,7 @@ function cleanName(value: string): string {
 }
 
 function cleanInstruction(value: string): string {
-  return value.replace(/[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/g, ' ').trim().slice(0, 4000);
+  return value.replace(/[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/g, ' ').trim().slice(0, 1200);
 }
 
 function cleanShortcut(value: string): string {

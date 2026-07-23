@@ -42,8 +42,10 @@ test('Large complex work escalates to best with fallbacks', () => {
   assert.deepEqual(route.models, [NOVITA_MODEL_IDS.best, NOVITA_MODEL_IDS.balanced, NOVITA_MODEL_IDS.economy]);
 });
 
-test('Manual modes are respected', () => {
-  assert.equal(routeNovitaModels({ mode: 'economy', tier: 'best' }).models[0], NOVITA_MODEL_IDS.economy);
+test('Manual modes are respected without economy escalating to the costliest model', () => {
+  const economy = routeNovitaModels({ mode: 'economy', tier: 'best' });
+  assert.equal(economy.models[0], NOVITA_MODEL_IDS.economy);
+  assert.ok(!economy.models.includes(NOVITA_MODEL_IDS.best));
   assert.equal(routeNovitaModels({ mode: 'best', tier: 'fast' }).models[0], NOVITA_MODEL_IDS.best);
 });
 

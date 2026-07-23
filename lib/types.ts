@@ -126,6 +126,7 @@ export interface Settings {
   primarySurface: UiSurface;
   // Feature toggles — let the user turn pieces on/off.
   enableHighlights: boolean;
+  enableAiSelectionTools: boolean; // selected-text AI helper; never sends a whole field implicitly
   enableAutoScreenshot: boolean;
   enableMetadata: boolean;   // fetch og:image / favicon / reading time on save
   enableQuickBar: boolean;   // draggable in-page quick-save widget
@@ -159,6 +160,7 @@ export interface Settings {
 export const DEFAULT_SETTINGS: Settings = {
   primarySurface: 'popup',
   enableHighlights: true,
+  enableAiSelectionTools: true,
   enableAutoScreenshot: true,
   enableMetadata: true,
   enableQuickBar: true,

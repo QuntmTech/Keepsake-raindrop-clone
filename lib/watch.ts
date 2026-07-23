@@ -1,4 +1,5 @@
 import { db, findSaveByUrl, getSave, patchSave, type Save, type WatchFrequency, type WatchMode } from './save';
+import { ensureOffscreen } from './embedder';
 
 // Living Bookmarks (Phase 3): saves that act instead of sitting. A
 // chrome.alarms master scheduler wakes every 15 minutes, pulls due watches
@@ -30,7 +31,15 @@ export interface WatchConfig {
 }
 
 export function scheduleWatchAlarm(): void {
-  browser.alarms.create(WATCH_ALARM, { periodInMinutes: WATCH_WAKE_MINUTES, delayInMinutes: 1 });
+  watchedSaves()
+    .then((items) => {
+      if (items.length) {
+        browser.alarms.create(WATCH_ALARM, { periodInMinutes: WATCH_WAKE_MINUTES, delayInMinutes: 1 });
+      } else {
+        browser.alarms.clear(WATCH_ALARM).catch(() => {});
+      }
+    })
+    .catch(() => {});
 }
 
 export async function startWatch(saveId: string, cfg: WatchConfig): Promise<void> {
@@ -43,6 +52,7 @@ export async function startWatch(saveId: string, cfg: WatchConfig): Promise<void
     s.monitoring.failCount = 0;
     s.monitoring.nextCheckAt = Date.now() + 5_000; // first check on the next wake
   });
+  scheduleWatchAlarm();
 }
 
 export async function stopWatch(saveId: string): Promise<void> {
@@ -50,6 +60,7 @@ export async function stopWatch(saveId: string): Promise<void> {
     s.monitoring.enabled = false;
     s.monitoring.nextCheckAt = undefined;
   });
+  scheduleWatchAlarm();
 }
 
 export async function watchedSaves(): Promise<Save[]> {
@@ -74,6 +85,7 @@ export interface WatchProbe {
 
 async function probePage(save: Save, prevText?: string): Promise<WatchProbe> {
   try {
+    await ensureOffscreen();
     // Deadline belt-and-suspenders on top of the offscreen fetch timeout: a
     // stuck probe must never stall the scheduler.
     const resp = (await Promise.race([

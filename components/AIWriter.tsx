@@ -25,6 +25,7 @@ import {
 } from '@/lib/messaging';
 import { findPromptBySlash, listSavedPrompts, type SavedPrompt } from '@/lib/promptLibrary';
 import { type AiRouteMode } from '@/lib/types';
+import { checkWriterIntegrity } from '@/lib/writerIntegrity';
 import { AiResultMeta } from './AiResultMeta';
 import { Icon } from './Icon';
 
@@ -52,22 +53,25 @@ interface ActivePage {
   title: string;
 }
 
+type CapturedAiSelection = AiSelectionResult & { tabId?: number };
+
 async function activePage(): Promise<ActivePage> {
   const [tab] = await browser.tabs.query({ active: true, currentWindow: true });
   return { id: tab?.id, url: tab?.url ?? '', title: tab?.title ?? tab?.url ?? 'Untitled page' };
 }
 
-async function readPageSelection(): Promise<AiSelectionResult | null> {
+async function readPageSelection(): Promise<CapturedAiSelection | null> {
   const tab = await activePage();
   if (!tab.id) return null;
-  return browser.tabs.sendMessage(tab.id, { type: 'KS_AI_SELECTION_GET' }).catch(() => null) as Promise<AiSelectionResult | null>;
+  const result = (await browser.tabs.sendMessage(tab.id, { type: 'KS_AI_SELECTION_GET' }).catch(() => null)) as AiSelectionResult | null;
+  return result ? { ...result, tabId: tab.id } : null;
 }
 
 export function AIWriter({ onOpenSettings }: { onOpenSettings?: () => void }) {
   const [draft, setDraft] = useState<WriterDraft>(DEFAULT_WRITER_DRAFT);
   const [ready, setReady] = useState(false);
   const [available, setAvailable] = useState<boolean | null>(null);
-  const [selection, setSelection] = useState<AiSelectionResult | null>(null);
+  const [selection, setSelection] = useState<CapturedAiSelection | null>(null);
   const [prompts, setPrompts] = useState<SavedPrompt[]>([]);
   const [showUsage, setShowUsage] = useState(true);
   const [resultMeta, setResultMeta] = useState<LlmResult | null>(null);
@@ -76,6 +80,7 @@ export function AIWriter({ onOpenSettings }: { onOpenSettings?: () => void }) {
   const [status, setStatus] = useState('');
   const [undoAvailable, setUndoAvailable] = useState(false);
   const requestId = useRef(0);
+  const requestController = useRef<AbortController | null>(null);
   const mounted = useRef(false);
 
   useEffect(() => {
@@ -112,6 +117,7 @@ export function AIWriter({ onOpenSettings }: { onOpenSettings?: () => void }) {
     return () => {
       cancelled = true;
       mounted.current = false;
+      requestController.current?.abort();
       unwatchAi();
       unwatchDraft();
     };
@@ -126,6 +132,10 @@ export function AIWriter({ onOpenSettings }: { onOpenSettings?: () => void }) {
   const changeSummary = useMemo(
     () => (draft.output ? summarizeWriterChanges(draft.input, draft.output) : ''),
     [draft.input, draft.output],
+  );
+  const integrityIssues = useMemo(
+    () => (draft.output ? checkWriterIntegrity(draft.input, draft.output, draft.action) : []),
+    [draft.action, draft.input, draft.output],
   );
 
   function patch(patchValue: Partial<WriterDraft>) {
@@ -174,6 +184,9 @@ export function AIWriter({ onOpenSettings }: { onOpenSettings?: () => void }) {
     }
 
     const id = ++requestId.current;
+    const controller = new AbortController();
+    requestController.current?.abort();
+    requestController.current = controller;
     setBusy(true);
     setError('');
     setStatus('');
@@ -188,6 +201,8 @@ export function AIWriter({ onOpenSettings }: { onOpenSettings?: () => void }) {
         customInstruction: draft.customInstruction,
         targetLanguage: draft.targetLanguage,
         quality: draft.quality,
+        signal: controller.signal,
+        overallTimeoutMs: 75_000,
       });
       if (id !== requestId.current) return;
       patch({ output: result.text.trim(), action });
@@ -195,10 +210,16 @@ export function AIWriter({ onOpenSettings }: { onOpenSettings?: () => void }) {
       setStatus(`${writerActionLabel(action)} complete.`);
     } catch (cause) {
       if (id !== requestId.current) return;
-      setError(cause instanceof Error ? cause.message : 'AI Writer failed. Try again.');
+      if (controller.signal.aborted) setStatus('Writing cancelled.');
+      else setError(cause instanceof Error ? cause.message : 'AI Writer failed. Try again.');
     } finally {
+      if (requestController.current === controller) requestController.current = null;
       if (id === requestId.current) setBusy(false);
     }
+  }
+
+  function cancelGeneration() {
+    requestController.current?.abort();
   }
 
   async function copyOutput() {
@@ -209,10 +230,14 @@ export function AIWriter({ onOpenSettings }: { onOpenSettings?: () => void }) {
 
   async function replaceSelection() {
     if (!draft.output || !selection?.editable) return;
-    const page = await activePage();
-    if (!page.id) return;
+    if (integrityIssues.length && !confirm('Keepsake found ' + integrityIssues.length + ' possible fact change(s). Replace anyway?')) return;
+    const tabId = selection.tabId;
+    if (!tabId) {
+      setError('The original tab is no longer available. Select the text again.');
+      return;
+    }
     const response = (await browser.tabs
-      .sendMessage(page.id, {
+      .sendMessage(tabId, {
         type: 'KS_AI_SELECTION_REPLACE',
         text: draft.output,
         expectedOriginal: selection.text,
@@ -228,10 +253,13 @@ export function AIWriter({ onOpenSettings }: { onOpenSettings?: () => void }) {
   }
 
   async function undoReplacement() {
-    const page = await activePage();
-    if (!page.id) return;
+    const tabId = selection?.tabId;
+    if (!tabId) {
+      setError('The original tab is no longer available.');
+      return;
+    }
     const response = (await browser.tabs
-      .sendMessage(page.id, { type: 'KS_AI_SELECTION_UNDO' })
+      .sendMessage(tabId, { type: 'KS_AI_SELECTION_UNDO' })
       .catch(() => null)) as AiSelectionReplaceResult | null;
     if (!response?.ok) {
       setError(response?.error || 'Nothing could be undone.');
@@ -398,8 +426,12 @@ export function AIWriter({ onOpenSettings }: { onOpenSettings?: () => void }) {
           <button className="btn-primary mt-2 w-full justify-center" onClick={() => generate('custom')} disabled={busy || !draft.input.trim() || !draft.customInstruction.trim()}>Run custom prompt</button>
         </details>
 
-        <button className="btn-primary w-full justify-center" onClick={() => generate()} disabled={busy || !draft.input.trim()}>
-          {busy ? 'Writing…' : `${writerActionLabel(draft.action)} →`}
+        <button
+          className="btn-primary w-full justify-center"
+          onClick={busy ? cancelGeneration : () => generate()}
+          disabled={!busy && !draft.input.trim()}
+        >
+          {busy ? 'Cancel writing' : `${writerActionLabel(draft.action)} →`}
         </button>
 
         {error && <div className="rounded-xl bg-red-500/10 p-3 text-xs text-red-500">{error}</div>}
@@ -413,6 +445,14 @@ export function AIWriter({ onOpenSettings }: { onOpenSettings?: () => void }) {
             </div>
             <textarea className="min-h-48 w-full resize-y rounded-xl border border-line bg-surface p-3 text-sm leading-relaxed text-ink outline-none focus:border-brand" value={draft.output} onChange={(event) => patch({ output: event.target.value })} />
             {showUsage && resultMeta && <div className="mt-2"><AiResultMeta result={resultMeta} /></div>}
+            {integrityIssues.length > 0 && (
+              <div className="mt-2 rounded-xl border border-amber-400/30 bg-amber-400/10 p-2.5 text-[11px] text-ink-soft">
+                <p className="font-semibold text-ink">Check these possible fact changes before replacing:</p>
+                <ul className="mt-1 list-disc space-y-0.5 pl-4">
+                  {integrityIssues.slice(0, 5).map((issue, index) => <li key={issue.kind + ':' + issue.value + ':' + index}>{issue.message}</li>)}
+                </ul>
+              </div>
+            )}
             <div className="mt-3 grid grid-cols-2 gap-2">
               <button className="btn-ghost justify-center" onClick={copyOutput}><Icon name="copy" size={14} /> Copy</button>
               <button className="btn-ghost justify-center" onClick={saveOutput}><Icon name="bookmark" size={14} /> Save</button>

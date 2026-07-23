@@ -15,8 +15,8 @@ type CapturedSelection =
   | { kind: 'page'; range: Range; text: string };
 
 type SelectionUndo =
-  | { kind: 'input'; element: TextInput; value: string; start: number; end: number }
-  | { kind: 'contenteditable'; inserted: Text; original: string; root: HTMLElement };
+  | { kind: 'input'; element: TextInput; original: string; inserted: string; start: number }
+  | { kind: 'contenteditable'; inserted: Text; original: DocumentFragment; originalText: string; root: HTMLElement };
 
 let capturedSelection: CapturedSelection | null = null;
 let selectionUndo: SelectionUndo | null = null;
@@ -101,7 +101,7 @@ function replaceCapturedSelection(text: string, expectedOriginal: string): AiSel
     if (!element.isConnected || element.value.slice(start, end) !== selected.text) {
       return { ok: false, error: 'The editable field changed. Select the text again.' };
     }
-    selectionUndo = { kind: 'input', element, value: element.value, start, end };
+    selectionUndo = { kind: 'input', element, original: selected.text, inserted: text, start };
     element.focus();
     element.setRangeText(text, start, end, 'end');
     dispatchTextInput(element, text, 'insertReplacementText');
@@ -116,11 +116,18 @@ function replaceCapturedSelection(text: string, expectedOriginal: string): AiSel
   if (!root.isConnected || !range.commonAncestorContainer.isConnected || range.toString() !== selected.text) {
     return { ok: false, error: 'The editable text changed. Select it again.' };
   }
+  const original = range.cloneContents();
+  if (original.querySelector('*')) {
+    return {
+      ok: false,
+      error: 'This selection contains rich formatting. Copy the rewrite instead so formatting is not damaged.',
+    };
+  }
   selectionUndo = null;
   range.deleteContents();
   const inserted = document.createTextNode(text);
   range.insertNode(inserted);
-  selectionUndo = { kind: 'contenteditable', inserted, original: selected.text, root };
+  selectionUndo = { kind: 'contenteditable', inserted, original, originalText: selected.text, root };
   const nextRange = document.createRange();
   nextRange.selectNodeContents(inserted);
   const selection = window.getSelection();
@@ -136,25 +143,29 @@ function undoCapturedReplacement(): AiSelectionReplaceResult {
   if (!undo) return { ok: false, error: 'There is no AI replacement to undo.' };
 
   if (undo.kind === 'input') {
-    const { element, value, start, end } = undo;
+    const { element, original, inserted, start } = undo;
     if (!element.isConnected) return { ok: false, error: 'The original field is no longer available.' };
+    const end = start + inserted.length;
+    if (element.value.slice(start, end) !== inserted) {
+      return { ok: false, error: 'The field changed after the rewrite, so Keepsake did not overwrite your newer edits.' };
+    }
     element.focus();
-    element.value = value;
-    element.setSelectionRange(start, end);
-    dispatchTextInput(element, null, 'historyUndo');
-    capturedSelection = { kind: 'input', element, start, end, text: value.slice(start, end) };
+    element.setRangeText(original, start, end, 'select');
+    dispatchTextInput(element, original, 'historyUndo');
+    capturedSelection = { kind: 'input', element, start, end: start + original.length, text: original };
   } else {
-    const { inserted, original, root } = undo;
+    const { inserted, original, originalText, root } = undo;
     if (!inserted.isConnected || !root.isConnected) return { ok: false, error: 'The original text is no longer available.' };
-    const restored = document.createTextNode(original);
-    inserted.replaceWith(restored);
+    const first = original.firstChild;
+    inserted.replaceWith(original);
     const range = document.createRange();
-    range.selectNodeContents(restored);
+    if (first?.isConnected) range.selectNodeContents(first);
+    else range.selectNodeContents(root);
     const selection = window.getSelection();
     selection?.removeAllRanges();
     selection?.addRange(range);
-    dispatchTextInput(root, original, 'historyUndo');
-    capturedSelection = { kind: 'contenteditable', root, range: range.cloneRange(), text: original };
+    dispatchTextInput(root, originalText, 'historyUndo');
+    capturedSelection = { kind: 'contenteditable', root, range: range.cloneRange(), text: originalText };
   }
   selectionUndo = null;
   return { ok: true, undoAvailable: false };
@@ -164,7 +175,7 @@ function undoCapturedReplacement(): AiSelectionReplaceResult {
 // selected-text AI actions, and robust quote-based highlights.
 export default defineContentScript({
   matches: ['<all_urls>'],
-  runAt: 'document_end',
+  runAt: 'document_idle',
 
   async main(ctx) {
     // Read only the tiny synced settings record before painting. Backend/auth
