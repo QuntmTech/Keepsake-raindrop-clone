@@ -1,1 +1,2 @@
 Apply the transparent source patch and delete this trigger.
+Second trigger after workflow registration.
