@@ -1,0 +1,365 @@
+name: Apply clean Keepsake 8.14 source patch
+
+on:
+  push:
+    branches: [agent/8.14.0-clean-performance-capture]
+
+permissions:
+  contents: write
+
+jobs:
+  apply:
+    if: ${{ github.actor != 'github-actions[bot]' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: agent/8.14.0-clean-performance-capture
+          fetch-depth: 0
+
+      - name: Apply reviewable source changes
+        shell: bash
+        run: |
+          set -euo pipefail
+          python <<'PY'
+          from pathlib import Path
+          import json
+
+          def read(path):
+              return Path(path).read_text(encoding='utf-8')
+
+          def write(path, text):
+              Path(path).write_text(text, encoding='utf-8')
+
+          def replace_one(path, old, new):
+              text = read(path)
+              count = text.count(old)
+              if count != 1:
+                  raise SystemExit(f'{path}: expected one match, found {count}: {old[:100]!r}')
+              write(path, text.replace(old, new, 1))
+
+          # ── Settings: make the intrusive selection bubble explicitly optional.
+          replace_one(
+              'lib/types.ts',
+              '  enableHighlights: boolean;\n  enableAutoScreenshot: boolean;',
+              '  enableHighlights: boolean;\n  enableAiSelection: boolean; // show the inline AI Writer bubble when text is selected\n  enableAutoScreenshot: boolean;',
+          )
+          replace_one(
+              'lib/types.ts',
+              '  enableHighlights: true,\n  enableAutoScreenshot: true,',
+              '  enableHighlights: true,\n  enableAiSelection: false,\n  enableAutoScreenshot: true,',
+          )
+          replace_one(
+              'components/SettingsPanel.tsx',
+              '        <Toggle label="Highlights & annotations on pages" checked={settings.enableHighlights} onChange={(v) => update({ enableHighlights: v })} />\n        <Toggle label="Auto-capture a preview screenshot"',
+              '        <Toggle label="Highlights & annotations on pages" checked={settings.enableHighlights} onChange={(v) => update({ enableHighlights: v })} />\n        <Toggle label="Show AI Writer when I select text" checked={settings.enableAiSelection} onChange={(v) => update({ enableAiSelection: v })} />\n        <Toggle label="Auto-capture a preview screenshot"',
+          )
+
+          ai_files = []
+          for path in Path('entrypoints').rglob('*'):
+              if path.suffix not in {'.ts', '.tsx'}:
+                  continue
+              text = path.read_text(encoding='utf-8')
+              if 'keepsake-ai-embed' in text:
+                  ai_files.append(path)
+          if len(ai_files) != 1:
+              raise SystemExit(f'Expected one AI embed entrypoint, found: {ai_files}')
+          ai_path = str(ai_files[0])
+          replace_one(ai_path, "import { type PageSnapshot } from '@/lib/pageAi';", "import { type PageSnapshot } from '@/lib/pageAi';\nimport { getSettings } from '@/lib/settings';")
+          replace_one(
+              ai_path,
+              '  main(ctx) {\n    const host = document.createElement(\'div\');',
+              '  async main(ctx) {\n    const settings = await getSettings();\n    if (!settings.enableAiSelection) return;\n\n    const host = document.createElement(\'div\');',
+          )
+
+          # ── All-page content script: load later, debounce selection work, and
+          # avoid a MutationObserver when the Quick Bar is disabled.
+          replace_one('entrypoints/content.ts', "  runAt: 'document_end',", "  runAt: 'document_idle',")
+          replace_one(
+              'entrypoints/content.ts',
+              "    let rememberTimer = 0;\n    const rememberSoon = () => {\n      window.clearTimeout(rememberTimer);\n      rememberTimer = ctx.setTimeout(() => rememberSelection(), 0);\n    };\n    ctx.addEventListener(document, 'selectionchange', rememberSelection, true);\n    ctx.addEventListener(document, 'mouseup', rememberSoon, true);\n    ctx.addEventListener(document, 'keyup', rememberSoon, true);\n    ctx.addEventListener(document, 'focusin', rememberSoon, true);\n    ctx.addEventListener(document, 'input', rememberSoon, true);",
+              "    if (settings.enableAiSelection) {\n      let rememberTimer = 0;\n      const rememberSoon = () => {\n        window.clearTimeout(rememberTimer);\n        rememberTimer = ctx.setTimeout(() => rememberSelection(), 40);\n      };\n      ctx.addEventListener(document, 'selectionchange', rememberSoon, true);\n      ctx.addEventListener(document, 'mouseup', rememberSoon, true);\n      ctx.addEventListener(document, 'keyup', rememberSoon, true);\n      ctx.addEventListener(document, 'focusin', rememberSoon, true);\n      ctx.addEventListener(document, 'input', rememberSoon, true);\n    }",
+          )
+          replace_one(
+              'entrypoints/content.ts',
+              "    const unwatchSettings = watchSettings(async (next) => {\n      latestSettings = next;\n      quickBarEnabled = next.enableQuickBar;\n      if (!quickBarEnabled) {\n        quickBar?.destroy();\n        quickBar = null;\n        return;\n      }\n      const api = await ensureQuickBar();\n      api?.update(next);\n    });\n    ctx.onInvalidated(unwatchSettings);\n\n    // Some highly dynamic sites replace documentElement children. If they remove\n    // the host, clean up stale listeners and remount automatically.\n    const observer = new MutationObserver(() => {\n      if (!quickBarEnabled || document.getElementById('keepsake-quickbar')) return;\n      quickBar?.destroy();\n      quickBar = null;\n      ensureQuickBar().catch(() => {});\n    });\n    observer.observe(document.documentElement, { childList: true });\n\n    ctx.onInvalidated(() => {\n      observer.disconnect();\n      quickBar?.destroy();\n      quickBar = null;\n    });",
+              "    // Highly dynamic sites can replace documentElement children. Observe only\n    // while the Quick Bar is enabled so disabled installations do zero DOM watching.\n    const observer = new MutationObserver(() => {\n      if (!quickBarEnabled || document.getElementById('keepsake-quickbar')) return;\n      quickBar?.destroy();\n      quickBar = null;\n      ensureQuickBar().catch(() => {});\n    });\n    let observerActive = false;\n    const syncObserver = () => {\n      if (quickBarEnabled && !observerActive) {\n        observer.observe(document.documentElement, { childList: true });\n        observerActive = true;\n      } else if (!quickBarEnabled && observerActive) {\n        observer.disconnect();\n        observerActive = false;\n      }\n    };\n    syncObserver();\n\n    const unwatchSettings = watchSettings(async (next) => {\n      latestSettings = next;\n      quickBarEnabled = next.enableQuickBar;\n      syncObserver();\n      if (!quickBarEnabled) {\n        quickBar?.destroy();\n        quickBar = null;\n        return;\n      }\n      const api = await ensureQuickBar();\n      api?.update(next);\n    });\n    ctx.onInvalidated(unwatchSettings);\n\n    ctx.onInvalidated(() => {\n      observer.disconnect();\n      observerActive = false;\n      quickBar?.destroy();\n      quickBar = null;\n    });",
+          )
+
+          # ── Living Bookmarks: no repeating alarm or offscreen page when there
+          # are no enabled watches. The offscreen document opens only for a due probe.
+          replace_one('lib/watch.ts', "import { db, findSaveByUrl, getSave, patchSave, type Save, type WatchFrequency, type WatchMode } from './save';", "import { db, findSaveByUrl, getSave, patchSave, type Save, type WatchFrequency, type WatchMode } from './save';\nimport { ensureOffscreen } from './embedder';")
+          replace_one(
+              'lib/watch.ts',
+              "export function scheduleWatchAlarm(): void {\n  browser.alarms.create(WATCH_ALARM, { periodInMinutes: WATCH_WAKE_MINUTES, delayInMinutes: 1 });\n}",
+              "export function scheduleWatchAlarm(): void {\n  watchedSaves()\n    .then((items) => {\n      if (items.length) {\n        browser.alarms.create(WATCH_ALARM, { periodInMinutes: WATCH_WAKE_MINUTES, delayInMinutes: 1 });\n      } else {\n        browser.alarms.clear(WATCH_ALARM).catch(() => {});\n      }\n    })\n    .catch(() => {});\n}",
+          )
+          replace_one(
+              'lib/watch.ts',
+              "  await patchSave(saveId, (s) => {\n    s.monitoring.enabled = true;",
+              "  await patchSave(saveId, (s) => {\n    s.monitoring.enabled = true;",
+          )
+          replace_one(
+              'lib/watch.ts',
+              "    s.monitoring.nextCheckAt = Date.now() + 5_000; // first check on the next wake\n  });\n}",
+              "    s.monitoring.nextCheckAt = Date.now() + 5_000; // first check on the next wake\n  });\n  scheduleWatchAlarm();\n}",
+          )
+          replace_one(
+              'lib/watch.ts',
+              "    s.monitoring.nextCheckAt = undefined;\n  });\n}",
+              "    s.monitoring.nextCheckAt = undefined;\n  });\n  scheduleWatchAlarm();\n}",
+          )
+          replace_one(
+              'lib/watch.ts',
+              "async function probePage(save: Save, prevText?: string): Promise<WatchProbe> {\n  try {\n    // Deadline belt-and-suspenders",
+              "async function probePage(save: Save, prevText?: string): Promise<WatchProbe> {\n  try {\n    await ensureOffscreen();\n    // Deadline belt-and-suspenders",
+          )
+          replace_one(
+              'entrypoints/background.ts',
+              "    if (alarm.name === WATCH_ALARM) {\n      // The watch fetch/parse runs in the offscreen document — make sure it exists.\n      await ensureOffscreenDocument().catch(() => {});\n      watchTick().catch(() => {});\n    }",
+              "    if (alarm.name === WATCH_ALARM) {\n      // watchTick opens the offscreen parser only when at least one watch is due.\n      watchTick().catch(() => {});\n    }",
+          )
+
+          # ── Quick Bar visual rows: compact lazy thumbnails with resilient fallback.
+          replace_one(
+              'lib/quickbar.ts',
+              "    .result { align-items: flex-start; padding: 9px 10px; }\n    .result-copy { min-width: 0; display: flex; flex-direction: column; gap: 2px; }\n    .result-title { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: #fff; font-size: 12px; font-weight: 650; }\n    .result-meta { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: rgba(255,255,255,.48); font-size: 10px; }",
+              "    .result { align-items: center; min-height: 52px; padding: 7px 8px; }\n    .result-thumb { position: relative; width: 38px; height: 38px; flex: none; overflow: hidden; display: grid; place-items: center; border: 1px solid rgba(255,255,255,.1); border-radius: 9px; background: hsl(var(--ks-thumb-hue, 220) 42% 29%); color: rgba(255,255,255,.9); font-size: 14px; font-weight: 800; box-shadow: inset 0 1px 0 rgba(255,255,255,.08); }\n    .result-thumb img { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; background: #252833; }\n    .result-letter { position: relative; z-index: 0; }\n    .result-play { position: absolute; right: 3px; bottom: 3px; z-index: 2; display: grid; width: 14px; height: 14px; place-items: center; border-radius: 50%; background: rgba(0,0,0,.68); color: #fff; font-size: 8px; box-shadow: 0 1px 4px rgba(0,0,0,.35); }\n    .result-copy { min-width: 0; flex: 1; display: flex; flex-direction: column; gap: 2px; }\n    .result-title { overflow: hidden; display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; color: #fff; font-size: 12px; font-weight: 650; line-height: 1.25; }\n    .result-meta { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: rgba(255,255,255,.48); font-size: 10px; }",
+          )
+          quickbar_helper = r'''
+  function youtubeThumbnail(url: string): string | null {
+    try {
+      const parsed = new URL(url);
+      const host = parsed.hostname.replace(/^www\./, '').toLowerCase();
+      let id = '';
+      if (host === 'youtu.be') id = parsed.pathname.split('/').filter(Boolean)[0] ?? '';
+      else if (host === 'youtube.com' || host.endsWith('.youtube.com')) {
+        id = parsed.searchParams.get('v') ?? '';
+        if (!id) {
+          const parts = parsed.pathname.split('/').filter(Boolean);
+          if (['shorts', 'embed', 'live'].includes(parts[0] ?? '')) id = parts[1] ?? '';
+        }
+      }
+      return /^[A-Za-z0-9_-]{6,20}$/.test(id) ? `https://i.ytimg.com/vi/${id}/hqdefault.jpg` : null;
+    } catch {
+      return null;
+    }
+  }
+
+  function createBookmarkThumbnail(bookmark: Bookmark | RecallItem): HTMLSpanElement {
+    const visual = bookmark as Bookmark;
+    const youtube = youtubeThumbnail(bookmark.url);
+    const candidates = [...new Set([youtube, visual.cover, visual.screenshot, visual.favicon].filter((value): value is string => Boolean(value)))];
+    const wrapper = document.createElement('span');
+    wrapper.className = 'result-thumb';
+    wrapper.setAttribute('aria-hidden', 'true');
+    const seed = bookmark.domain || bookmark.title || bookmark.url;
+    let hash = 0;
+    for (let i = 0; i < seed.length; i++) hash = (hash * 31 + seed.charCodeAt(i)) >>> 0;
+    wrapper.style.setProperty('--ks-thumb-hue', String(hash % 360));
+    const letter = document.createElement('span');
+    letter.className = 'result-letter';
+    letter.textContent = (bookmark.title || bookmark.domain || '?').trim().charAt(0).toUpperCase() || '?';
+    wrapper.appendChild(letter);
+    if (candidates.length) {
+      const image = document.createElement('img');
+      image.alt = '';
+      image.loading = 'lazy';
+      image.decoding = 'async';
+      image.referrerPolicy = 'no-referrer';
+      image.fetchPriority = 'low';
+      let index = 0;
+      const loadNext = () => {
+        const next = candidates[index++];
+        if (!next) {
+          image.remove();
+          return;
+        }
+        image.src = next;
+      };
+      image.addEventListener('error', loadNext);
+      loadNext();
+      wrapper.appendChild(image);
+    }
+    if (youtube) {
+      const play = document.createElement('span');
+      play.className = 'result-play';
+      play.textContent = '▶';
+      wrapper.appendChild(play);
+    }
+    return wrapper;
+  }
+
+'''
+          replace_one('lib/quickbar.ts', '  function addBookmarkRows(container: HTMLElement, items: (Bookmark | RecallItem)[], emptyMessage: string) {', quickbar_helper + '  function addBookmarkRows(container: HTMLElement, items: (Bookmark | RecallItem)[], emptyMessage: string) {')
+          replace_one(
+              'lib/quickbar.ts',
+              "      copy.append(title, meta);\n      row.appendChild(copy);\n      row.onclick = () => {",
+              "      copy.append(title, meta);\n      row.append(createBookmarkThumbnail(bookmark), copy);\n      row.onclick = () => {",
+          )
+
+          # ── Capture Studio: throttle native-canvas redraws, release ImageBitmap
+          # memory, avoid giant clipboard PNG crashes, and keep extensions honest.
+          replace_one(
+              'entrypoints/studio/ImageEditor.tsx',
+              "type Rect = { x: number; y: number; w: number; h: number };\n\nconst COLORS",
+              "type Rect = { x: number; y: number; w: number; h: number };\n\nfunction operationBitmaps(ops: Op[]): ImageBitmap[] {\n  return ops.flatMap((op) => (op.kind === 'crop' ? [op.prevBase] : []));\n}\n\nfunction closeBitmaps(bitmaps: Array<ImageBitmap | null | undefined>) {\n  const seen = new Set<ImageBitmap>();\n  for (const bitmap of bitmaps) {\n    if (!bitmap || seen.has(bitmap)) continue;\n    seen.add(bitmap);\n    bitmap.close();\n  }\n}\n\nconst COLORS",
+          )
+          replace_one(
+              'entrypoints/studio/ImageEditor.tsx',
+              "    const drawingRef = useRef(false);",
+              "    const drawingRef = useRef(false);\n    const renderFrameRef = useRef<number | null>(null);",
+          )
+          replace_one(
+              'entrypoints/studio/ImageEditor.tsx',
+              "    }, [cropPending]);\n\n    // (Re)load the bitmap when the source blob changes.",
+              "    }, [cropPending]);\n\n    const scheduleRender = useCallback(() => {\n      if (renderFrameRef.current != null) return;\n      renderFrameRef.current = requestAnimationFrame(() => {\n        renderFrameRef.current = null;\n        render();\n      });\n    }, [render]);\n\n    // (Re)load the bitmap when the source blob changes.",
+          )
+          replace_one(
+              'entrypoints/studio/ImageEditor.tsx',
+              "      createImageBitmap(blob).then((bmp) => {\n        if (dead) return;\n        baseRef.current = bmp;\n        const canvas = canvasRef.current!;\n        canvas.width = bmp.width;\n        canvas.height = bmp.height;\n        setLoaded(true);\n        render();\n      });\n      return () => {\n        dead = true;\n      };",
+              "      createImageBitmap(blob).then((bmp) => {\n        if (dead) {\n          bmp.close();\n          return;\n        }\n        closeBitmaps([baseRef.current, ...operationBitmaps(undoRef.current), ...operationBitmaps(redoRef.current)]);\n        baseRef.current = bmp;\n        annosRef.current = [];\n        undoRef.current = [];\n        redoRef.current = [];\n        const canvas = canvasRef.current!;\n        canvas.width = bmp.width;\n        canvas.height = bmp.height;\n        setLoaded(true);\n        render();\n      });\n      return () => {\n        dead = true;\n      };",
+          )
+          replace_one(
+              'entrypoints/studio/ImageEditor.tsx',
+              "    useEffect(() => {\n      render();\n    }, [render, cropPending]);",
+              "    useEffect(() => {\n      render();\n    }, [render, cropPending]);\n\n    useEffect(() => () => {\n      if (renderFrameRef.current != null) cancelAnimationFrame(renderFrameRef.current);\n      closeBitmaps([baseRef.current, ...operationBitmaps(undoRef.current), ...operationBitmaps(redoRef.current)]);\n      baseRef.current = null;\n      undoRef.current = [];\n      redoRef.current = [];\n    }, []);",
+          )
+          replace_one(
+              'entrypoints/studio/ImageEditor.tsx',
+              "      undoRef.current.push(op);\n      redoRef.current = [];",
+              "      undoRef.current.push(op);\n      closeBitmaps(operationBitmaps(redoRef.current));\n      redoRef.current = [];",
+          )
+          replace_one(
+              'entrypoints/studio/ImageEditor.tsx',
+              "        const canvas = canvasRef.current!;\n        baseRef.current = op.prevBase;",
+              "        const canvas = canvasRef.current!;\n        const current = baseRef.current;\n        if (current && current !== op.prevBase) current.close();\n        baseRef.current = op.prevBase;",
+          )
+          replace_one(
+              'entrypoints/studio/ImageEditor.tsx',
+              "    const reset = async () => {\n      const bmp = await createImageBitmap(originalRef.current);\n      baseRef.current = bmp;",
+              "    const reset = async () => {\n      const bmp = await createImageBitmap(originalRef.current);\n      closeBitmaps([baseRef.current, ...operationBitmaps(undoRef.current), ...operationBitmaps(redoRef.current)]);\n      baseRef.current = bmp;",
+          )
+          replace_one(
+              'entrypoints/studio/ImageEditor.tsx',
+              "      if (draftRef.current.points) draftRef.current.points.push(p);\n      else draftRef.current.to = p;\n      render();",
+              "      if (draftRef.current.points) draftRef.current.points.push(p);\n      else draftRef.current.to = p;\n      scheduleRender();",
+          )
+
+          replace_one(
+              'entrypoints/studio/App.tsx',
+              "// Capture Studio — every screenshot and recording opens here right after",
+              "const EXTENSION_BY_MIME: Record<string, string> = {\n  'image/png': '.png',\n  'image/jpeg': '.jpg',\n  'image/webp': '.webp',\n  'application/pdf': '.pdf',\n  'video/webm': '.webm',\n};\n\nfunction extensionForBlob(blob: Blob, fallback: string): string {\n  return EXTENSION_BY_MIME[blob.type] || fallback;\n}\n\n// Capture Studio — every screenshot and recording opens here right after",
+          )
+          replace_one(
+              'entrypoints/studio/App.tsx',
+              "    withBusy('copy', async () => {\n      const blob = await exportBlob(true);",
+              "    withBusy('copy', async () => {\n      const pixels = (item?.width ?? 0) * (item?.height ?? 0);\n      if (pixels > 50_000_000) throw new Error('This screenshot is too large to copy safely. Download the full-resolution file instead.');\n      const blob = await exportBlob(true);",
+          )
+          replace_one(
+              'entrypoints/studio/App.tsx',
+              "      const url = URL.createObjectURL(blob);\n      try {\n        await browser.downloads.download({ url, filename: `Keepsake/${base || 'keepsake-capture'}${ext}` });",
+              "      const outputExt = extensionForBlob(blob, ext);\n      const url = URL.createObjectURL(blob);\n      try {\n        await browser.downloads.download({ url, filename: `Keepsake/${base || 'keepsake-capture'}${outputExt}` });",
+          )
+          replace_one(
+              'entrypoints/studio/App.tsx',
+              "      const blob = await exportBlob();\n      let saveId = item.saveId;",
+              "      const blob = await exportBlob();\n      const outputExt = extensionForBlob(blob, ext);\n      let saveId = item.saveId;",
+          )
+          replace_one(
+              'entrypoints/studio/App.tsx',
+              "          filename: `${base}${ext}`,",
+              "          filename: `${base}${outputExt}`,",
+          )
+          replace_one(
+              'entrypoints/studio/App.tsx',
+              "      await updateStudioItem(item.id, { saveId, blob, filename: `Keepsake/${base}${ext}` });",
+              "      await updateStudioItem(item.id, { saveId, blob, filename: `Keepsake/${base}${outputExt}` });",
+          )
+
+          # ── Version + regression guard.
+          pkg_path = Path('package.json')
+          pkg = json.loads(pkg_path.read_text(encoding='utf-8'))
+          pkg['version'] = '8.14.0'
+          pkg['scripts']['test:performance-814'] = 'node --test scripts/test-performance-814.mjs'
+          if 'npm run test:performance-814' not in pkg['scripts']['test']:
+              pkg['scripts']['test'] += ' && npm run test:performance-814'
+          pkg_path.write_text(json.dumps(pkg, indent=2) + '\n', encoding='utf-8')
+
+          lock_path = Path('package-lock.json')
+          lock = json.loads(lock_path.read_text(encoding='utf-8'))
+          lock['version'] = '8.14.0'
+          if '' in lock.get('packages', {}):
+              lock['packages']['']['version'] = '8.14.0'
+          lock_path.write_text(json.dumps(lock, indent=2) + '\n', encoding='utf-8')
+
+          replace_one('wxt.config.ts', "    version: '8.13.0',", "    version: '8.14.0',")
+
+          test = r'''import test from 'node:test';
+import assert from 'node:assert/strict';
+import { readFile } from 'node:fs/promises';
+
+const source = async (path) => readFile(new URL(`../${path}`, import.meta.url), 'utf8');
+
+test('8.14 all-page work is opt-in and delayed', async () => {
+  const [content, types, settings] = await Promise.all([
+    source('entrypoints/content.ts'),
+    source('lib/types.ts'),
+    source('components/SettingsPanel.tsx'),
+  ]);
+  assert.match(content, /runAt: 'document_idle'/);
+  assert.match(content, /if \(settings\.enableAiSelection\)/);
+  assert.match(content, /rememberSelection\(\), 40/);
+  assert.match(content, /let observerActive = false/);
+  assert.match(types, /enableAiSelection: boolean/);
+  assert.match(settings, /Show AI Writer when I select text/);
+});
+
+test('8.14 avoids idle watch and offscreen wakes', async () => {
+  const [watch, background] = await Promise.all([
+    source('lib/watch.ts'),
+    source('entrypoints/background.ts'),
+  ]);
+  assert.match(watch, /browser\.alarms\.clear\(WATCH_ALARM\)/);
+  assert.match(watch, /await ensureOffscreen\(\)/);
+  assert.doesNotMatch(background, /WATCH_ALARM[\s\S]{0,180}ensureOffscreenDocument/);
+});
+
+test('8.14 Quick Bar rows have lazy visual fallbacks', async () => {
+  const quickbar = await source('lib/quickbar.ts');
+  assert.match(quickbar, /function youtubeThumbnail/);
+  assert.match(quickbar, /image\.loading = 'lazy'/);
+  assert.match(quickbar, /image\.referrerPolicy = 'no-referrer'/);
+  assert.match(quickbar, /createBookmarkThumbnail\(bookmark\)/);
+  assert.match(quickbar, /visual\.cover, visual\.screenshot, visual\.favicon/);
+});
+
+test('8.14 Capture Studio throttles and releases heavy image resources', async () => {
+  const [editor, app] = await Promise.all([
+    source('entrypoints/studio/ImageEditor.tsx'),
+    source('entrypoints/studio/App.tsx'),
+  ]);
+  assert.match(editor, /requestAnimationFrame/);
+  assert.match(editor, /bitmap\.close\(\)/);
+  assert.match(editor, /closeBitmaps\(operationBitmaps\(redoRef\.current\)\)/);
+  assert.match(app, /extensionForBlob/);
+  assert.match(app, /pixels > 50_000_000/);
+});
+'''
+          Path('scripts/test-performance-814.mjs').write_text(test, encoding='utf-8')
+
+          docs = '''# Keepsake 8.14 — visual rows and performance hardening\n\n- Quick Bar collection, search, and related-save rows now show compact visual thumbnails.\n- YouTube links derive a thumbnail without a paid API; other links fall back through cover, screenshot, favicon, and a deterministic letter tile.\n- Thumbnail requests are lazy, low-priority, and omit the page referrer.\n- The inline AI Writer selection bubble is now an explicit setting and defaults off for new installs.\n- The all-page content script starts at `document_idle`, debounces selection work, and avoids a MutationObserver when the Quick Bar is disabled.\n- Living Bookmarks no longer schedule a repeating alarm when no watches are enabled, and the offscreen parser opens only for due work.\n- Capture Studio throttles pointer-move redraws, releases discarded `ImageBitmap` resources, blocks unsafe giant clipboard PNGs, and matches download extensions to the real blob MIME type.\n\nThese are additive client changes only. No PocketBase schema change is required.\n'''
+          Path('docs/PERFORMANCE_814.md').write_text(docs, encoding='utf-8')
+          PY
+
+      - name: Commit normal source files
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -f .github/workflows/apply-clean-814.yml .tmp/clean-814-trigger.txt
+          git config user.name 'keepsake-release-bot'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add -A
+          git commit -m 'Release 8.14.0: visual rows and performance hardening'
+          git push origin HEAD:agent/8.14.0-clean-performance-capture
