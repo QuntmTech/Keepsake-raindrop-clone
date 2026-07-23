@@ -7,9 +7,11 @@
   "scripts": {
     "dev": "wxt",
     "dev:firefox": "wxt -b firefox",
+    "prebuild": "node scripts/fix-image-editor-pdf.mjs",
     "build": "wxt build",
     "build:firefox": "wxt build -b firefox",
     "zip": "wxt zip",
+    "precompile": "node scripts/fix-image-editor-pdf.mjs",
     "compile": "tsc --noEmit",
     "test:retrieval": "node --test scripts/test-retrieval.mjs",
     "test:bulk": "node --test scripts/test-bulk.mjs",
@@ -32,6 +34,7 @@
     "check:version": "node scripts/check-version.mjs",
     "check": "npm run check:version && npm test && npm run compile && npm run build",
     "postinstall": "wxt prepare",
+    "prezip:store": "node scripts/fix-image-editor-pdf.mjs",
     "zip:store": "WXT_STORE=1 wxt zip"
   },
   "dependencies": {
