@@ -1,0 +1,72 @@
+name: Keepsake 8.15.1 AI micro polish
+
+on:
+  push:
+    branches:
+      - agent/8.15.1-ai-micro-polish
+    paths:
+      - scripts/apply-8151-ai-polish.mjs
+      - .github/workflows/keepsake-8151-ai-polish.yml
+
+permissions:
+  contents: write
+
+concurrency:
+  group: keepsake-8151-ai-micro-polish
+  cancel-in-progress: false
+
+jobs:
+  validate-and-commit:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Check out polish branch
+        uses: actions/checkout@v4
+        with:
+          ref: agent/8.15.1-ai-micro-polish
+          fetch-depth: 0
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install exact dependencies
+        run: npm ci
+
+      - name: Apply AI micro-polish source changes
+        run: node scripts/apply-8151-ai-polish.mjs
+
+      - name: Reject malformed patches
+        run: git diff --check
+
+      - name: Run full tests, TypeScript, and production build
+        run: npm run check
+
+      - name: Enforce bundle budget
+        run: npm run check:bundle
+
+      - name: Build Chrome Web Store ZIP
+        run: npm run zip:store
+
+      - name: Verify packaged manifest
+        shell: bash
+        run: |
+          set -euo pipefail
+          zip_file="$(find .output -maxdepth 1 -type f -name '*.zip' | head -n 1)"
+          test -n "$zip_file"
+          unzip -p "$zip_file" manifest.json > /tmp/keepsake-manifest.json
+          node -e "const m=require('/tmp/keepsake-manifest.json'); if(m.manifest_version!==3) throw new Error('Not MV3'); if(m.version!=='8.15.1') throw new Error('Wrong packaged version: '+m.version); console.log('Verified MV3 package', m.version)"
+
+      - name: Commit only after every gate passes
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git diff --cached --stat
+          git diff --cached --quiet && { echo 'No changes to commit'; exit 1; }
+          git commit -m "Release 8.15.1: polish AI state, cancellation, routing, and integrity"
+          git push origin HEAD:agent/8.15.1-ai-micro-polish
