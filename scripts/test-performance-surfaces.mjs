@@ -16,8 +16,8 @@ test('Quick Bar paints before backend hydration and supports direct horizontal r
   assert.doesNotMatch(quickbar, /if \(await loggedIn\(\)\) \{\s*await refreshExisting/);
 });
 
-test('page controls run at document_end without blocking on backend startup', () => {
-  assert.match(content, /runAt: 'document_end'/);
+test('page controls wait until document_idle without blocking on backend startup', () => {
+  assert.match(content, /runAt: 'document_idle'/);
   assert.doesNotMatch(content, /await getBackend\(\)/);
   assert.match(content, /mountQuickBar\(latestSettings\)/);
   assert.match(content, /KS_PAGE_NAVIGATED/);
@@ -33,7 +33,6 @@ test('popup and Home prioritize visual data over secondary metadata', () => {
   assert.match(home, /setTimeout\(\(\) => \{\s*syncHomeOverlay/);
   assert.match(home, /await import\('@\/lib\/importer'\)/);
 });
-
 
 test('website bundle delegates data access to the background worker', () => {
   assert.doesNotMatch(quickbar, /from '\.\/backend'/);
