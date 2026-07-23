@@ -54,7 +54,14 @@ export type Message =
   | { type: 'KS_QUICKBAR_COLLECTIONS' }
   | { type: 'KS_QUICKBAR_SEARCH'; query: string; collection?: string; unsorted?: boolean; perPage?: number }
   | { type: 'KS_QUICKBAR_CREATE_COLLECTION'; name: string }
-  | { type: 'OPEN_AI_TOOLS'; text?: string; action?: WriterAction; source?: 'quickbar' | 'embedded' | 'context-menu' }
+  | {
+      type: 'OPEN_AI_TOOLS';
+      text?: string;
+      action?: WriterAction;
+      customInstruction?: string;
+      targetLanguage?: string;
+      source?: 'quickbar' | 'embedded' | 'context-menu';
+    }
   | { type: 'KS_AI_SELECTION_GET' }
   | { type: 'KS_AI_SELECTION_REPLACE'; text: string; expectedOriginal: string }
   | { type: 'KS_AI_SELECTION_UNDO' }
@@ -77,7 +84,7 @@ export type Message =
       verified: ('pinned' | 'sort' | 'homeOnly')[];
     }
   | { type: 'KS_OVERLAY_FORGET'; user: string; id: string }
-  | { type: 'KS_START_CHECKOUT'; interval: 'month' | 'year' }
+  | { type: 'KS_START_CHECKOUT'; plan: 'pro' | 'max'; interval: 'month' | 'year' }
   | { type: 'KS_OPEN_BILLING_PORTAL' }
   | CaptureMessage;
 
