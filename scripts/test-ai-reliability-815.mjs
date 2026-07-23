@@ -11,7 +11,7 @@ const source = (path) => readFile(new URL('../' + path, import.meta.url), 'utf8'
 test('build and test commands never mutate source files', async () => {
   const pkg = JSON.parse(await source('package.json'));
   for (const key of ['pretest', 'prebuild', 'precompile', 'prezip:store']) assert.equal(pkg.scripts[key], undefined);
-  assert.equal(pkg.version, '8.15.0');
+  assert.equal(pkg.version, '8.15.1');
 });
 
 test('selected-text helper has a dedicated toggle and never grabs a whole field', async () => {

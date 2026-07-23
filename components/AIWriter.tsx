@@ -145,6 +145,12 @@ export function AIWriter({ onOpenSettings }: { onOpenSettings?: () => void }) {
     if ('input' in patchValue || 'output' in patchValue || 'action' in patchValue) setResultMeta(null);
   }
 
+  function changeSourceText(value: string) {
+    setSelection(null);
+    setUndoAvailable(false);
+    patch({ input: value, output: '' });
+  }
+
   async function grabSelection() {
     setError('');
     setStatus('');
@@ -169,7 +175,7 @@ export function AIWriter({ onOpenSettings }: { onOpenSettings?: () => void }) {
   }
 
   async function handleCustomInstruction(value: string) {
-    patch({ customInstruction: value, selectedPromptId: '' });
+    patch({ customInstruction: value, selectedPromptId: '', output: '' });
     if (!/^\/[a-z0-9_-]+\s*$/i.test(value.trim())) return;
     const prompt = await findPromptBySlash(value);
     if (prompt) await applyPrompt(prompt);
@@ -219,13 +225,18 @@ export function AIWriter({ onOpenSettings }: { onOpenSettings?: () => void }) {
   }
 
   function cancelGeneration() {
+    setStatus('Cancelling…');
     requestController.current?.abort();
   }
 
   async function copyOutput() {
     if (!draft.output) return;
-    await navigator.clipboard.writeText(draft.output);
-    setStatus('Copied to clipboard.');
+    try {
+      await navigator.clipboard.writeText(draft.output);
+      setStatus('Copied to clipboard.');
+    } catch {
+      setError('Clipboard access failed. Select the result and copy it manually.');
+    }
   }
 
   async function replaceSelection() {
@@ -316,7 +327,7 @@ export function AIWriter({ onOpenSettings }: { onOpenSettings?: () => void }) {
               <p className="truncate text-[11px] text-ink-faint">Rewrite, reply, translate, and replace without leaving the page</p>
             </div>
           </div>
-          <button className="btn-ghost shrink-0 px-2 text-xs" onClick={grabSelection} title="Load selected text from the webpage">
+          <button className="btn-ghost shrink-0 px-2 text-xs" onClick={grabSelection} disabled={busy} title="Load selected text from the webpage">
             Use selection
           </button>
         </div>
@@ -340,8 +351,9 @@ export function AIWriter({ onOpenSettings }: { onOpenSettings?: () => void }) {
             className="min-h-36 w-full resize-y rounded-xl border border-line bg-surface-raised p-3 text-sm leading-relaxed text-ink outline-none transition focus:border-brand/60 focus:ring-2 focus:ring-brand/10"
             value={draft.input}
             maxLength={48_000}
+            disabled={busy}
             placeholder="Paste text, select text on the webpage, or click the small Rewrite chip beside an editable field…"
-            onChange={(event) => patch({ input: event.target.value, output: '' })}
+            onChange={(event) => changeSourceText(event.target.value)}
           />
           {selection?.text && (
             <p className="mt-1 text-[10px] text-ink-faint">
@@ -377,27 +389,27 @@ export function AIWriter({ onOpenSettings }: { onOpenSettings?: () => void }) {
         <div className="grid grid-cols-2 gap-2">
           <label className="space-y-1 text-[11px] font-medium text-ink-soft">
             Tone
-            <select className="w-full rounded-lg border border-line bg-surface-raised px-2.5 py-2 text-xs text-ink outline-none focus:border-brand" value={draft.tone} onChange={(event) => patch({ tone: event.target.value as WriterTone })}>
+            <select className="w-full rounded-lg border border-line bg-surface-raised px-2.5 py-2 text-xs text-ink outline-none focus:border-brand" value={draft.tone} onChange={(event) => patch({ tone: event.target.value as WriterTone, output: '' })} disabled={busy}>
               <option value="preserve">Preserve voice</option><option value="confident">Confident</option><option value="friendly">Friendly</option><option value="professional">Professional</option><option value="casual">Casual</option><option value="direct">Direct</option>
             </select>
           </label>
           <label className="space-y-1 text-[11px] font-medium text-ink-soft">
             Length
-            <select className="w-full rounded-lg border border-line bg-surface-raised px-2.5 py-2 text-xs text-ink outline-none focus:border-brand" value={draft.length} onChange={(event) => patch({ length: event.target.value as WriterLength })}>
+            <select className="w-full rounded-lg border border-line bg-surface-raised px-2.5 py-2 text-xs text-ink outline-none focus:border-brand" value={draft.length} onChange={(event) => patch({ length: event.target.value as WriterLength, output: '' })} disabled={busy}>
               <option value="shorter">Shorter</option><option value="same">About the same</option><option value="longer">Longer</option>
             </select>
           </label>
         </div>
 
         {draft.action === 'translate' && (
-          <label className="block text-[11px] font-medium text-ink-soft">Translate to<input className="input mt-1" value={draft.targetLanguage} onChange={(event) => patch({ targetLanguage: event.target.value })} /></label>
+          <label className="block text-[11px] font-medium text-ink-soft">Translate to<input className="input mt-1" value={draft.targetLanguage} onChange={(event) => patch({ targetLanguage: event.target.value, output: '' })} disabled={busy} /></label>
         )}
 
         <div>
           <p className="mb-1.5 text-[11px] font-medium text-ink-soft">Quality route</p>
           <div className="grid grid-cols-4 gap-1">
             {(['auto', 'economy', 'balanced', 'best'] as AiRouteMode[]).map((quality) => (
-              <button key={quality} className={`rounded-lg border px-1 py-2 text-[10px] font-medium capitalize ${draft.quality === quality ? 'border-brand bg-brand/10 text-brand' : 'border-line text-ink-faint hover:text-ink'}`} onClick={() => patch({ quality })}>{quality}</button>
+              <button key={quality} className={`rounded-lg border px-1 py-2 text-[10px] font-medium capitalize ${draft.quality === quality ? 'border-brand bg-brand/10 text-brand' : 'border-line text-ink-faint hover:text-ink'}`} onClick={() => patch({ quality, output: '' })} disabled={busy}>{quality}</button>
             ))}
           </div>
         </div>
@@ -407,10 +419,11 @@ export function AIWriter({ onOpenSettings }: { onOpenSettings?: () => void }) {
           <select
             className="input mt-3 text-xs"
             value={draft.selectedPromptId}
+            disabled={busy}
             onChange={(event) => {
               const prompt = prompts.find((item) => item.id === event.target.value);
               if (prompt) applyPrompt(prompt);
-              else patch({ selectedPromptId: '' });
+              else patch({ selectedPromptId: '', customInstruction: '', output: '' });
             }}
           >
             <option value="">Choose a saved prompt…</option>
@@ -420,6 +433,7 @@ export function AIWriter({ onOpenSettings }: { onOpenSettings?: () => void }) {
             className="mt-2 min-h-24 w-full resize-y rounded-lg border border-line bg-surface p-2.5 text-xs text-ink outline-none focus:border-brand"
             value={draft.customInstruction}
             maxLength={1200}
+            disabled={busy}
             placeholder="Type an instruction, or enter /reply, /sales, /simple…"
             onChange={(event) => handleCustomInstruction(event.target.value)}
           />
@@ -443,7 +457,7 @@ export function AIWriter({ onOpenSettings }: { onOpenSettings?: () => void }) {
               <div><p className="text-xs font-semibold text-ink">Result</p><p className="text-[10px] text-ink-faint">{changeSummary}</p></div>
               <button className="btn-ghost px-2 text-xs" onClick={() => patch({ output: '' })}>Clear</button>
             </div>
-            <textarea className="min-h-48 w-full resize-y rounded-xl border border-line bg-surface p-3 text-sm leading-relaxed text-ink outline-none focus:border-brand" value={draft.output} onChange={(event) => patch({ output: event.target.value })} />
+            <textarea className="min-h-48 w-full resize-y rounded-xl border border-line bg-surface p-3 text-sm leading-relaxed text-ink outline-none focus:border-brand" value={draft.output} disabled={busy} onChange={(event) => patch({ output: event.target.value })} />
             {showUsage && resultMeta && <div className="mt-2"><AiResultMeta result={resultMeta} /></div>}
             {integrityIssues.length > 0 && (
               <div className="mt-2 rounded-xl border border-amber-400/30 bg-amber-400/10 p-2.5 text-[11px] text-ink-soft">
@@ -454,9 +468,9 @@ export function AIWriter({ onOpenSettings }: { onOpenSettings?: () => void }) {
               </div>
             )}
             <div className="mt-3 grid grid-cols-2 gap-2">
-              <button className="btn-ghost justify-center" onClick={copyOutput}><Icon name="copy" size={14} /> Copy</button>
-              <button className="btn-ghost justify-center" onClick={saveOutput}><Icon name="bookmark" size={14} /> Save</button>
-              <button className="btn-ghost justify-center" onClick={replaceSelection} disabled={!selection?.editable} title={selection?.editable ? 'Replace the captured editable selection' : 'Select text inside an editable field first'}><Icon name="edit" size={14} /> Replace</button>
+              <button className="btn-ghost justify-center" onClick={copyOutput} disabled={busy}><Icon name="copy" size={14} /> Copy</button>
+              <button className="btn-ghost justify-center" onClick={saveOutput} disabled={busy}><Icon name="bookmark" size={14} /> Save</button>
+              <button className="btn-ghost justify-center" onClick={replaceSelection} disabled={busy || !selection?.editable} title={selection?.editable ? 'Replace the captured editable selection' : 'Select text inside an editable field first'}><Icon name="edit" size={14} /> Replace</button>
               <button className="btn-ghost justify-center" onClick={undoReplacement} disabled={!undoAvailable}>Undo replace</button>
             </div>
           </div>

@@ -131,7 +131,8 @@ export function routeNovitaModels(request: RouteRequest): ModelRoute {
     return { models, reason, resolvedMode };
   }
   if (resolvedMode === 'balanced') {
-    return { models: unique([balanced, economy, best]), reason, resolvedMode };
+    const models = request.mode === 'balanced' ? unique([balanced, economy]) : unique([balanced, economy, best]);
+    return { models, reason, resolvedMode };
   }
   return { models: unique([best, balanced, economy]), reason, resolvedMode };
 }
