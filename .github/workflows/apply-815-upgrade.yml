@@ -44,7 +44,21 @@ jobs:
         run: git add -A
 
       - name: Run complete regression suite
-        run: npm test
+        id: regression
+        continue-on-error: true
+        run: npm test 2>&1 | tee ai-815-regression.log
+
+      - name: Upload regression diagnostics
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ai-815-regression-log
+          path: ai-815-regression.log
+          retention-days: 3
+
+      - name: Stop after a regression failure
+        if: steps.regression.outcome == 'failure'
+        run: exit 1
 
       - name: Run TypeScript
         run: npm run compile
