@@ -9,23 +9,25 @@ test('hosted auth exposes a fast local mirror before backend initialization', as
   assert.match(auth, /readCachedAuthUser/);
   assert.match(auth, /local:pb_auth/);
   assert.match(auth, /tokenIsFresh/);
-  assert.match(auth, /if \(cached\) return cached/);
+  assert.match(auth, /readVerifiedAuthState/);
 });
 
-test('useAuth paints the cached signed-in shell before reconciliation', async () => {
+test('useAuth paints cached state and then verifies it', async () => {
   const hook = await source('hooks/useAuth.ts');
   assert.match(hook, /await readCachedAuthUser\(\)/);
   assert.match(hook, /mark\('ready:cache'\)/);
-  assert.match(hook, /await loadAuth\(\)/);
+  assert.match(hook, /await readVerifiedAuthState\(\)/);
   assert.match(hook, /finally/);
+  assert.match(hook, /await clearSnapshot\(\)/);
 });
 
-test('collections hydrate from the local snapshot without a user lookup', async () => {
+test('collection cache remains matched to the cached user id', async () => {
   const [collections, cache] = await Promise.all([
     source('hooks/useCollections.ts'),
     source('lib/cache.ts'),
   ]);
-  assert.match(collections, /readLastSnapshot/);
+  assert.match(collections, /readCachedAuthUser/);
+  assert.match(collections, /readSnapshot\(cachedUser\?\.id \?\? null\)/);
   assert.doesNotMatch(collections, /currentUser/);
-  assert.match(cache, /export async function readLastSnapshot/);
+  assert.match(cache, /snapshot\.uid === uid/);
 });
