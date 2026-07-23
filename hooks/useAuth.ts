@@ -1,5 +1,15 @@
 import { useEffect, useState } from 'react';
-import { loadAuth, isLoggedIn, currentUser, watchAuth, refreshUserPlan, login as doLogin, signup as doSignup, logout as doLogout } from '@/lib/auth';
+import {
+  loadAuth,
+  isLoggedIn,
+  currentUser,
+  readCachedAuthUser,
+  watchAuth,
+  refreshUserPlan,
+  login as doLogin,
+  signup as doSignup,
+  logout as doLogout,
+} from '@/lib/auth';
 import { mark } from '@/lib/boottrace';
 import { clearSnapshot } from '@/lib/cache';
 import { type Plan } from '@/lib/types';
@@ -12,38 +22,59 @@ export function useAuth() {
   const [plan, setPlan] = useState<Plan>('free');
 
   useEffect(() => {
+    let cancelled = false;
+
     (async () => {
       mark('init');
-      await loadAuth();
-      mark('auth');
-      const [loggedIn, u] = await Promise.all([isLoggedIn(), currentUser()]);
-      setAuthed(loggedIn);
-      setEmail(u?.email ?? null);
-      setPlan(u?.plan ?? 'free');
-      setReady(true);
-      mark('ready');
+
+      // The local mirror is enough to paint the last known signed-in Home shell.
+      // PocketBase still initializes immediately afterward and remains authoritative.
+      const cached = await readCachedAuthUser();
+      if (cached && !cancelled) {
+        setAuthed(true);
+        setEmail(cached.email);
+        setPlan(cached.plan);
+        setReady(true);
+        mark('ready:cache');
+      }
+
+      try {
+        await loadAuth();
+        mark('auth');
+        const [loggedIn, user] = await Promise.all([isLoggedIn(), currentUser()]);
+        if (cancelled) return;
+        setAuthed(loggedIn);
+        setEmail(user?.email ?? null);
+        setPlan(user?.plan ?? 'free');
+      } catch {
+        // Offline or a temporarily unavailable backend must not leave Home on an
+        // endless splash screen. Cached content remains usable where available.
+      } finally {
+        if (!cancelled) {
+          setReady(true);
+          mark('ready');
+        }
+      }
     })();
+
+    return () => {
+      cancelled = true;
+    };
   }, []);
 
   // Re-read plan/email whenever the auth record changes in ANY context — e.g.
-  // a completed Stripe upgrade lands via the webhook, and a background
-  // refreshUser() call (Phase 3) picks it up and mirrors it here live, without
-  // requiring this surface to reload.
+  // a completed Stripe upgrade lands via the webhook.
   useEffect(() => {
     return watchAuth(() => {
       isLoggedIn().then(setAuthed);
-      currentUser().then((u) => {
-        setEmail(u?.email ?? null);
-        setPlan(u?.plan ?? 'free');
+      currentUser().then((user) => {
+        setEmail(user?.email ?? null);
+        setPlan(user?.plan ?? 'free');
       });
     });
   }, []);
 
-  // Catch upgrades made OUTSIDE the extension (e.g. on the keepsaketab.com web
-  // checkout): when this surface regains focus, force a fresh plan read so an
-  // already-open new tab / dashboard reflects Pro within seconds instead of
-  // waiting for the 6h background refresh. Throttled to at most once/minute so
-  // rapid tab-switching doesn't hammer the server; only runs while signed in.
+  // Catch upgrades made outside the extension when this surface regains focus.
   useEffect(() => {
     if (!authed) return;
     let last = 0;
@@ -53,10 +84,10 @@ export function useAuth() {
       if (now - last < 60_000) return;
       last = now;
       refreshUserPlan()
-        .then((u) => {
-          if (u) {
-            setEmail(u.email);
-            setPlan(u.plan);
+        .then((user) => {
+          if (user) {
+            setEmail(user.email);
+            setPlan(user.plan);
           }
         })
         .catch(() => {});
@@ -70,17 +101,17 @@ export function useAuth() {
   }, [authed]);
 
   async function login(em: string, password: string) {
-    const u = await doLogin(em, password);
+    const user = await doLogin(em, password);
     setAuthed(true);
-    setEmail(u.email);
-    setPlan(u.plan);
+    setEmail(user.email);
+    setPlan(user.plan);
   }
 
   async function signup(em: string, password: string, name?: string) {
-    const u = await doSignup(em, password, name);
+    const user = await doSignup(em, password, name);
     setAuthed(true);
-    setEmail(u.email);
-    setPlan(u.plan);
+    setEmail(user.email);
+    setPlan(user.plan);
   }
 
   async function logout() {
