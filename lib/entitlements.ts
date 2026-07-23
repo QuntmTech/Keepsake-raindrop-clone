@@ -8,25 +8,27 @@ import { type PlanConfigRow } from './backend/types';
 // Limits are DATA-DRIVEN: read from the PocketBase `plans` config collection,
 // cached, and refreshed periodically. When PB is unreachable — offline, or
 // before the backend collection exists — we fall back to the bundled
-// DEFAULT_PLANS below (which mirror launch pricing and are also the values to
+// DEFAULT_PLANS below (which mirror launch policy and are also the values to
 // SEED into PB). PocketBase is authoritative when reachable.
 //
 // The client's checks here are UX guardrails and are bypassable; the real,
-// authoritative enforcement lives server-side in PocketBase (see the Phase 5
-// handoff). Nothing in this module hardcodes limits into components — every
-// consumer reads through limitsFor()/the can*() helpers.
+// authoritative enforcement lives server-side in PocketBase. Nothing in this
+// module hardcodes limits into components — every consumer reads through
+// limitsFor()/the can*() helpers.
 //
 // Local mode: local accounts are provisioned as `owner` (unlimited), so local
 // installs are never gated regardless of this config.
 
 export type CaptureTier = 'basic' | 'full';
+export type AiCreditPeriod = 'day' | 'month' | 'unlimited';
 
 export interface PlanLimits {
   maxBookmarks: number | null; // null = unlimited
   maxWatches: number | null; // null = unlimited
   maxStorageBytes: number | null; // null = unlimited
   hostedAi: boolean; // access to hosted (no-key) AI; metered server-side
-  aiCreditAllowance: number | null; // monthly hosted-AI credits; null = unlimited
+  aiCreditAllowance: number | null; // weighted hosted-AI credits; null = unlimited
+  aiCreditPeriod: AiCreditPeriod;
   captureTier: CaptureTier; // 'basic' = single-area screenshot; 'full' = Capture Studio
   stripePriceMonth: string; // Stripe price id (from PB config; empty in defaults)
   stripePriceYear: string;
@@ -35,9 +37,9 @@ export interface PlanLimits {
 const MB = 1024 * 1024;
 const GB = 1024 * MB;
 
-// Placeholder monthly hosted-AI credit grant for Pro — the owner tunes the real
-// number in the PB `plans` config; this is only the offline/first-run fallback.
-export const PRO_AI_CREDIT_ALLOWANCE_DEFAULT = 1000;
+export const FREE_AI_CREDIT_ALLOWANCE_DEFAULT = 15;
+export const PRO_AI_CREDIT_ALLOWANCE_DEFAULT = 2_500;
+export const MAX_AI_CREDIT_ALLOWANCE_DEFAULT = 10_000;
 
 // Bundled fallback limits (also the launch values to seed into PB `plans`).
 // Owner is intentionally all-unlimited and never read from config.
@@ -46,8 +48,9 @@ export const DEFAULT_PLANS: Record<Plan, PlanLimits> = {
     maxBookmarks: 200,
     maxWatches: 3,
     maxStorageBytes: 100 * MB,
-    hostedAi: false,
-    aiCreditAllowance: 0,
+    hostedAi: true,
+    aiCreditAllowance: FREE_AI_CREDIT_ALLOWANCE_DEFAULT,
+    aiCreditPeriod: 'day',
     captureTier: 'basic',
     stripePriceMonth: '',
     stripePriceYear: '',
@@ -58,6 +61,18 @@ export const DEFAULT_PLANS: Record<Plan, PlanLimits> = {
     maxStorageBytes: 10 * GB,
     hostedAi: true,
     aiCreditAllowance: PRO_AI_CREDIT_ALLOWANCE_DEFAULT,
+    aiCreditPeriod: 'month',
+    captureTier: 'full',
+    stripePriceMonth: '',
+    stripePriceYear: '',
+  },
+  max: {
+    maxBookmarks: null,
+    maxWatches: 100,
+    maxStorageBytes: 50 * GB,
+    hostedAi: true,
+    aiCreditAllowance: MAX_AI_CREDIT_ALLOWANCE_DEFAULT,
+    aiCreditPeriod: 'month',
     captureTier: 'full',
     stripePriceMonth: '',
     stripePriceYear: '',
@@ -68,6 +83,7 @@ export const DEFAULT_PLANS: Record<Plan, PlanLimits> = {
     maxStorageBytes: null,
     hostedAi: true,
     aiCreditAllowance: null,
+    aiCreditPeriod: 'unlimited',
     captureTier: 'full',
     stripePriceMonth: '',
     stripePriceYear: '',
@@ -83,12 +99,13 @@ function cloneDefaults(): Record<Plan, PlanLimits> {
   return {
     free: { ...DEFAULT_PLANS.free },
     pro: { ...DEFAULT_PLANS.pro },
+    max: { ...DEFAULT_PLANS.max },
     owner: { ...DEFAULT_PLANS.owner },
   };
 }
 
 interface CachedConfig {
-  plans: Partial<Record<'free' | 'pro', PlanLimits>>;
+  plans: Partial<Record<'free' | 'pro' | 'max', PlanLimits>>;
   fetchedAt: number;
 }
 const configStore = storage.defineItem<CachedConfig | null>('sync:plans_config', { fallback: null });
@@ -101,24 +118,31 @@ function capField(v: unknown): number | null {
   return Number.isFinite(n) && n > 0 ? n : null;
 }
 
+function creditPeriod(value: unknown, allowance: number | null): AiCreditPeriod {
+  if (allowance == null) return 'unlimited';
+  return value === 'day' ? 'day' : 'month';
+}
+
 function mapRow(row: PlanConfigRow): PlanLimits {
+  const allowance = row.ai_credit_allowance == null ? null : Number(row.ai_credit_allowance);
   return {
     maxBookmarks: capField(row.max_bookmarks),
     maxWatches: capField(row.max_watches),
     maxStorageBytes: capField(row.max_storage_bytes),
     hostedAi: Boolean(row.hosted_ai),
-    // Credit allowance keeps an explicit 0 (Free has 0); null = unlimited.
-    aiCreditAllowance: row.ai_credit_allowance == null ? null : Number(row.ai_credit_allowance),
+    aiCreditAllowance: allowance,
+    aiCreditPeriod: creditPeriod(row.ai_credit_period, allowance),
     captureTier: row.capture_tier === 'full' ? 'full' : 'basic',
     stripePriceMonth: row.stripe_price_month || '',
     stripePriceYear: row.stripe_price_year || '',
   };
 }
 
-function applyPlans(plans: Partial<Record<'free' | 'pro', PlanLimits>>): void {
+function applyPlans(plans: Partial<Record<'free' | 'pro' | 'max', PlanLimits>>): void {
   activeLimits = {
     free: { ...DEFAULT_PLANS.free, ...(plans.free ?? {}) },
     pro: { ...DEFAULT_PLANS.pro, ...(plans.pro ?? {}) },
+    max: { ...DEFAULT_PLANS.max, ...(plans.max ?? {}) },
     owner: { ...DEFAULT_PLANS.owner }, // owner is always bundled-unlimited
   };
 }
@@ -149,9 +173,9 @@ export async function loadEntitlementsConfig(force = false): Promise<void> {
       const backend = await getBackend();
       const rows = (await backend.fetchPlans?.()) ?? [];
       if (rows.length) {
-        const plans: Partial<Record<'free' | 'pro', PlanLimits>> = {};
+        const plans: Partial<Record<'free' | 'pro' | 'max', PlanLimits>> = {};
         for (const r of rows) {
-          if (r.key === 'free' || r.key === 'pro') plans[r.key] = mapRow(r);
+          if (r.key === 'free' || r.key === 'pro' || r.key === 'max') plans[r.key] = mapRow(r);
         }
         applyPlans(plans);
         await configStore.setValue({ plans, fetchedAt: Date.now() });
@@ -201,9 +225,8 @@ export interface CapState {
 }
 
 // Whether another cloud bookmark may be saved. Only meaningful in hosted mode;
-// unlimited plans (Pro/Owner, and all of local mode) always pass. The count
-// comes from vaultStats().total, which already EXCLUDES Home launcher tiles —
-// matching the counting rule (real pages + cloud captures count; tiles never).
+// unlimited plans (Pro/Max/Owner, and all of local mode) always pass. The count
+// comes from vaultStats().total, which excludes Home launcher tiles.
 export async function canSaveBookmark(): Promise<CapState> {
   const { plan, limits } = await getEntitlements();
   if (limits.maxBookmarks == null) return { allowed: true, unlimited: true, plan, limit: null, used: 0 };
@@ -230,8 +253,9 @@ export async function canCreateWatch(): Promise<CapState> {
   return { allowed: used < limits.maxWatches, unlimited: false, plan, limit: limits.maxWatches, used };
 }
 
-// Hosted (no-key) AI entitlement. BYOK AI is NEVER gated by this — it's always
-// available. Credit metering is enforced server-side; this is the on/off gate.
+// Hosted (no-key) AI entitlement. BYOK AI is NEVER gated by this — it is paid
+// directly by the user. Credit metering is enforced server-side; this is an
+// extension-side availability/UX gate only.
 export async function canUseHostedAI(): Promise<boolean> {
   const { limits } = await getEntitlements();
   return limits.hostedAi;
@@ -250,25 +274,18 @@ export interface StorageState {
 }
 
 // Local, NON-authoritative storage estimate: sum of every capture blob's size
-// in the IndexedDB sidecar (screenshots/recordings/MHTML snapshots — the
-// large binary data behind a save). This is the best signal the client can
-// compute on its own; it does NOT see bytes already synced from other devices
-// or the server's actual file storage, so it always undercounts somewhat.
-// Once PocketBase exposes an authoritative `usage.storage_bytes` figure, pass
-// it into storageRemaining() explicitly and this estimate is bypassed.
+// in the IndexedDB sidecar. Once PocketBase exposes an authoritative usage
+// figure, pass it into storageRemaining() and this estimate is bypassed.
 export async function estimatedStorageBytes(): Promise<number> {
   try {
     const { db } = await import('./save');
     const blobs = await db.blobs.toArray();
     return blobs.reduce((sum, b) => sum + (b.size || 0), 0);
   } catch {
-    return 0; // sidecar unavailable (content-script context, etc.) — assume no usage
+    return 0;
   }
 }
 
-// Storage headroom. Pass `usedBytes` once PocketBase reports authoritative
-// bytes; until then this falls back to the local blob-size estimate above
-// (estimated:true flags that it's not server-verified).
 export async function storageRemaining(usedBytes?: number): Promise<StorageState> {
   const { limits } = await getEntitlements();
   const estimated = usedBytes == null;
@@ -283,9 +300,8 @@ export async function storageRemaining(usedBytes?: number): Promise<StorageState
   };
 }
 
-// Force a fresh read of BOTH the user's plan (the webhook may have just upgraded
-// it) and the plans config. Phase 3 calls this on checkout return so a new Pro
-// subscription unlocks immediately instead of waiting for the next 6h refresh.
+// Force a fresh read of BOTH the user's plan and the plans config after billing
+// changes. The webhook/server remains the source of truth.
 export async function refreshEntitlements(): Promise<Entitlement> {
   try {
     await (await getBackend()).refreshUser?.();
