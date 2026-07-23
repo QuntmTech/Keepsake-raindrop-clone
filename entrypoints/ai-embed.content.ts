@@ -1,3 +1,4 @@
+import { setWriterDraft } from '@/lib/aiWriter';
 import { getSettings, setSettings, watchSettings } from '@/lib/settings';
 import { orderedSelectionActions, type ResolvedSelectionAction } from '@/lib/selectionActions';
 import { type PageSnapshot } from '@/lib/pageAi';
@@ -272,15 +273,21 @@ export default defineContentScript({
         const selected = current ?? selectedEditable();
         if (!selected?.text) return;
         hideCurrentSelection();
+
+        // Persist the complete command before opening the side panel. This keeps
+        // custom instructions and language choices intact even when the current
+        // background worker only understands the older OPEN_AI_TOOLS payload.
+        await setWriterDraft({
+          input: selected.text,
+          output: '',
+          action: action.writerAction,
+          customInstruction: action.customInstruction ?? '',
+          targetLanguage: settings.aiSelectionTranslateLanguage || 'English',
+          selectedPromptId: '',
+        });
+
         const response = (await browser.runtime
-          .sendMessage({
-            type: 'OPEN_AI_TOOLS',
-            text: selected.text,
-            action: action.writerAction,
-            customInstruction: action.customInstruction,
-            targetLanguage: settings.aiSelectionTranslateLanguage || 'English',
-            source: 'embedded',
-          })
+          .sendMessage({ type: 'OPEN_AI_TOOLS', source: 'embedded' })
           .catch(() => null)) as { ok?: boolean } | null;
         if (!response?.ok) {
           dismissedFingerprint = '';
