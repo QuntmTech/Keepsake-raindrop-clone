@@ -67,6 +67,22 @@ export function Icon({
   className?: string;
   fill?: boolean;
 }) {
+  // Large filled bookmarks are used as the product mark in Home/loading shells.
+  // Keep the normal 16px filled bookmark for the semantic “Save page” action.
+  if (name === 'bookmark' && fill && size >= 17) {
+    return (
+      <img
+        src={browser.runtime.getURL('/icon/128.png')}
+        width={size}
+        height={size}
+        className={className}
+        alt=""
+        aria-hidden="true"
+        draggable={false}
+      />
+    );
+  }
+
   const solid = fill || name === 'star-fill';
   return (
     <svg

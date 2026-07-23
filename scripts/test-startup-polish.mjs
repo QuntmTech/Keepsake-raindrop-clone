@@ -26,6 +26,8 @@ test('popup and Home debounce storage/query bursts', () => {
   assert.match(home, /overlayTimer/);
 });
 
-test('auth state reads resolve concurrently after initialization', () => {
-  assert.match(auth, /Promise\.all\(\[isLoggedIn\(\), currentUser\(\)\]\)/);
+test('auth paints cached state first and reconciles through one verified backend read', () => {
+  assert.match(auth, /readCachedAuthUser/);
+  assert.match(auth, /readVerifiedAuthState/);
+  assert.match(auth, /mark\('ready:cache'\)/);
 });
