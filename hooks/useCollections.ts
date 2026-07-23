@@ -6,8 +6,9 @@ import {
   updateCollection,
   deleteCollection,
 } from '@/lib/bookmarks';
+import { readCachedAuthUser } from '@/lib/auth';
+import { readSnapshot } from '@/lib/cache';
 import { type Collection } from '@/lib/types';
-import { readLastSnapshot } from '@/lib/cache';
 
 // Loads collections + per-collection counts and exposes CRUD that refreshes state.
 export function useCollections(authed: boolean) {
@@ -28,12 +29,13 @@ export function useCollections(authed: boolean) {
     }
   }, [authed]);
 
-  // Paint cached collections directly from chrome.storage before constructing the
-  // backend. Logout clears the snapshot, so this never crosses user sessions.
+  // Both reads use chrome.storage only. This keeps startup fast while still
+  // preventing a previous account's snapshot from flashing after an account switch.
   useEffect(() => {
     let cancelled = false;
     (async () => {
-      const snapshot = await readLastSnapshot();
+      const cachedUser = await readCachedAuthUser();
+      const snapshot = await readSnapshot(cachedUser?.id ?? null);
       if (!cancelled && snapshot) {
         setCollections(snapshot.collections);
         setCounts(snapshot.counts);
