@@ -18,10 +18,10 @@ function selectedEditable(): EditableText | null {
   if (isTextInput(active)) {
     const start = active.selectionStart ?? 0;
     const end = active.selectionEnd ?? start;
-    const selected = end > start;
-    const text = selected ? active.value.slice(start, end) : active.value;
+    if (end <= start) return null;
+    const text = active.value.slice(start, end);
     if (!text.trim()) return null;
-    return { text: text.slice(0, 48_000), rect: active.getBoundingClientRect(), selected };
+    return { text: text.slice(0, 48_000), rect: active.getBoundingClientRect(), selected: true };
   }
 
   const selection = window.getSelection();
@@ -30,11 +30,9 @@ function selectedEditable(): EditableText | null {
     if (text) return { text: text.slice(0, 48_000), rect: selection.getRangeAt(0).getBoundingClientRect(), selected: true };
   }
 
-  const editable = active instanceof HTMLElement
-    ? active.closest<HTMLElement>('[contenteditable="true"], [contenteditable="plaintext-only"]')
-    : null;
-  const text = editable?.innerText?.trim();
-  return editable && text ? { text: text.slice(0, 48_000), rect: editable.getBoundingClientRect(), selected: false } : null;
+  // Privacy default: never send an entire contenteditable field implicitly.
+  // The user must select the exact text they want Keepsake to process.
+  return null;
 }
 
 function pageText(max = 90_000): string {
@@ -204,8 +202,8 @@ export default defineContentScript({
     };
 
     const settings = await getSettings();
-    applySettings(settings.enableHighlights);
-    const unwatch = watchSettings((next) => applySettings(next.enableHighlights));
+    applySettings(settings.enableAiSelectionTools);
+    const unwatch = watchSettings((next) => applySettings(next.enableAiSelectionTools));
 
     ctx.onInvalidated(() => {
       unwatch();

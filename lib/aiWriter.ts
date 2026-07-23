@@ -60,7 +60,9 @@ export async function clearWriterDraft(): Promise<WriterDraft> {
   return DEFAULT_WRITER_DRAFT;
 }
 
-export async function runWriterDetailed(request: WriterRequest & { quality?: AiRouteMode }): Promise<LlmResult> {
+export async function runWriterDetailed(
+  request: WriterRequest & { quality?: AiRouteMode; signal?: AbortSignal; overallTimeoutMs?: number },
+): Promise<LlmResult> {
   const built = buildWriterPrompt(request);
   const contextHeavy = request.action === 'custom' || request.action === 'reply' || request.action === 'translate';
   return llmCompleteDetailed({
@@ -71,9 +73,13 @@ export async function runWriterDetailed(request: WriterRequest & { quality?: AiR
     prompt: built.prompt,
     maxTokens: built.maxTokens,
     temperature: request.action === 'grammar' || request.action === 'translate' ? 0.15 : 0.45,
+    signal: request.signal,
+    overallTimeoutMs: request.overallTimeoutMs,
   });
 }
 
-export async function runWriter(request: WriterRequest & { quality?: AiRouteMode }): Promise<string> {
+export async function runWriter(
+  request: WriterRequest & { quality?: AiRouteMode; signal?: AbortSignal; overallTimeoutMs?: number },
+): Promise<string> {
   return (await runWriterDetailed(request)).text;
 }

@@ -84,8 +84,7 @@ export default defineBackground(() => {
       flushQueue().catch(() => {});
     }
     if (alarm.name === WATCH_ALARM) {
-      // The watch fetch/parse runs in the offscreen document — make sure it exists.
-      await ensureOffscreenDocument().catch(() => {});
+      // watchTick opens the offscreen parser only when at least one watch is due.
       watchTick().catch(() => {});
     }
     if (alarm.name === AUTH_REFRESH_ALARM) {

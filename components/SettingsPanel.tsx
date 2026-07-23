@@ -362,6 +362,7 @@ export function SettingsPanel({ compact = false }: { compact?: boolean }) {
       <Section title="Capture" compact={compact} hint="The Quick Bar is a draggable widget on the edge of every page. Use its gear to reorder buttons, change size/color, or add a custom shortcut. Ctrl+Shift+K opens the folder picker.">
         <Toggle label="Show the in-page Quick Bar" checked={settings.enableQuickBar} onChange={(v) => update({ enableQuickBar: v })} />
         <Toggle label="Highlights & annotations on pages" checked={settings.enableHighlights} onChange={(v) => update({ enableHighlights: v })} />
+        <Toggle label="AI helper for selected text only" checked={settings.enableAiSelectionTools} onChange={(v) => update({ enableAiSelectionTools: v })} />
         <Toggle label="Auto-capture a preview screenshot" checked={settings.enableAutoScreenshot} onChange={(v) => update({ enableAutoScreenshot: v })} />
         <Toggle label="Fetch page metadata (cover, reading time)" checked={settings.enableMetadata} onChange={(v) => update({ enableMetadata: v })} />
         <label className="mt-2 block text-xs font-medium text-ink-soft">Default folder for new saves</label>

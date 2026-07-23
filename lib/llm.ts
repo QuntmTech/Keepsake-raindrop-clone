@@ -22,6 +22,9 @@ export interface LlmRequest {
   routeMode?: AiRouteMode;
   temperature?: number;
   responseFormat?: 'text' | 'json';
+  signal?: AbortSignal;
+  attemptTimeoutMs?: number;
+  overallTimeoutMs?: number;
 }
 
 export interface LlmUsage {
@@ -89,7 +92,8 @@ export const PROVIDER_DEFAULTS: Record<
   },
 };
 
-const REQUEST_TIMEOUT_MS = 55_000;
+const REQUEST_TIMEOUT_MS = 35_000;
+const OVERALL_REQUEST_TIMEOUT_MS = 75_000;
 const MODEL_LIST_TIMEOUT_MS = 15_000;
 
 class ProviderHttpError extends Error {
@@ -110,8 +114,28 @@ interface AdapterResult {
 
 type Adapter = (key: string, model: string, req: LlmRequest) => Promise<AdapterResult>;
 
-function requestSignal(timeout = REQUEST_TIMEOUT_MS): AbortSignal {
-  return AbortSignal.timeout(timeout);
+function combineSignals(signals: Array<AbortSignal | undefined>): AbortSignal {
+  const active = signals.filter((signal): signal is AbortSignal => Boolean(signal));
+  if (active.length === 1) return active[0];
+  const any = (AbortSignal as typeof AbortSignal & { any?: (signals: AbortSignal[]) => AbortSignal }).any;
+  if (any) return any(active);
+
+  const controller = new AbortController();
+  const abort = (signal: AbortSignal) => {
+    if (!controller.signal.aborted) controller.abort(signal.reason);
+  };
+  for (const signal of active) {
+    if (signal.aborted) {
+      abort(signal);
+      break;
+    }
+    signal.addEventListener('abort', () => abort(signal), { once: true });
+  }
+  return controller.signal;
+}
+
+function requestSignal(timeout = REQUEST_TIMEOUT_MS, external?: AbortSignal): AbortSignal {
+  return combineSignals([external, AbortSignal.timeout(timeout)]);
 }
 
 function requireText(value: string): string {
@@ -144,7 +168,7 @@ function usageFromOpenAi(data: any): LlmUsage | undefined {
 async function callAnthropic(key: string, model: string, req: LlmRequest): Promise<AdapterResult> {
   const res = await fetch('https://api.anthropic.com/v1/messages', {
     method: 'POST',
-    signal: requestSignal(),
+    signal: requestSignal(req.attemptTimeoutMs ?? REQUEST_TIMEOUT_MS, req.signal),
     headers: {
       'content-type': 'application/json',
       'x-api-key': key,
@@ -189,12 +213,14 @@ async function callOpenAiCompatible(
     : { max_tokens: tokenLimit };
   const res = await fetch(endpoint, {
     method: 'POST',
-    signal: requestSignal(),
+    signal: requestSignal(req.attemptTimeoutMs ?? REQUEST_TIMEOUT_MS, req.signal),
     headers: { 'content-type': 'application/json', authorization: `Bearer ${key}` },
     body: JSON.stringify({
       model,
       ...modernTokenField,
-      ...(req.temperature == null ? {} : { temperature: req.temperature }),
+      ...(req.temperature == null || (directOpenAi && /^(gpt-5|o\d)/.test(model))
+        ? {}
+        : { temperature: req.temperature }),
       ...(req.responseFormat === 'json' ? { response_format: { type: 'json_object' } } : {}),
       messages: [
         ...(req.system ? [{ role: 'system', content: req.system }] : []),
@@ -225,7 +251,7 @@ async function callGoogle(key: string, model: string, req: LlmRequest): Promise<
     `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:generateContent?key=${encodeURIComponent(key)}`,
     {
       method: 'POST',
-      signal: requestSignal(),
+      signal: requestSignal(req.attemptTimeoutMs ?? REQUEST_TIMEOUT_MS, req.signal),
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({
         ...(req.system ? { systemInstruction: { parts: [{ text: req.system }] } } : {}),
@@ -287,7 +313,8 @@ function canTryAnotherModel(error: unknown): boolean {
 
 function readableError(error: unknown): Error {
   const name = (error as { name?: string })?.name;
-  if (name === 'AbortError' || name === 'TimeoutError') return new Error('The AI request timed out — try again.');
+  if (name === 'AbortError') return new Error('AI request cancelled.');
+  if (name === 'TimeoutError') return new Error('The AI request timed out — try again.');
   if (error instanceof TypeError) return new Error('Could not reach the AI provider. Check your connection and try again.');
   return error instanceof Error ? error : new Error('The AI request failed.');
 }
@@ -299,6 +326,7 @@ async function callWithRetry(adapter: Adapter, key: string, model: string, req: 
       return await adapter(key, model, req);
     } catch (error) {
       last = error;
+      if (req.signal?.aborted) throw req.signal.reason ?? error;
       if (!transient(error) || attempt === 1) throw error;
       await new Promise((resolve) => setTimeout(resolve, 350 + Math.round(Math.random() * 250)));
     }
@@ -341,14 +369,16 @@ export async function llmCompleteDetailed(req: LlmRequest): Promise<LlmResult> {
   const settings = await getAiSettings();
   if (!settings.enabled || !settings.apiKey.trim()) throw new Error('No API key configured');
   const provider = (settings.provider ?? 'novita') as LlmProvider;
-  const { models, routeReason } = modelsForRequest(provider, settings, req);
+  const overallSignal = requestSignal(req.overallTimeoutMs ?? OVERALL_REQUEST_TIMEOUT_MS, req.signal);
+  const effectiveRequest: LlmRequest = { ...req, signal: overallSignal };
+  const { models, routeReason } = modelsForRequest(provider, settings, effectiveRequest);
   const startedAt = performance.now();
   let lastError: unknown;
 
   for (let index = 0; index < models.length; index++) {
     const model = models[index];
     try {
-      const result = await callWithRetry(ADAPTERS[provider], settings.apiKey.trim(), model, req);
+      const result = await callWithRetry(ADAPTERS[provider], settings.apiKey.trim(), model, effectiveRequest);
       const latencyMs = Math.max(0, Math.round(performance.now() - startedAt));
       return {
         text: result.text,
@@ -362,11 +392,11 @@ export async function llmCompleteDetailed(req: LlmRequest): Promise<LlmResult> {
       };
     } catch (error) {
       lastError = error;
-      if (!canTryAnotherModel(error) || index === models.length - 1) break;
+      if (effectiveRequest.signal?.aborted || !canTryAnotherModel(error) || index === models.length - 1) break;
     }
   }
 
-  throw readableError(lastError);
+  throw readableError(effectiveRequest.signal?.reason ?? lastError);
 }
 
 export async function llmComplete(req: LlmRequest): Promise<string> {
