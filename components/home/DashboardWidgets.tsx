@@ -19,6 +19,7 @@ import {
   widgetLayoutStore,
   widgetCollapsedStore,
   WIDGET_SPAN,
+  type WidgetPos,
 } from '@/lib/widgets';
 import { Favicon } from '@/components/Favicon';
 import { Icon } from '@/components/Icon';
@@ -55,20 +56,24 @@ interface Ctx {
 
 const COL_W = 300; // one grid column
 const GAP = 16;
-const SNAP = 8; // drag snaps to this pixel grid
+const SNAP = 8; // drag + resize snap to this pixel grid
+const MIN_WIDGET_W = 240;
+const MIN_WIDGET_H = 120;
+const MAX_WIDGET_H = 900;
 
-// The dashboard: a free canvas. Every widget is absolutely positioned and can
-// be dragged anywhere by its grip handle; positions persist per device. A
-// widget with no saved position is auto-packed into columns so a fresh install
-// still looks tidy. Every widget self-hides when it has nothing to show.
+// The dashboard is a viewport-wide free canvas on desktop. Every widget
+// can be dragged by its grip and resized from its lower-right corner.
+// Position and size are kept per device; older {x,y}-only layouts remain
+// valid and simply use the normal default footprint until resized.
 export function DashboardWidgets(ctx: Ctx) {
   const containerRef = useRef<HTMLDivElement>(null);
   const cellRefs = useRef<Record<string, HTMLDivElement | null>>({});
-  const [layout, setLayout] = useState<Record<string, { x: number; y: number }>>({});
-  const [defaults, setDefaults] = useState<Record<string, { x: number; y: number }>>({});
+  const [layout, setLayout] = useState<Record<string, WidgetPos>>({});
+  const [defaults, setDefaults] = useState<Record<string, WidgetPos>>({});
   const [cols, setCols] = useState(3);
   const [canvasH, setCanvasH] = useState(240);
   const [drag, setDrag] = useState<{ key: string; x: number; y: number } | null>(null);
+  const [resize, setResize] = useState<{ key: string; x: number; y: number; width: number; height: number } | null>(null);
   const [collapsed, setCollapsed] = useState<string[]>([]);
 
   useEffect(() => {
@@ -79,19 +84,20 @@ export function DashboardWidgets(ctx: Ctx) {
     widgetCollapsedStore.getValue().then(setCollapsed);
     return widgetCollapsedStore.watch((v) => setCollapsed(v ?? []));
   }, []);
+
   const toggleCollapse = (k: string) => {
     const next = collapsed.includes(k) ? collapsed.filter((x) => x !== k) : [...collapsed, k];
     setCollapsed(next);
     widgetCollapsedStore.setValue(next).catch(() => {});
   };
 
-  const widthOf = (k: WidgetKey, colCount: number) => {
+  const defaultWidthOf = useCallback((k: WidgetKey, colCount: number) => {
     const span = Math.min(WIDGET_SPAN[k] ?? 1, colCount);
     return span * COL_W + (span - 1) * GAP;
-  };
+  }, []);
 
-  // Re-pack unsaved widgets whenever the container width or any card height
-  // changes (widgets collapse/expand as their data loads).
+  // Re-pack only widgets that have never been manually positioned. Saved
+  // widgets stay where the user put them, while the canvas grows to fit.
   const repack = useCallback(() => {
     const el = containerRef.current;
     if (!el) return;
@@ -99,15 +105,16 @@ export function DashboardWidgets(ctx: Ctx) {
     const colCount = Math.max(1, Math.floor((cw + GAP) / (COL_W + GAP)));
     setCols(colCount);
     const colH = new Array(colCount).fill(0);
-    const def: Record<string, { x: number; y: number }> = {};
+    const def: Record<string, WidgetPos> = {};
     let maxBottom = 0;
+
     for (const k of ctx.enabled) {
       const cell = cellRefs.current[k];
-      const h = cell?.offsetHeight ?? 0;
+      const naturalH = cell?.offsetHeight ?? 0;
       const span = Math.min(WIDGET_SPAN[k] ?? 1, colCount);
-      // Best start column: the one minimizing the top edge across the span.
       let bestCol = 0;
       let bestY = Infinity;
+
       for (let c = 0; c + span <= colCount; c++) {
         const y = Math.max(...colH.slice(c, c + span));
         if (y < bestY) {
@@ -115,22 +122,25 @@ export function DashboardWidgets(ctx: Ctx) {
           bestCol = c;
         }
       }
+
       if (!isFinite(bestY)) bestY = 0;
       def[k] = { x: bestCol * (COL_W + GAP), y: bestY };
-      if (h >= 8) {
-        for (let i = bestCol; i < bestCol + span; i++) colH[i] = bestY + h + GAP;
-        // Account for a saved (free) position when sizing the canvas.
-        const pos = layoutOrDef(k, def[k], layout);
-        maxBottom = Math.max(maxBottom, pos.y + h);
+
+      if (naturalH >= 8) {
+        for (let i = bestCol; i < bestCol + span; i++) colH[i] = bestY + naturalH + GAP;
+        const saved = layoutOrDef(k, def[k], layout);
+        const effectiveH = collapsed.includes(k) ? 50 : saved.height ?? naturalH;
+        maxBottom = Math.max(maxBottom, saved.y + effectiveH);
       }
     }
+
     setDefaults(def);
-    setCanvasH(Math.max(maxBottom + 8, 200));
-  }, [ctx.enabled, layout]);
+    setCanvasH(Math.max(maxBottom + GAP, 200));
+  }, [collapsed, ctx.enabled, layout]);
 
   useLayoutEffect(() => {
     repack();
-  }, [repack, drag, collapsed]);
+  }, [repack, drag, resize]);
 
   useEffect(() => {
     const el = containerRef.current;
@@ -148,50 +158,129 @@ export function DashboardWidgets(ctx: Ctx) {
     };
   }, [repack, ctx.enabled]);
 
-  // Drag: move by the grip, snap + clamp, persist on release.
-  const startRef = useRef<{ px: number; py: number; x: number; y: number } | null>(null);
-  const onGripDown = (k: WidgetKey, e: React.PointerEvent) => {
+  const dragStartRef = useRef<{ px: number; py: number; x: number; y: number; width: number } | null>(null);
+  const onGripDown = (k: WidgetKey, e: React.PointerEvent<HTMLButtonElement>) => {
     e.preventDefault();
-    (e.target as HTMLElement).setPointerCapture(e.pointerId);
+    e.currentTarget.setPointerCapture(e.pointerId);
     const cur = layoutOrDef(k, defaults[k], layout);
-    startRef.current = { px: e.clientX, py: e.clientY, x: cur.x, y: cur.y };
+    const width = cellRefs.current[k]?.offsetWidth ?? layout[k]?.width ?? defaultWidthOf(k, cols);
+    dragStartRef.current = { px: e.clientX, py: e.clientY, x: cur.x, y: cur.y, width };
     setDrag({ key: k, x: cur.x, y: cur.y });
   };
-  const onGripMove = (k: WidgetKey, e: React.PointerEvent) => {
-    const s = startRef.current;
+  const onGripMove = (k: WidgetKey, e: React.PointerEvent<HTMLButtonElement>) => {
+    const s = dragStartRef.current;
     if (!s || drag?.key !== k) return;
-    const cw = containerRef.current?.clientWidth ?? COL_W;
-    const w = widthOf(k, cols);
+    const cw = containerRef.current?.clientWidth ?? s.width;
     const snap = (n: number) => Math.round(n / SNAP) * SNAP;
-    const x = Math.max(0, Math.min(cw - w, snap(s.x + (e.clientX - s.px))));
+    const x = Math.max(0, Math.min(Math.max(0, cw - s.width), snap(s.x + (e.clientX - s.px))));
     const y = Math.max(0, snap(s.y + (e.clientY - s.py)));
     setDrag({ key: k, x, y });
   };
   const onGripUp = (k: WidgetKey) => {
     if (drag?.key === k) {
-      const next = { ...layout, [k]: { x: drag.x, y: drag.y } };
+      const next = { ...layout, [k]: { ...layout[k], x: drag.x, y: drag.y } };
       setLayout(next);
       widgetLayoutStore.setValue(next).catch(() => {});
     }
-    startRef.current = null;
+    dragStartRef.current = null;
     setDrag(null);
+  };
+
+  const resizeStartRef = useRef<{
+    px: number;
+    py: number;
+    x: number;
+    y: number;
+    width: number;
+    height: number;
+  } | null>(null);
+  const onResizeDown = (k: WidgetKey, e: React.PointerEvent<HTMLButtonElement>) => {
+    e.preventDefault();
+    e.stopPropagation();
+    e.currentTarget.setPointerCapture(e.pointerId);
+    const cell = cellRefs.current[k];
+    const cur = layoutOrDef(k, defaults[k], layout);
+    const width = cell?.offsetWidth ?? layout[k]?.width ?? defaultWidthOf(k, cols);
+    const height = cell?.offsetHeight ?? layout[k]?.height ?? MIN_WIDGET_H;
+    resizeStartRef.current = { px: e.clientX, py: e.clientY, x: cur.x, y: cur.y, width, height };
+    setResize({ key: k, x: cur.x, y: cur.y, width, height });
+  };
+  const onResizeMove = (k: WidgetKey, e: React.PointerEvent<HTMLButtonElement>) => {
+    const s = resizeStartRef.current;
+    if (!s || resize?.key !== k) return;
+    const cw = containerRef.current?.clientWidth ?? s.width;
+    const snap = (n: number) => Math.round(n / SNAP) * SNAP;
+    const maxWidth = Math.max(MIN_WIDGET_W, cw - s.x);
+    const width = Math.max(MIN_WIDGET_W, Math.min(maxWidth, snap(s.width + (e.clientX - s.px))));
+    const height = Math.max(MIN_WIDGET_H, Math.min(MAX_WIDGET_H, snap(s.height + (e.clientY - s.py))));
+    setResize({ key: k, x: s.x, y: s.y, width, height });
+  };
+  const onResizeUp = (k: WidgetKey) => {
+    if (resize?.key === k) {
+      const next = {
+        ...layout,
+        [k]: {
+          ...layout[k],
+          x: resize.x,
+          y: resize.y,
+          width: resize.width,
+          height: resize.height,
+        },
+      };
+      setLayout(next);
+      widgetLayoutStore.setValue(next).catch(() => {});
+    }
+    resizeStartRef.current = null;
+    setResize(null);
   };
 
   if (!ctx.enabled.length) return null;
 
+  const liveBottom = resize
+    ? resize.y + resize.height + GAP
+    : drag
+      ? drag.y + (cellRefs.current[drag.key]?.offsetHeight ?? MIN_WIDGET_H) + GAP
+      : 0;
+
   return (
-    <div ref={containerRef} className="relative mx-auto mt-12 w-full max-w-5xl" style={{ height: canvasH }}>
+    <div
+      ref={containerRef}
+      className="relative mx-auto mt-12 w-full max-w-5xl md:left-1/2 md:w-[calc(100vw-3rem)] md:max-w-none md:-translate-x-1/2"
+      style={{ height: Math.max(canvasH, liveBottom) }}
+    >
       {ctx.enabled.map((k) => {
-        const pos = drag?.key === k ? { x: drag.x, y: drag.y } : layoutOrDef(k, defaults[k], layout);
+        const saved = layout[k];
+        const basePos = drag?.key === k ? drag : layoutOrDef(k, defaults[k], layout);
+        const liveSize = resize?.key === k
+          ? { width: resize.width, height: resize.height }
+          : { width: saved?.width ?? defaultWidthOf(k, cols), height: saved?.height };
+        const cw = containerRef.current?.clientWidth || liveSize.width;
+        const width = Math.min(liveSize.width, cw);
+        const pos = {
+          x: Math.max(0, Math.min(Math.max(0, cw - width), basePos.x)),
+          y: Math.max(0, basePos.y),
+        };
         const isCol = collapsed.includes(k);
+        const active = drag?.key === k || resize?.key === k;
+        const height = isCol ? 50 : liveSize.height;
+
         return (
           <div
             key={k}
             ref={(el) => {
               cellRefs.current[k] = el;
             }}
-            className={`group/w absolute ${drag?.key === k ? 'z-30' : 'z-10'}`}
-            style={{ left: pos.x, top: pos.y, width: widthOf(k, cols), transition: drag ? 'none' : 'left .12s, top .12s' }}
+            className={`group/w absolute ${active ? 'z-30' : 'z-10'}`}
+            style={{
+              left: pos.x,
+              top: pos.y,
+              width,
+              ...(height ? { height } : {}),
+              minWidth: Math.min(MIN_WIDGET_W, cw),
+              minHeight: isCol ? 50 : MIN_WIDGET_H,
+              maxWidth: cw,
+              transition: active ? 'none' : 'left .12s, top .12s, width .12s, height .12s',
+            }}
           >
             <div className="absolute -top-2 right-2 z-20 flex gap-1">
               <button
@@ -217,9 +306,34 @@ export function DashboardWidgets(ctx: Ctx) {
                 <Icon name="grip" size={13} />
               </button>
             </div>
-            <div className={isCol ? 'overflow-hidden rounded-2xl' : ''} style={isCol ? { maxHeight: 50 } : undefined}>
+
+            <div
+              className={
+                isCol
+                  ? 'overflow-hidden rounded-2xl'
+                  : 'h-full min-h-0 overflow-auto rounded-2xl'
+              }
+              style={isCol ? { maxHeight: 50 } : undefined}
+            >
               <WidgetSwitch k={k} {...ctx} />
             </div>
+
+            {!isCol && (
+              <button
+                className={`absolute -bottom-1 -right-1 z-20 hidden h-7 w-7 cursor-nwse-resize items-end justify-end rounded-br-2xl p-1 text-ink-faint opacity-0 transition hover:text-brand group-hover/w:opacity-100 md:flex ${
+                  resize?.key === k ? 'opacity-100' : ''
+                }`}
+                style={{ touchAction: 'none' }}
+                onPointerDown={(e) => onResizeDown(k, e)}
+                onPointerMove={(e) => onResizeMove(k, e)}
+                onPointerUp={() => onResizeUp(k)}
+                onPointerCancel={() => onResizeUp(k)}
+                title="Drag to resize this widget"
+                aria-label={`Resize ${WIDGETS.find((widget) => widget.key === k)?.label ?? k}`}
+              >
+                <span className="block h-3 w-3 rounded-[1px] border-b-2 border-r-2 border-current" />
+              </button>
+            )}
           </div>
         );
       })}
@@ -227,11 +341,7 @@ export function DashboardWidgets(ctx: Ctx) {
   );
 }
 
-function layoutOrDef(
-  k: string,
-  def: { x: number; y: number } | undefined,
-  layout: Record<string, { x: number; y: number }>,
-): { x: number; y: number } {
+function layoutOrDef(k: string, def: WidgetPos | undefined, layout: Record<string, WidgetPos>): WidgetPos {
   return layout[k] ?? def ?? { x: 0, y: 0 };
 }
 
@@ -259,7 +369,7 @@ function WidgetSwitch({ k, ...ctx }: Ctx & { k: WidgetKey }) {
 // ── card shell ───────────────────────────────────────────────────────────────
 function Card({ title, icon, panelCls, cardStyle, right, children }: { title: string; icon: any; panelCls: string; cardStyle?: React.CSSProperties; right?: React.ReactNode; children: React.ReactNode }) {
   return (
-    <section className={`flex min-h-[9rem] flex-col rounded-2xl border p-4 ${panelCls}`} style={cardStyle}>
+    <section className={`flex h-full min-h-[9rem] flex-col rounded-2xl border p-4 ${panelCls}`} style={cardStyle}>
       <div className="mb-2.5 flex items-center gap-2">
         <Icon name={icon} size={15} className="text-ink-faint" />
         <h3 className="text-sm font-semibold text-ink">{title}</h3>
@@ -289,12 +399,12 @@ function SavesStrip({
     window.location.href = b.url;
   };
   return (
-    <section className={`rounded-2xl border p-4 ${panelCls}`} style={cardStyle}>
+    <section className={`flex h-full flex-col rounded-2xl border p-4 ${panelCls}`} style={cardStyle}>
       <div className="mb-3 flex items-center gap-2">
         <Icon name={icon} size={15} className="text-ink-faint" />
         <h3 className="text-sm font-semibold text-ink">{title}</h3>
       </div>
-      <div className="flex gap-2 overflow-x-auto pb-1">
+      <div className="flex min-h-0 flex-1 gap-2 overflow-x-auto pb-1">
         {(items ?? Array.from({ length: 5 })).map((b, i) =>
           b ? (
             <button

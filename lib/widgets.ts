@@ -53,6 +53,8 @@ export const notesStore = storage.defineItem<string>('local:widget_notes', { fal
 export interface WidgetPos {
   x: number;
   y: number;
+  width?: number;
+  height?: number;
 }
 export const widgetLayoutStore = storage.defineItem<Record<string, WidgetPos>>('local:widget_layout', {
   fallback: {},
