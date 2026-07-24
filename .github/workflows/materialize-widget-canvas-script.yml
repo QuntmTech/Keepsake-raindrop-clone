@@ -1,0 +1,52 @@
+name: Materialize Widget Canvas Script
+
+on:
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: write
+
+jobs:
+  materialize:
+    if: github.head_ref == 'agent/8.16-desktop-widget-canvas'
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+
+    steps:
+      - name: Check out feature branch
+        uses: actions/checkout@v4
+        with:
+          ref: agent/8.16-desktop-widget-canvas
+          fetch-depth: 0
+
+      - name: Materialize persistent drag and resize support
+        run: python scripts/materialize-widget-canvas.py
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Run focused widget test
+        run: npm run test:widget-canvas-816
+
+      - name: Type-check
+        run: npm run compile
+
+      - name: Build Chrome extension
+        run: npm run build
+
+      - name: Verify manifest
+        run: test -f .output/chrome-mv3/manifest.json
+
+      - name: Commit verified production source
+        shell: bash
+        run: |
+          rm -f .github/workflows/materialize-widget-canvas.yml
+          rm -f .github/workflows/materialize-widget-canvas-pr.yml
+          rm -f .github/workflows/materialize-widget-canvas-script.yml
+          rm -f scripts/materialize-widget-canvas.py
+          git config user.name "QuntmTech"
+          git config user.email "173104299+QuntmTech@users.noreply.github.com"
+          git add -A
+          git commit -m "Improve desktop widget drag and resize [widget-canvas-materialized]"
+          git push origin HEAD:agent/8.16-desktop-widget-canvas
