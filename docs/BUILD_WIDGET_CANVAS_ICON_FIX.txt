@@ -1,0 +1,1 @@
+Temporary build trigger for the latest 8.16 desktop widget canvas package with the corrected blue folder/bookmark icon applied after artifact generation.
