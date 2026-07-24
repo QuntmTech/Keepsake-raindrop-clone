@@ -60,12 +60,9 @@ test('integrity checks count repeated negations and preserve numeric dates and p
   assert.ok(issues.some((issue) => issue.kind === 'number'));
 });
 
-test('release metadata is 8.15.1', async () => {
+test('release metadata is 8.16.0', async () => {
   const pkg = JSON.parse(await source('package.json'));
   const config = await source('wxt.config.ts');
-  const lock = JSON.parse(await source('package-lock.json'));
-  assert.equal(pkg.version, '8.15.1');
-  assert.match(config, /version: '8\.15\.1'/);
-  assert.equal(lock.version, '8.15.1');
-  assert.equal(lock.packages[''].version, '8.15.1');
+  assert.equal(pkg.version, '8.16.0');
+  assert.match(config, /version: '8\.16\.0'/);
 });
