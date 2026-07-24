@@ -5,11 +5,11 @@ import test from 'node:test';
 const source = (path) => readFile(new URL('../' + path, import.meta.url), 'utf8');
 
 test('selection command center exposes advanced built-in and custom actions', async () => {
-  const [actions, prompt, messaging, background] = await Promise.all([
+  const [actions, prompt, messaging, content] = await Promise.all([
     source('lib/selectionActions.ts'),
     source('lib/aiWriterPrompt.ts'),
     source('lib/messaging.ts'),
-    source('entrypoints/background.ts'),
+    source('entrypoints/ai-embed.content.ts'),
   ]);
   for (const action of ['summarize', 'explain', 'keypoints', 'reply', 'translate']) {
     assert.match(actions, new RegExp(`id: '${action}'`));
@@ -18,8 +18,9 @@ test('selection command center exposes advanced built-in and custom actions', as
   assert.match(actions, /customInstruction/);
   assert.match(messaging, /customInstruction\?: string/);
   assert.match(messaging, /targetLanguage\?: string/);
-  assert.match(background, /customInstruction: msg\.customInstruction/);
-  assert.match(background, /targetLanguage: msg\.targetLanguage/);
+  assert.match(content, /setWriterDraft\(/);
+  assert.match(content, /customInstruction: action\.customInstruction/);
+  assert.match(content, /targetLanguage: settings\.aiSelectionTranslateLanguage/);
 });
 
 test('selection menu is configurable and can be dismissed at every requested scope', async () => {
