@@ -41,7 +41,16 @@ jobs:
         run: npm run test:release-backend-816
 
       - name: Run full release validation
-        run: npm run check
+        run: |
+          set -o pipefail
+          npm run check 2>&1 | tee release-check.log
+
+      - name: Upload release validation failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: Keepsake-8.16-release-check-failure
+          path: release-check.log
 
       - name: Build Chrome Web Store ZIP
         run: |
