@@ -1,0 +1,64 @@
+name: Materialize Home Cold Start 8.16
+
+on:
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: write
+
+jobs:
+  materialize:
+    if: ${{ !contains(github.event.pull_request.title, '[home-cold-start-materialized]') }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+
+    steps:
+      - name: Check out performance branch
+        uses: actions/checkout@v4
+        with:
+          ref: perf/8.16-home-cold-start
+          fetch-depth: 0
+
+      - name: Apply cold-start performance changes
+        run: python scripts/materialize-home-cold-start-816.py
+
+      - name: Remove temporary materializer
+        run: |
+          rm scripts/materialize-home-cold-start-816.py
+          rm .github/workflows/materialize-home-cold-start-816.yml
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Run focused cold-start tests
+        run: npm run test:home-cold-start-816
+
+      - name: Type-check
+        run: npm run compile
+
+      - name: Build Chrome MV3 extension
+        run: npm run build
+
+      - name: Verify cold-start bundle split
+        run: npm run check:home-startup-bundle
+
+      - name: Verify manifest
+        run: |
+          test -f .output/chrome-mv3/manifest.json
+          node -e "const m=require('./.output/chrome-mv3/manifest.json'); if(m.manifest_version!==3 || m.version!=='8.16.0') process.exit(1); console.log('Verified Keepsake', m.version, 'Manifest V'+m.manifest_version)"
+
+      - name: Commit verified source
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add entrypoints/newtab/App.tsx hooks/useAuth.ts hooks/useCollections.ts lib/auth.ts lib/cache.ts lib/apps.ts lib/appUrl.ts components/AppCatalog.tsx components/home/DashboardWidgets.tsx scripts/test-home-cold-start-816.mjs scripts/check-home-startup-bundle.mjs package.json
+          git add -u scripts/materialize-home-cold-start-816.py .github/workflows/materialize-home-cold-start-816.yml
+          git commit -m "Make Keepsake Home cold start instant [home-cold-start-materialized]"
+          git push origin HEAD:perf/8.16-home-cold-start
