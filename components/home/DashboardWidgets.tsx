@@ -26,7 +26,7 @@ import { Icon } from '@/components/Icon';
 import { useToast } from '@/components/Toast';
 import { markVisited } from '@/lib/bookmarks';
 import { faviconFor, safeDomain } from '@/lib/util';
-import { normUrl } from '@/lib/apps';
+import { normUrl } from '@/lib/appUrl';
 import { type Bookmark } from '@/lib/types';
 
 const genId = () => `${Date.now().toString(36)}${Math.random().toString(36).slice(2, 6)}`;

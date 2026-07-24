@@ -17,6 +17,7 @@ import { type Plan } from '@/lib/types';
 export function useAuth() {
   const [ready, setReady] = useState(false);
   const [authed, setAuthed] = useState(false);
+  const [id, setId] = useState<string | null>(null);
   const [email, setEmail] = useState<string | null>(null);
   const [plan, setPlan] = useState<Plan>('free');
 
@@ -29,6 +30,7 @@ export function useAuth() {
       const cached = await readCachedAuthUser();
       if (cached && !cancelled) {
         setAuthed(true);
+        setId(cached.id);
         setEmail(cached.email);
         setPlan(cached.plan);
         setReady(true);
@@ -40,6 +42,7 @@ export function useAuth() {
         mark('auth');
         if (cancelled) return;
         setAuthed(verified.loggedIn);
+        setId(verified.user?.id ?? null);
         setEmail(verified.user?.email ?? null);
         setPlan(verified.user?.plan ?? 'free');
       } catch {
@@ -64,6 +67,7 @@ export function useAuth() {
     return watchAuth(async () => {
       const cached = await readCachedAuthUser();
       setAuthed(Boolean(cached));
+      setId(cached?.id ?? null);
       setEmail(cached?.email ?? null);
       setPlan(cached?.plan ?? 'free');
     });
@@ -100,6 +104,7 @@ export function useAuth() {
     // Never let a snapshot from a previous account flash under this account.
     await clearSnapshot();
     setAuthed(true);
+    setId(user.id);
     setEmail(user.email);
     setPlan(user.plan);
   }
@@ -108,6 +113,7 @@ export function useAuth() {
     const user = await doSignup(em, password, name);
     await clearSnapshot();
     setAuthed(true);
+    setId(user.id);
     setEmail(user.email);
     setPlan(user.plan);
   }
@@ -116,9 +122,10 @@ export function useAuth() {
     await doLogout();
     await clearSnapshot();
     setAuthed(false);
+    setId(null);
     setEmail(null);
     setPlan('free');
   }
 
-  return { ready, authed, email, plan, login, signup, logout };
+  return { ready, authed, id, email, plan, login, signup, logout };
 }

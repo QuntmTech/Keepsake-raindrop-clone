@@ -1,5 +1,6 @@
 import { useMemo, useState } from 'react';
-import { APP_CATEGORIES, categoryColor, normUrl, type CatalogApp, type CatalogCategory } from '@/lib/apps';
+import { APP_CATEGORIES, categoryColor, type CatalogApp, type CatalogCategory } from '@/lib/apps';
+import { normUrl } from '@/lib/appUrl';
 import { saveBookmark, updateBookmark, listCollections, createCollection, safeDomain } from '@/lib/bookmarks';
 import { findSaveByUrl } from '@/lib/save';
 import { type Bookmark } from '@/lib/types';

@@ -6,12 +6,18 @@ import {
   updateCollection,
   deleteCollection,
 } from '@/lib/bookmarks';
-import { readCachedAuthUser } from '@/lib/auth';
 import { readSnapshot } from '@/lib/cache';
 import { type Collection } from '@/lib/types';
 
 // Loads collections + per-collection counts and exposes CRUD that refreshes state.
-export function useCollections(authed: boolean) {
+interface UseCollectionsOptions {
+  userId?: string | null;
+  deferCounts?: boolean;
+}
+
+export function useCollections(authed: boolean, options: UseCollectionsOptions = {}) {
+  const userId = options.userId ?? null;
+  const deferCounts = Boolean(options.deferCounts);
   const [collections, setCollections] = useState<Collection[]>([]);
   const [counts, setCounts] = useState<Record<string, number>>({});
   const [loading, setLoading] = useState(true);
@@ -29,24 +35,57 @@ export function useCollections(authed: boolean) {
     }
   }, [authed]);
 
-  // Both reads use chrome.storage only. This keeps startup fast while still
-  // preventing a previous account's snapshot from flashing after an account switch.
+  // Home already has the cached auth id, so it can read its snapshot without a
+  // second auth-storage round trip. When deferCounts is enabled, collection rows
+  // refresh first and the heavier aggregate counts wait until after first paint.
   useEffect(() => {
     let cancelled = false;
+    let rowsTimer: ReturnType<typeof setTimeout> | null = null;
+    let countsTimer: ReturnType<typeof setTimeout> | null = null;
+
+    const loadRowsThenCounts = async () => {
+      try {
+        const nextCollections = await listCollections();
+        if (!cancelled) setCollections(nextCollections);
+      } catch {
+        // Cached folders stay visible while offline or during a slow server start.
+      } finally {
+        if (!cancelled) setLoading(false);
+      }
+      countsTimer = setTimeout(() => {
+        countByCollection()
+          .then((nextCounts) => {
+            if (!cancelled) setCounts(nextCounts);
+          })
+          .catch(() => {});
+      }, 650);
+    };
+
     (async () => {
-      const cachedUser = await readCachedAuthUser();
-      const snapshot = await readSnapshot(cachedUser?.id ?? null);
+      const snapshot = await readSnapshot(userId);
       if (!cancelled && snapshot) {
         setCollections(snapshot.collections);
         setCounts(snapshot.counts);
         setLoading(false);
       }
-      await refresh();
+      if (!authed || cancelled) {
+        if (!authed) setLoading(false);
+        return;
+      }
+      if (!deferCounts) {
+        await refresh();
+        return;
+      }
+      if (snapshot) rowsTimer = setTimeout(loadRowsThenCounts, 180);
+      else await loadRowsThenCounts();
     })();
+
     return () => {
       cancelled = true;
+      if (rowsTimer) clearTimeout(rowsTimer);
+      if (countsTimer) clearTimeout(countsTimer);
     };
-  }, [refresh]);
+  }, [authed, deferCounts, refresh, userId]);
 
   const create = useCallback(
     async (data: { name: string; color?: string; icon?: string; parent?: string }) => {

@@ -1,19 +1,13 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { storage } from 'wxt/utils/storage';
 import { useAuth } from '@/hooks/useAuth';
-import { currentUser } from '@/lib/auth';
 import { readSnapshot, writeSnapshot } from '@/lib/cache';
 import { useSettings } from '@/hooks/useSettings';
 import { useCollections } from '@/hooks/useCollections';
 import { LoginForm } from '@/components/LoginForm';
-import { AddDialog } from '@/components/AddDialog';
-import { AppCatalog } from '@/components/AppCatalog';
 import { CaptureMenu } from '@/components/CaptureMenu';
-import { WatchingStrip } from '@/components/WatchingStrip';
-import { DashboardWidgets } from '@/components/home/DashboardWidgets';
 import { WidgetPicker } from '@/components/home/WidgetPicker';
 import { type WidgetKey } from '@/lib/widgets';
-import { EditDialog } from '@/components/EditDialog';
 import { Favicon } from '@/components/Favicon';
 import { Icon } from '@/components/Icon';
 import { useToast } from '@/components/Toast';
@@ -21,10 +15,10 @@ import { searchBookmarks, updateBookmark, updateCollection, deleteBookmark, getA
 import { syncHomeOverlay, watchHomeOverlay } from '@/lib/home';
 import { WALLPAPERS, COLOR_SWATCHES, wallpaperCss, colorLuminance, wallpaperUpload, imageFileToDataUrl } from '@/lib/wallpaper';
 import { SEARCH_ENGINES, searchUrl } from '@/lib/search';
-import { normUrl } from '@/lib/apps';
+import { normUrl } from '@/lib/appUrl';
 import { onboardingStage } from '@/lib/onboarding';
 import { finishBoot, readBootLog, formatBoot, type BootRecord } from '@/lib/boottrace';
-import { Tour, type TourStep } from '@/components/Tour';
+import { type TourStep } from '@/components/Tour';
 import { type Bookmark, type Collection } from '@/lib/types';
 
 const TILE_MIME = 'application/x-keepsake-tile';
@@ -35,6 +29,15 @@ const seenHelp = storage.defineItem<boolean>('local:seen_home_help', { fallback:
 // device so a drag always sticks (server sort fields are written too, as the
 // best-effort cross-device copy).
 const layoutStore = storage.defineItem<string[]>('local:home_layout', { fallback: [] });
+
+const AddDialog = lazy(() => import('@/components/AddDialog').then((m) => ({ default: m.AddDialog })));
+const AppCatalog = lazy(() => import('@/components/AppCatalog').then((m) => ({ default: m.AppCatalog })));
+const EditDialog = lazy(() => import('@/components/EditDialog').then((m) => ({ default: m.EditDialog })));
+const Tour = lazy(() => import('@/components/Tour').then((m) => ({ default: m.Tour })));
+const DashboardWidgets = lazy(() =>
+  import('@/components/home/DashboardWidgets').then((m) => ({ default: m.DashboardWidgets })),
+);
+const WatchingStrip = lazy(() => import('@/components/WatchingStrip').then((m) => ({ default: m.WatchingStrip })));
 
 // First-run guided tour of Home (runs right after the account is created).
 const HOME_TOUR: TourStep[] = [
@@ -88,9 +91,9 @@ function pointerSide(e: React.DragEvent, el: HTMLElement): 'before' | 'after' {
 // are single tiles; collections are folder tiles that open a popup. Drag to
 // rearrange, drop a tile onto a folder to file it, search your vault on top.
 export default function App() {
-  const { ready, authed, email, login, signup } = useAuth();
+  const { ready, authed, id: userId, email, login, signup } = useAuth();
   const { settings, update } = useSettings();
-  const c = useCollections(authed);
+  const c = useCollections(authed, { userId, deferCounts: true });
   const { toast } = useToast();
   const [wallOpen, setWallOpen] = useState(false);
 
@@ -118,6 +121,7 @@ export default function App() {
   const [tour, setTour] = useState(false);
   const [freshInstall, setFreshInstall] = useState(false);
   const [catalogOpen, setCatalogOpen] = useState(false);
+  const [extrasReady, setExtrasReady] = useState(false);
   const [allTags, setAllTags] = useState<string[]>([]);
   const [uploadedWall, setUploadedWall] = useState('');
   const fileRef = useRef<HTMLInputElement>(null);
@@ -155,14 +159,16 @@ export default function App() {
     getAllTags().then((t) => setAllTags(t.map((x) => x.tag))).catch(() => {});
   }, []);
 
-  // Paint cached links instantly on open, then refresh.
+  // Paint cached links immediately using the id already resolved by useAuth.
+  // This avoids reading auth twice and avoids accidentally constructing PocketBase
+  // solely to discover the same user id during a cold browser start.
   useEffect(() => {
-    (async () => {
-      uidRef.current = (await currentUser())?.id ?? null;
-      const snap = await readSnapshot(uidRef.current);
-      if (snap && snap.bookmarks.length) setAll((cur) => (cur.length ? cur : snap.bookmarks));
-    })();
-  }, []);
+    uidRef.current = userId;
+    if (!userId) return;
+    readSnapshot(userId).then((snap) => {
+      if (snap?.bookmarks.length) setAll((cur) => (cur.length ? cur : snap.bookmarks));
+    });
+  }, [userId]);
 
   // Keep the snapshot fresh for the next instant open.
   useEffect(() => {
@@ -170,6 +176,22 @@ export default function App() {
       writeSnapshot({ uid: uidRef.current ?? '', bookmarks: all, collections: c.collections, counts: c.counts });
     }
   }, [all, c.collections, c.counts]);
+
+
+  // The launcher shell is the product's first impression. Mount below-the-fold
+  // widgets and their ResizeObservers only after the first frame/idle slot.
+  useEffect(() => {
+    const win = window as Window & {
+      requestIdleCallback?: (callback: () => void, options?: { timeout: number }) => number;
+      cancelIdleCallback?: (id: number) => void;
+    };
+    if (win.requestIdleCallback) {
+      const id = win.requestIdleCallback(() => setExtrasReady(true), { timeout: 650 });
+      return () => win.cancelIdleCallback?.(id);
+    }
+    const id = window.setTimeout(() => setExtrasReady(true), 120);
+    return () => window.clearTimeout(id);
+  }, []);
 
   useEffect(() => {
     const id = setInterval(() => setNow(new Date()), 30_000);
@@ -1037,21 +1059,27 @@ export default function App() {
           </div>
         )}
 
-        {results === null && !minimal && (
-          <DashboardWidgets
-            panelCls={panelCls}
-            labelCls={labelCls}
-            onDark={onDark}
-            enabled={settings.homeWidgets as WidgetKey[]}
-            cardStyle={settings.widgetColor ? { background: settings.widgetColor } : undefined}
-            pinnedUrls={new Set(pinnedItems.map((b) => normUrl(b.url)))}
-            onChanged={() => {
-              reloadAll();
-              c.refresh();
-            }}
-          />
+        {extrasReady && results === null && !minimal && (
+          <Suspense fallback={null}>
+            <DashboardWidgets
+              panelCls={panelCls}
+              labelCls={labelCls}
+              onDark={onDark}
+              enabled={settings.homeWidgets as WidgetKey[]}
+              cardStyle={settings.widgetColor ? { background: settings.widgetColor } : undefined}
+              pinnedUrls={new Set(pinnedItems.map((b) => normUrl(b.url)))}
+              onChanged={() => {
+                reloadAll();
+                c.refresh();
+              }}
+            />
+          </Suspense>
         )}
-        {results === null && !minimal && <WatchingStrip panelCls={panelCls} labelCls={labelCls} />}
+        {extrasReady && results === null && !minimal && (
+          <Suspense fallback={null}>
+            <WatchingStrip panelCls={panelCls} labelCls={labelCls} />
+          </Suspense>
+        )}
       </main>
 
       {/* Folder popup — Atlas-style: the collection expands into a dialog. */}
@@ -1157,47 +1185,57 @@ export default function App() {
       )}
 
       {addTo && (
-        <AddDialog
-          collections={c.collections}
-          allTags={allTags}
-          defaultCollection={addTo.collection}
-          pinned
-          homeContext
-          onClose={() => setAddTo(null)}
-          onAdded={() => {
-            reloadAll();
-            c.refresh();
-          }}
-        />
+        <Suspense fallback={null}>
+          <AddDialog
+            collections={c.collections}
+            allTags={allTags}
+            defaultCollection={addTo.collection}
+            pinned
+            homeContext
+            onClose={() => setAddTo(null)}
+            onAdded={() => {
+              reloadAll();
+              c.refresh();
+            }}
+          />
+        </Suspense>
       )}
       {editing && (
-        <EditDialog
-          bookmark={editing}
-          collections={c.collections}
-          allTags={allTags}
-          onClose={() => setEditing(null)}
-          onSaved={() => {
-            reloadAll();
-            c.refresh();
-          }}
-        />
+        <Suspense fallback={null}>
+          <EditDialog
+            bookmark={editing}
+            collections={c.collections}
+            allTags={allTags}
+            onClose={() => setEditing(null)}
+            onSaved={() => {
+              reloadAll();
+              c.refresh();
+            }}
+          />
+        </Suspense>
       )}
       {catalogOpen && (
-        <AppCatalog
-          pinnedUrls={new Set(pinnedItems.map((b) => normUrl(b.url)))}
-          onClose={() => setCatalogOpen(false)}
-          onCustom={() => {
-            setCatalogOpen(false);
-            setAddTo({});
-          }}
-          onChanged={() => {
-            reloadAll();
-            c.refresh();
-          }}
-        />
+        <Suspense fallback={null}>
+          <AppCatalog
+            pinnedUrls={new Set(pinnedItems.map((b) => normUrl(b.url)))}
+            onClose={() => setCatalogOpen(false)}
+            onCustom={() => {
+              setCatalogOpen(false);
+              setAddTo({});
+            }}
+            onChanged={() => {
+              reloadAll();
+              c.refresh();
+            }}
+          />
+        </Suspense>
       )}
       {help && <HelpDialog onClose={() => setHelp(false)} />}
-      {tour && <Tour steps={HOME_TOUR} onDone={finishTour} />}
+      {tour && (
+        <Suspense fallback={null}>
+          <Tour steps={HOME_TOUR} onDone={finishTour} />
+        </Suspense>
+      )}
       </div>
     </div>
   );

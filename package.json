@@ -29,7 +29,7 @@
     "test:brand-814": "node --test scripts/test-brand-814.mjs",
     "test:visual-performance-814": "node --test scripts/test-visual-performance-814.mjs",
     "check:bundle": "node scripts/check-bundle-budget.mjs",
-    "test": "npm run test:retrieval && npm run test:bulk && npm run test:ui && npm run test:quickbar && npm run test:tooltips && npm run test:writer && npm run test:models && npm run test:ai-upgrade && npm run test:performance && npm run test:reliability && npm run test:startup && npm run test:capture && npm run test:home-fast-814 && npm run test:capture-814 && npm run test:content-814 && npm run test:brand-814 && npm run test:visual-performance-814 && npm run test:ai-reliability-815 && npm run test:ai-polish-8151 && npm run test:ai-selection-816 && npm run test:widget-canvas-816 && npm run test:ai-runtime-816",
+    "test": "npm run test:retrieval && npm run test:bulk && npm run test:ui && npm run test:quickbar && npm run test:tooltips && npm run test:writer && npm run test:models && npm run test:ai-upgrade && npm run test:performance && npm run test:reliability && npm run test:startup && npm run test:capture && npm run test:home-fast-814 && npm run test:capture-814 && npm run test:content-814 && npm run test:brand-814 && npm run test:visual-performance-814 && npm run test:ai-reliability-815 && npm run test:ai-polish-8151 && npm run test:ai-selection-816 && npm run test:widget-canvas-816 && npm run test:ai-runtime-816 && npm run test:home-cold-start-816",
     "check:version": "node scripts/check-version.mjs",
     "check": "npm run check:version && npm test && npm run compile && npm run build",
     "postinstall": "wxt prepare",
@@ -38,7 +38,9 @@
     "test:ai-polish-8151": "node --test scripts/test-ai-polish-8151.mjs",
     "test:ai-selection-816": "node --test scripts/test-ai-selection-816.mjs",
     "test:widget-canvas-816": "node --test scripts/test-widget-canvas-816.mjs",
-    "test:ai-runtime-816": "node --test scripts/test-ai-action-runtime-816.mjs"
+    "test:ai-runtime-816": "node --test scripts/test-ai-action-runtime-816.mjs",
+    "test:home-cold-start-816": "node --test scripts/test-home-cold-start-816.mjs",
+    "check:home-startup-bundle": "node scripts/check-home-startup-bundle.mjs"
   },
   "dependencies": {
     "@xenova/transformers": "^2.17.2",

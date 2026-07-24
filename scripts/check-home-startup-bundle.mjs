@@ -1,0 +1,20 @@
+import assert from 'node:assert/strict';
+import { readFileSync, readdirSync, statSync } from 'node:fs';
+import { join } from 'node:path';
+
+const root = '.output/chrome-mv3';
+const html = readFileSync(join(root, 'newtab.html'), 'utf8');
+const src = html.match(/<script[^>]+src="([^"]*newtab-[^"]+\.js)"/)?.[1];
+assert.ok(src, 'newtab entry chunk not found');
+const entryPath = join(root, src.replace(/^\//, ''));
+const entry = readFileSync(entryPath, 'utf8');
+const entryBytes = statSync(entryPath).size;
+assert.ok(entryBytes < 65000, `newtab entry is still too large: ${entryBytes} bytes`);
+assert.ok(!entry.includes('Palmetto State Armory'), 'app catalog leaked into the startup chunk');
+assert.ok(!html.includes('AppCatalog-'), 'app catalog is still module-preloaded on startup');
+const chunks = readdirSync(join(root, 'chunks'));
+const catalogChunk = chunks.find((name) => name.startsWith('AppCatalog-'));
+assert.ok(catalogChunk, 'lazy AppCatalog chunk missing');
+const catalog = readFileSync(join(root, 'chunks', catalogChunk), 'utf8');
+assert.ok(catalog.includes('Palmetto State Armory'), 'catalog data did not move into the lazy chunk');
+console.log(`Verified cold-start bundle: ${entryBytes} byte newtab entry; catalog lazy in ${catalogChunk}`);

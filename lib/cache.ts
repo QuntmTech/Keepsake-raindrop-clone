@@ -13,13 +13,19 @@ export interface VaultSnapshot {
 }
 
 const item = storage.defineItem<VaultSnapshot | null>('local:vault_snapshot', { fallback: null });
+let inFlightRead: Promise<VaultSnapshot | null> | null = null;
 
 // Startup-only fast path. Logout clears this snapshot, and hosted auth is mirrored
 // locally, so Home can safely paint the last signed-in user's shell without first
 // constructing PocketBase. The normal refresh remains authoritative.
 export async function readLastSnapshot(): Promise<VaultSnapshot | null> {
   if (!HOSTED) return null;
-  return item.getValue();
+  if (!inFlightRead) {
+    inFlightRead = item.getValue().finally(() => {
+      inFlightRead = null;
+    });
+  }
+  return inFlightRead;
 }
 
 export async function readSnapshot(uid: string | null): Promise<VaultSnapshot | null> {
