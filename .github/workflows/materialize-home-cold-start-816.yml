@@ -21,7 +21,16 @@ jobs:
           fetch-depth: 0
 
       - name: Apply cold-start performance changes
-        run: python scripts/materialize-home-cold-start-816.py
+        run: |
+          set -o pipefail
+          python scripts/materialize-home-cold-start-816.py 2>&1 | tee materialize-home.log
+
+      - name: Upload materializer failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: home-materializer-error
+          path: materialize-home.log
 
       - name: Remove temporary materializer
         run: |
