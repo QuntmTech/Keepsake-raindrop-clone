@@ -1,0 +1,44 @@
+name: Build Chrome Folder
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build Chrome MV3 extension
+        run: npm run build
+
+      - name: Verify loadable extension folder
+        run: |
+          test -f .output/chrome-mv3/manifest.json
+          node -e "const m=require('./.output/chrome-mv3/manifest.json'); if(m.manifest_version!==3) process.exit(1); console.log('Built Keepsake', m.version, 'Manifest V'+m.manifest_version)"
+
+      - name: Upload ready-to-load Chrome folder
+        uses: actions/upload-artifact@v4
+        with:
+          name: Keepsake-8.16-ready-to-load
+          path: .output/chrome-mv3/**
+          include-hidden-files: true
+          if-no-files-found: error
+          retention-days: 30
