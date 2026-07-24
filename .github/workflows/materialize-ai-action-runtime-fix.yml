@@ -41,7 +41,23 @@ jobs:
         run: npm run test:ai-runtime-816
 
       - name: Type-check
-        run: npm run compile
+        id: typecheck
+        continue-on-error: true
+        run: npm run compile > compile-errors.txt 2>&1
+
+      - name: Upload type-check errors
+        if: steps.typecheck.outcome == 'failure'
+        uses: actions/upload-artifact@v4
+        with:
+          name: ai-runtime-compile-errors
+          path: compile-errors.txt
+          if-no-files-found: error
+
+      - name: Stop on type-check failure
+        if: steps.typecheck.outcome == 'failure'
+        run: |
+          cat compile-errors.txt
+          exit 1
 
       - name: Build Chrome MV3 extension
         run: npm run build
