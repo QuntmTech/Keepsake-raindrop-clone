@@ -388,17 +388,29 @@ async function handleMessage(msg: Message, sender?: { tab?: { id?: number; windo
       await openToolbarPopup(sender?.tab?.id, sender?.tab?.windowId);
       return { ok: true };
 
-    case 'OPEN_AI_TOOLS':
-      if (msg.text?.trim()) {
-        await setWriterDraft({
-          input: msg.text.trim().slice(0, 48_000),
-          output: '',
-          action: msg.action ?? 'improve',
-        });
+    case 'OPEN_AI_TOOLS': {
+      // Start opening first. Chrome requires this call to stay attached to the
+      // original user click; awaiting storage before it can make the request fail.
+      const panelPromise = openSidePanel(sender?.tab?.id);
+      const targetPromise = requestSidepanelTarget('ai');
+      const draftPromise = msg.text?.trim()
+        ? setWriterDraft({
+            input: msg.text.trim().slice(0, 48_000),
+            output: '',
+            action: msg.action ?? 'improve',
+            customInstruction: msg.customInstruction ?? '',
+            targetLanguage: msg.targetLanguage ?? 'English',
+            selectedPromptId: '',
+          })
+        : Promise.resolve();
+
+      const [opened] = await Promise.all([panelPromise, targetPromise, draftPromise]);
+      if (!opened) {
+        await browser.tabs.create({ url: browser.runtime.getURL('/sidepanel.html') });
+        return { ok: true, surface: 'tab' };
       }
-      await requestSidepanelTarget('ai');
-      await openSidePanel(sender?.tab?.id);
-      return { ok: true };
+      return { ok: true, surface: 'sidepanel' };
+    }
 
     case 'OPEN_URL': {
       const url = normalizeQuickBarUrl(msg.url);
@@ -1155,17 +1167,18 @@ async function openDashboard() {
   else await browser.tabs.create({ url });
 }
 
-async function openSidePanel(tabId?: number) {
+async function openSidePanel(tabId?: number): Promise<boolean> {
   try {
     let id = tabId;
     if (!id) {
       const [tab] = await browser.tabs.query({ active: true, currentWindow: true });
       id = tab?.id;
     }
-    // @ts-expect-error - sidePanel types vary by @types/chrome version
+    if (!id || typeof browser.sidePanel?.open !== 'function') return false;
     await browser.sidePanel.open({ tabId: id });
+    return true;
   } catch {
-    /* not available */
+    return false;
   }
 }
 

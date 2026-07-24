@@ -336,9 +336,11 @@ export function AIWriter({ onOpenSettings }: { onOpenSettings?: () => void }) {
       <div className="flex-1 space-y-4 overflow-y-auto p-4">
         {available === false && (
           <div className="rounded-xl border border-amber-400/30 bg-amber-400/10 p-3 text-xs text-ink-soft">
-            <p className="font-medium text-ink">Connect an AI provider</p>
-            <p className="mt-1">Novita is recommended for automatic cost-aware multi-model routing.</p>
-            {onOpenSettings && <button className="mt-2 font-medium text-brand hover:underline" onClick={onOpenSettings}>Open AI settings →</button>}
+            <p className="font-medium text-ink">AI connection required</p>
+            <p className="mt-1">
+              This development build does not bundle a secret AI key. Connect Novita, OpenAI, Anthropic, or Google once to run every AI action.
+            </p>
+            {onOpenSettings && <button className="mt-2 font-medium text-brand hover:underline" onClick={onOpenSettings}>Connect AI now →</button>}
           </div>
         )}
 
