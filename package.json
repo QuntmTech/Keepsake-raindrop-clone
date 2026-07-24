@@ -2,7 +2,7 @@
   "name": "keepsake",
   "description": "Keepsake — an AI-powered MV3 bookmark manager. Local-first, with an optional PocketBase backend.",
   "private": true,
-  "version": "8.15.1",
+  "version": "8.16.0",
   "type": "module",
   "scripts": {
     "dev": "wxt",
@@ -29,13 +29,14 @@
     "test:brand-814": "node --test scripts/test-brand-814.mjs",
     "test:visual-performance-814": "node --test scripts/test-visual-performance-814.mjs",
     "check:bundle": "node scripts/check-bundle-budget.mjs",
-    "test": "npm run test:retrieval && npm run test:bulk && npm run test:ui && npm run test:quickbar && npm run test:tooltips && npm run test:writer && npm run test:models && npm run test:ai-upgrade && npm run test:performance && npm run test:reliability && npm run test:startup && npm run test:capture && npm run test:home-fast-814 && npm run test:capture-814 && npm run test:content-814 && npm run test:brand-814 && npm run test:visual-performance-814 && npm run test:ai-reliability-815 && npm run test:ai-polish-8151",
+    "test": "npm run test:retrieval && npm run test:bulk && npm run test:ui && npm run test:quickbar && npm run test:tooltips && npm run test:writer && npm run test:models && npm run test:ai-upgrade && npm run test:performance && npm run test:reliability && npm run test:startup && npm run test:capture && npm run test:home-fast-814 && npm run test:capture-814 && npm run test:content-814 && npm run test:brand-814 && npm run test:visual-performance-814 && npm run test:ai-reliability-815 && npm run test:ai-polish-8151 && npm run test:ai-selection-816",
     "check:version": "node scripts/check-version.mjs",
     "check": "npm run check:version && npm test && npm run compile && npm run build",
     "postinstall": "wxt prepare",
     "zip:store": "WXT_STORE=1 wxt zip",
     "test:ai-reliability-815": "node --test scripts/test-ai-reliability-815.mjs",
-    "test:ai-polish-8151": "node --test scripts/test-ai-polish-8151.mjs"
+    "test:ai-polish-8151": "node --test scripts/test-ai-polish-8151.mjs",
+    "test:ai-selection-816": "node --test scripts/test-ai-selection-816.mjs"
   },
   "dependencies": {
     "@xenova/transformers": "^2.17.2",
