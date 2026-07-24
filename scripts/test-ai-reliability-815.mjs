@@ -11,20 +11,20 @@ const source = (path) => readFile(new URL('../' + path, import.meta.url), 'utf8'
 test('build and test commands never mutate source files', async () => {
   const pkg = JSON.parse(await source('package.json'));
   for (const key of ['pretest', 'prebuild', 'precompile', 'prezip:store']) assert.equal(pkg.scripts[key], undefined);
-  assert.equal(pkg.version, '8.15.1');
+  assert.equal(pkg.version, '8.16.0');
 });
 
 test('selected-text helper has a dedicated toggle and never grabs a whole field', async () => {
   const [types, embed, settings] = await Promise.all([
     source('lib/types.ts'),
     source('entrypoints/ai-embed.content.ts'),
-    source('components/SettingsPanel.tsx'),
+    source('components/AiSelectionSettings.tsx'),
   ]);
   assert.match(types, /enableAiSelectionTools/);
   assert.match(embed, /if \(end <= start\) return null/);
   assert.doesNotMatch(embed, /active\.value;$/m);
   assert.match(embed, /settings\.enableAiSelectionTools/);
-  assert.match(settings, /AI helper for selected text only/);
+  assert.match(settings, /Show selected-text AI tools/);
 });
 
 test('writer requests expose cancellation and one bounded overall deadline', async () => {
