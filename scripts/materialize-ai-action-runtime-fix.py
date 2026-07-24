@@ -97,7 +97,6 @@ background = replace_once(
       id = tab?.id;
     }
     if (!id || typeof browser.sidePanel?.open !== 'function') return false;
-    // @ts-expect-error - sidePanel types vary by @types/chrome version
     await browser.sidePanel.open({ tabId: id });
     return true;
   } catch {
