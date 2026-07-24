@@ -1,0 +1,60 @@
+name: Materialize Widget Canvas PR
+
+on:
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: write
+
+jobs:
+  materialize:
+    if: github.head_ref == 'agent/8.16-desktop-widget-canvas'
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+
+    steps:
+      - name: Check out feature branch
+        uses: actions/checkout@v4
+        with:
+          ref: agent/8.16-desktop-widget-canvas
+          fetch-depth: 0
+
+      - name: Run embedded materializer
+        shell: bash
+        run: |
+          python <<'PY'
+          from pathlib import Path
+          from textwrap import dedent
+
+          workflow = Path('.github/workflows/materialize-widget-canvas.yml').read_text()
+          marker = "python <<'PY'\n"
+          body = workflow.split(marker, 1)[1].split("\n          PY", 1)[0]
+          exec(dedent(body), {'__name__': '__main__'})
+          PY
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Run focused widget test
+        run: npm run test:widget-canvas-816
+
+      - name: Type-check
+        run: npm run compile
+
+      - name: Build Chrome extension
+        run: npm run build
+
+      - name: Verify manifest
+        run: test -f .output/chrome-mv3/manifest.json
+
+      - name: Commit verified source
+        shell: bash
+        run: |
+          rm .github/workflows/materialize-widget-canvas.yml
+          rm .github/workflows/materialize-widget-canvas-pr.yml
+          git config user.name "QuntmTech"
+          git config user.email "173104299+QuntmTech@users.noreply.github.com"
+          git add components/home/DashboardWidgets.tsx lib/widgets.ts scripts/test-widget-canvas-816.mjs package.json .github/workflows/materialize-widget-canvas.yml .github/workflows/materialize-widget-canvas-pr.yml
+          git commit -m "Improve desktop widget drag and resize [widget-canvas-materialized]"
+          git push origin HEAD:agent/8.16-desktop-widget-canvas
