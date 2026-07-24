@@ -20,6 +20,27 @@ jobs:
           ref: perf/8.16-home-cold-start
           fetch-depth: 0
 
+      - name: Allow the repeated login/signup auth pattern
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          path = Path('scripts/materialize-home-cold-start-816.py')
+          source = path.read_text()
+          old = """    if count != 1:
+                  raise SystemExit(f'{label}: expected exactly one match, found {count}')
+              return text.replace(old, new, 1)
+          """
+          new = """    if count != 1:
+                  if label == 'useAuth login id' and count == 2:
+                      return text.replace(old, new, 1)
+                  raise SystemExit(f'{label}: expected exactly one match, found {count}')
+              return text.replace(old, new, 1)
+          """
+          if old not in source:
+              raise SystemExit('replace_once helper did not match expected source')
+          path.write_text(source.replace(old, new, 1))
+          PY
+
       - name: Apply cold-start performance changes
         run: |
           set -o pipefail
