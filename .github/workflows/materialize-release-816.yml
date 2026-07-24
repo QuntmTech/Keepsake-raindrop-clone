@@ -1,0 +1,78 @@
+name: Materialize Keepsake 8.16 Release
+
+on:
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: write
+
+jobs:
+  finalize:
+    if: ${{ !contains(github.event.pull_request.title, '[release-816-materialized]') }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+
+    steps:
+      - name: Check out release branch
+        uses: actions/checkout@v4
+        with:
+          ref: release/8.16-finalize
+          fetch-depth: 0
+
+      - name: Materialize release changes
+        run: python scripts/materialize-release-816.py
+
+      - name: Remove temporary release materializer
+        run: |
+          rm scripts/materialize-release-816.py
+          rm .github/workflows/materialize-release-816.yml
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Run release contract regression
+        run: npm run test:release-backend-816
+
+      - name: Run full release validation
+        run: npm run check
+
+      - name: Build Chrome Web Store ZIP
+        run: |
+          rm -f .output/*.zip
+          npm run zip:store
+
+      - name: Verify store package
+        run: |
+          ZIP="$(find .output -maxdepth 1 -type f -name '*.zip' | head -n 1)"
+          test -n "$ZIP"
+          rm -rf store-verify
+          mkdir store-verify
+          unzip -q "$ZIP" -d store-verify
+          MANIFEST="$(find store-verify -type f -name manifest.json | head -n 1)"
+          test -n "$MANIFEST"
+          node -e "const fs=require('fs'); const m=JSON.parse(fs.readFileSync(process.argv[1])); if(m.manifest_version!==3) throw new Error('Not Manifest V3'); if(m.version!=='8.16.0') throw new Error('Wrong version '+m.version); if(Object.prototype.hasOwnProperty.call(m,'key')) throw new Error('Store ZIP contains forbidden development key'); console.log('Verified store-safe Keepsake',m.version);" "$MANIFEST"
+          cp "$ZIP" Keepsake-8.16.0-Chrome-Web-Store.zip
+
+      - name: Upload verified Web Store ZIP
+        uses: actions/upload-artifact@v4
+        with:
+          name: Keepsake-8.16.0-Chrome-Web-Store
+          path: Keepsake-8.16.0-Chrome-Web-Store.zip
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Commit verified release source
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add lib/backend/pocketbase.ts lib/backend/types.ts scripts/test-release-backend-contract-816.mjs package.json .github/workflows/build-store-zip.yml docs/RELEASE_HANDOFF_8.16.md
+          git add -u scripts/materialize-release-816.py .github/workflows/materialize-release-816.yml
+          git commit -m "Finalize Keepsake 8.16 release [release-816-materialized]"
+          git push origin HEAD:release/8.16-finalize
