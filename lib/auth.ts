@@ -35,7 +35,10 @@ export async function readCachedAuthUser(): Promise<AuthUser | null> {
       record?: { id?: string; email?: string; name?: string; plan?: string };
     };
     if (!parsed.token || !tokenIsFresh(parsed.token) || !parsed.record?.id) return null;
-    const plan = parsed.record.plan === 'owner' || parsed.record.plan === 'pro' ? parsed.record.plan : 'free';
+    const plan =
+      parsed.record.plan === 'owner' || parsed.record.plan === 'pro' || parsed.record.plan === 'max'
+        ? parsed.record.plan
+        : 'free';
     return {
       id: parsed.record.id,
       email: parsed.record.email ?? '',

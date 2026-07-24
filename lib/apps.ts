@@ -5,6 +5,7 @@
 // create a fully custom app.
 
 import seed from './suggested-apps.json';
+export { normUrl } from './appUrl';
 
 export interface CatalogApp {
   category: string;
@@ -43,12 +44,3 @@ export function appIcon(url: string): string {
   }
 }
 
-// Normalize a URL for "already added" checks (host minus www + path minus slash).
-export function normUrl(url: string): string {
-  try {
-    const u = new URL(url);
-    return u.hostname.replace(/^www\./, '').toLowerCase() + u.pathname.replace(/\/+$/, '');
-  } catch {
-    return url.toLowerCase();
-  }
-}
