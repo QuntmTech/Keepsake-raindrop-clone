@@ -83,9 +83,20 @@ export class PocketBaseBackend implements Backend {
   private retryAfterAt = 0;
 
   async init(): Promise<void> {
-    // Never fall back to localhost in a hosted build — use the baked-in server.
-    this.url = (await pbUrlStore.getValue()) || HOSTED_PB_URL || 'http://127.0.0.1:8090';
-    mark('pb:url'); // storage.sync read finished — a stall BEFORE this means sync storage hung
+    // Hosted builds have the server baked in — use it IMMEDIATELY and never block
+    // boot on a chrome.storage.sync read. On the first new-tab open after the
+    // browser starts, chrome.storage.sync.get() can stall for hundreds of ms to
+    // several seconds while Chrome spins up its sync layer, and everything below
+    // (session restore, currentUser(), and the snapshot tile paint that calls it)
+    // was serialized behind that read — the #1 cause of a slow cold Home. The
+    // sync:pb_url override only exists for dev/staging where no URL is baked in,
+    // and it's hidden from users in hosted builds, so awaiting it on the critical
+    // path is pure dead weight. This mirrors how the backend-mode sync read is
+    // already skipped when HOSTED. Precedence: baked-in URL first (short-circuits
+    // the await entirely in every published build); the sync override is only
+    // consulted in a dev build where HOSTED_PB_URL is empty.
+    this.url = HOSTED_PB_URL || (await pbUrlStore.getValue()) || 'http://127.0.0.1:8090';
+    mark('pb:url'); // hosted: NO sync read reached here; dev-only fallback may read sync
     this.pb = new PocketBase(this.url);
     // CRITICAL: the SDK auto-cancels duplicate in-flight requests by default,
     // which makes concurrent list/search calls (collections + bookmarks +
